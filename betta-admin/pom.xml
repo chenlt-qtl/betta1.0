@@ -54,6 +54,12 @@
             <artifactId>betta-generator</artifactId>
         </dependency>
 
+        <!-- 消息通道-->
+        <dependency>
+            <groupId>com.betta</groupId>
+            <artifactId>betta-message</artifactId>
+        </dependency>
+
     </dependencies>
 
     <build>

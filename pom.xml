@@ -167,6 +167,12 @@
                 <version>${betta.version}</version>
             </dependency>
 
+            <!-- 消息通道-->
+            <dependency>
+                <groupId>com.betta</groupId>
+                <artifactId>betta-message</artifactId>
+                <version>${betta.version}</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 
@@ -177,6 +183,7 @@
         <module>betta-quartz</module>
         <module>betta-generator</module>
         <module>betta-common</module>
+        <module>betta-message</module>
     </modules>
     <packaging>pom</packaging>
 

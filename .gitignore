@@ -3,6 +3,7 @@
 
 .gradle
 /build/
+/oldData/
 !gradle/wrapper/gradle-wrapper.jar
 
 target/

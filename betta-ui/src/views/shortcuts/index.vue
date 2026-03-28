@@ -87,11 +87,11 @@ export default {
     };
   },
   created() {
-    getCurrentArticle().then((res) => {
-      if (res.data) {
-        this.article = res.data
-      }
-    })
+    // getCurrentArticle().then((res) => {
+    //   if (res.data) {
+    //     this.article = res.data
+    //   }
+    // })
   },
   methods: {
   }
