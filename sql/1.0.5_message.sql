@@ -89,20 +89,18 @@ CREATE TABLE IF NOT EXISTS `message_llm_config`
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4 COMMENT ='大模型配置';
 
--- 菜单：大模型配置
+-- 菜单：大模型配置（改为按钮权限）
 INSERT INTO sys_menu (menu_name, parent_id, order_num, path, component, is_frame, is_cache, menu_type, visible, status, perms, icon, create_by, create_time, update_by, update_time, remark)
-VALUES ('大模型配置', @messageMenuId, 6, 'llm', 'message/llm/index', 1, 0, 'C', '0', '0', 'message:llm:list', 'chat', 'admin', sysdate(), '', NULL, '大模型配置管理');
-
-SET @llmMenuId := LAST_INSERT_ID();
+VALUES ('大模型配置', @messageMenuId, 6, '', '', 1, 0, 'F', '0', '0', 'message:llm:list', '#', 'admin', sysdate(), '', NULL, '');
 
 INSERT INTO sys_menu (menu_name, parent_id, order_num, path, component, is_frame, is_cache, menu_type, visible, status, perms, icon, create_by, create_time, update_by, update_time, remark)
-VALUES ('配置查询', @llmMenuId, 1, '', '', 1, 0, 'F', '0', '0', 'message:llm:query', '#', 'admin', sysdate(), '', NULL, '');
+VALUES ('配置查询', @messageMenuId, 7, '', '', 1, 0, 'F', '0', '0', 'message:llm:query', '#', 'admin', sysdate(), '', NULL, '');
 INSERT INTO sys_menu (menu_name, parent_id, order_num, path, component, is_frame, is_cache, menu_type, visible, status, perms, icon, create_by, create_time, update_by, update_time, remark)
-VALUES ('配置新增', @llmMenuId, 2, '', '', 1, 0, 'F', '0', '0', 'message:llm:add', '#', 'admin', sysdate(), '', NULL, '');
+VALUES ('配置新增', @messageMenuId, 8, '', '', 1, 0, 'F', '0', '0', 'message:llm:add', '#', 'admin', sysdate(), '', NULL, '');
 INSERT INTO sys_menu (menu_name, parent_id, order_num, path, component, is_frame, is_cache, menu_type, visible, status, perms, icon, create_by, create_time, update_by, update_time, remark)
-VALUES ('配置修改', @llmMenuId, 3, '', '', 1, 0, 'F', '0', '0', 'message:llm:edit', '#', 'admin', sysdate(), '', NULL, '');
+VALUES ('配置修改', @messageMenuId, 9, '', '', 1, 0, 'F', '0', '0', 'message:llm:edit', '#', 'admin', sysdate(), '', NULL, '');
 INSERT INTO sys_menu (menu_name, parent_id, order_num, path, component, is_frame, is_cache, menu_type, visible, status, perms, icon, create_by, create_time, update_by, update_time, remark)
-VALUES ('配置删除', @llmMenuId, 4, '', '', 1, 0, 'F', '0', '0', 'message:llm:remove', '#', 'admin', sysdate(), '', NULL, '');
+VALUES ('配置删除', @messageMenuId, 10, '', '', 1, 0, 'F', '0', '0', 'message:llm:remove', '#', 'admin', sysdate(), '', NULL, '');
 
 -- API配置表
 CREATE TABLE IF NOT EXISTS `message_api_config`
@@ -128,17 +126,23 @@ CREATE TABLE IF NOT EXISTS `message_api_config`
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4 COMMENT ='API配置';
 
--- 菜单：API配置
+-- 菜单：API配置（改为按钮权限）
 INSERT INTO sys_menu (menu_name, parent_id, order_num, path, component, is_frame, is_cache, menu_type, visible, status, perms, icon, create_by, create_time, update_by, update_time, remark)
-VALUES ('API配置', @messageMenuId, 7, 'api', 'message/api/index', 1, 0, 'C', '0', '0', 'message:api:list', 'api', 'admin', sysdate(), '', NULL, 'API配置管理');
-
-SET @apiMenuId := LAST_INSERT_ID();
+VALUES ('API配置', @messageMenuId, 11, '', '', 1, 0, 'F', '0', '0', 'message:api:list', '#', 'admin', sysdate(), '', NULL, '');
 
 INSERT INTO sys_menu (menu_name, parent_id, order_num, path, component, is_frame, is_cache, menu_type, visible, status, perms, icon, create_by, create_time, update_by, update_time, remark)
-VALUES ('配置查询', @apiMenuId, 1, '', '', 1, 0, 'F', '0', '0', 'message:api:query', '#', 'admin', sysdate(), '', NULL, '');
+VALUES ('配置查询', @messageMenuId, 12, '', '', 1, 0, 'F', '0', '0', 'message:api:query', '#', 'admin', sysdate(), '', NULL, '');
 INSERT INTO sys_menu (menu_name, parent_id, order_num, path, component, is_frame, is_cache, menu_type, visible, status, perms, icon, create_by, create_time, update_by, update_time, remark)
-VALUES ('配置新增', @apiMenuId, 2, '', '', 1, 0, 'F', '0', '0', 'message:api:add', '#', 'admin', sysdate(), '', NULL, '');
+VALUES ('配置新增', @messageMenuId, 13, '', '', 1, 0, 'F', '0', '0', 'message:api:add', '#', 'admin', sysdate(), '', NULL, '');
 INSERT INTO sys_menu (menu_name, parent_id, order_num, path, component, is_frame, is_cache, menu_type, visible, status, perms, icon, create_by, create_time, update_by, update_time, remark)
-VALUES ('配置修改', @apiMenuId, 3, '', '', 1, 0, 'F', '0', '0', 'message:api:edit', '#', 'admin', sysdate(), '', NULL, '');
+VALUES ('配置修改', @messageMenuId, 14, '', '', 1, 0, 'F', '0', '0', 'message:api:edit', '#', 'admin', sysdate(), '', NULL, '');
 INSERT INTO sys_menu (menu_name, parent_id, order_num, path, component, is_frame, is_cache, menu_type, visible, status, perms, icon, create_by, create_time, update_by, update_time, remark)
-VALUES ('配置删除', @apiMenuId, 4, '', '', 1, 0, 'F', '0', '0', 'message:api:remove', '#', 'admin', sysdate(), '', NULL, '');
+VALUES ('配置删除', @messageMenuId, 15, '', '', 1, 0, 'F', '0', '0', 'message:api:remove', '#', 'admin', sysdate(), '', NULL, '');
+
+-- 角色菜单权限分配：将消息通道相关菜单分配给admin角色(role_id=1)
+INSERT INTO sys_role_menu (role_id, menu_id) VALUES (1, @messageMenuId);
+
+-- 同时将所有按钮权限分配给admin角色（通过查询刚插入的按钮menu_id）
+INSERT INTO sys_role_menu (role_id, menu_id)
+SELECT 1, menu_id FROM sys_menu
+WHERE parent_id = @messageMenuId AND menu_type = 'F';
