@@ -14,7 +14,13 @@
 </template>
 
 <script>
-import logoImg from '@/assets/logo/logo.png'
+// import logoImg from '@/assets/logo/寿司.svg'
+// import logoImg from '@/assets/logo/寿司.svg'
+// import logoImg from '@/assets/logo/寿司.svg'
+// import logoImg from '@/assets/logo/寿司.svg'
+// import logoImg from '@/assets/logo/寿司.svg'
+import logoImg from '@/assets/logo/鱼-copy.svg'
+
 import variables from '@/assets/styles/variables.scss'
 
 export default {
