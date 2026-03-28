@@ -62,6 +62,13 @@ export const constantRoutes = [
     hidden: true
   },
   {
+    name: "dance",
+    path: "/dance",
+    component: () => import("@/components/other/timer/VideoPlayer"),
+    hidden: true,
+    meta: { title: '跳舞', icon: 'dashboard'}
+  },
+  {
     path: '',
     component: Layout,
     redirect: 'shortcuts',

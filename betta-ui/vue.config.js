@@ -46,6 +46,10 @@ module.exports = {
       '^/v3/api-docs/(.*)': {
         target: baseUrl,
         changeOrigin: true
+      },
+      ["/file"]: {
+        target: `http://localhost:8080`,
+        changeOrigin: true
       }
     },
     disableHostCheck: true
