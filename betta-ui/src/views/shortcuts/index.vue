@@ -49,7 +49,7 @@
           <img src="@/assets/shortcuts/运动.svg" />
           跳舞
         </a>
-        <a href="card/plus" class="item">
+        <a href="card/index" class="item">
           <img src="@/assets/shortcuts/积分.svg" />
           加卡
         </a>

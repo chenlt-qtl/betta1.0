@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.betta.system.mapper.CardHistoryMapper">
+
+    <resultMap type="CardHistory" id="CardHistoryResult">
+        <result property="id" column="id" />
+        <result property="accountId" column="account_id" />
+        <result property="changeValue" column="change_value" />
+        <result property="remainValue" column="remain_value" />
+        <result property="content" column="content" />
+        <result property="createBy" column="create_by" />
+        <result property="createTime" column="create_time" />
+        <result property="accountName" column="account_name" />
+    </resultMap>
+
+    <sql id="selectCardHistoryVo">
+        select h.id, h.account_id, h.change_value, h.remain_value, h.content, h.create_by, h.create_time, a.name as account_name
+        from card_history h
+        left join card_account a on h.account_id = a.id
+    </sql>
+
+    <select id="selectCardHistoryList" parameterType="CardHistory" resultMap="CardHistoryResult">
+        <include refid="selectCardHistoryVo"/>
+        <where>
+            <if test="accountId != null">
+                and h.account_id = #{accountId}
+            </if>
+            <if test="accountName != null and accountName != ''">
+                and a.name like concat('%', #{accountName}, '%')
+            </if>
+            <if test="content != null and content != ''">
+                and h.content like concat('%', #{content}, '%')
+            </if>
+        </where>
+        order by h.create_time desc
+    </select>
+
+    <select id="selectCardHistoryByAccountId" parameterType="Long" resultMap="CardHistoryResult">
+        <include refid="selectCardHistoryVo"/>
+        where h.account_id = #{accountId}
+        order by h.create_time desc
+    </select>
+
+    <select id="selectCardHistoryById" parameterType="Long" resultMap="CardHistoryResult">
+        <include refid="selectCardHistoryVo"/>
+        where h.id = #{id}
+    </select>
+
+    <insert id="insertCardHistory" parameterType="CardHistory" useGeneratedKeys="true" keyProperty="id">
+        insert into card_history
+        <trim prefix="(" suffix=")" suffixOverrides=",">
+            <if test="accountId != null">account_id,</if>
+            <if test="changeValue != null">change_value,</if>
+            <if test="remainValue != null">remain_value,</if>
+            <if test="content != null">content,</if>
+            <if test="createBy != null and createBy != ''">create_by,</if>
+            create_time
+        </trim>
+        <trim prefix="values (" suffix=")" suffixOverrides=",">
+            <if test="accountId != null">#{accountId},</if>
+            <if test="changeValue != null">#{changeValue},</if>
+            <if test="remainValue != null">#{remainValue},</if>
+            <if test="content != null">#{content},</if>
+            <if test="createBy != null and createBy != ''">#{createBy},</if>
+            now()
+        </trim>
+    </insert>
+
+    <delete id="deleteCardHistoryById" parameterType="Long">
+        delete from card_history where id = #{id}
+    </delete>
+
+    <delete id="deleteCardHistoryByIds" parameterType="String">
+        delete from card_history where id in
+        <foreach item="id" collection="array" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </delete>
+
+</mapper>
