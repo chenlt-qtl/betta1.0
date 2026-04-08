@@ -56,27 +56,20 @@
     <!-- 预设项标签页 -->
     <div class="tab">
       <el-tabs v-model="activeTab">
-        <el-tab-pane label="加卡项" name="1">
+        <el-tab-pane
+          v-for="dict in dict.type.card_type"
+          :key="dict.value"
+          :label="dict.label"
+          :name="dict.value"
+        >
           <div class="quick">
             <span
-              class="green"
-              v-for="item in addItemList"
+              :class="item.value > 0 ? 'green' : 'red'"
+              v-for="item in listData[dict.value]"
               :key="item.id"
               @click="() => addScore(item.value, item.name)"
             >
-              {{ item.name }} +{{ item.value }}
-            </span>
-          </div>
-        </el-tab-pane>
-        <el-tab-pane label="扣卡项" name="2">
-          <div class="quick">
-            <span
-              class="red"
-              v-for="item in deductItemList"
-              :key="item.id"
-              @click="() => addScore(item.value, item.name)"
-            >
-              {{ item.name }} {{ item.value }}
+              {{ item.name }} {{ item.value > 0 ? "+" : "" }}{{ item.value }}
             </span>
           </div>
         </el-tab-pane>
@@ -146,6 +139,7 @@ import { operate } from "@/api/card/operate";
 
 export default {
   name: "CardIndex",
+  dicts: ["card_type"],
   created() {
     this.getAccountList();
     this.getItemList();
@@ -166,10 +160,8 @@ export default {
       content: "",
       // 当前激活的标签
       activeTab: "1",
-      // 加卡项列表
-      addItemList: [],
-      // 扣卡项列表
-      deductItemList: [],
+      // 预设项列表数据（按类型分组）
+      listData: {},
       // 确认对话框
       openConfirm: false,
       // 历史对话框
@@ -219,8 +211,14 @@ export default {
     getItemList() {
       listItem({ pageNum: 1, pageSize: 1000 }).then(response => {
         const data = response.rows || [];
-        this.addItemList = data.filter(item => item.type === 1);
-        this.deductItemList = data.filter(item => item.type === 2);
+        const result = {};
+        data.forEach(item => {
+          if (!result[item.type]) {
+            result[item.type] = [];
+          }
+          result[item.type].push(item);
+        });
+        this.listData = result;
       });
     },
     /** 设置当前账户 */
