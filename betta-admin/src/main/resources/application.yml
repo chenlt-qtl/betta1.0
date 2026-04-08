@@ -81,6 +81,8 @@ spring:
       password: 54ntf@#!
       # 连接超时时间
       timeout: 10s
+      # key前缀
+      key-prefix: betta
       lettuce:
         pool:
           # 连接池中的最小空闲连接
