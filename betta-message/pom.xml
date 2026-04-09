@@ -23,5 +23,9 @@
             <groupId>com.betta</groupId>
             <artifactId>betta-quartz</artifactId>
         </dependency>
+        <dependency>
+            <groupId>com.betta</groupId>
+            <artifactId>betta-system</artifactId>
+        </dependency>
     </dependencies>
 </project>
