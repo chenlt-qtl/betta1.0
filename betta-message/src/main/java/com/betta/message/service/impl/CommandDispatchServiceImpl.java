@@ -14,8 +14,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
+
 /**
- * 命令分发实现：add_card 加卡，start_task 立即执行定时任务
+ * 命令分发实现：add_card 加卡，query_balance 查询余额，start_task 立即执行定时任务
  *
  * @author betta
  */
@@ -40,6 +42,8 @@ public class CommandDispatchServiceImpl implements ICommandDispatchService {
         switch (command.getIntent()) {
             case "add_card":
                 return doAddCard(command);
+            case "query_balance":
+                return doQueryBalance(command);
             case "start_task":
                 return doStartTask(command);
             default:
@@ -95,6 +99,36 @@ public class CommandDispatchServiceImpl implements ICommandDispatchService {
         } catch (Exception e) {
             log.error("加卡失败: accountName={}, quantity={}", accountName, quantity, e);
             return ActionResult.fail("加卡失败：" + e.getMessage());
+        }
+    }
+
+    /**
+     * 查询余额：查询所有账户的卡数余额
+     *
+     * @param command 命令
+     * @return 执行结果
+     */
+    private ActionResult doQueryBalance(CommandDTO command) {
+        try {
+            List<CardAccount> accounts = cardAccountService.selectCardAccountList(new CardAccount());
+            if (accounts == null || accounts.isEmpty()) {
+                return ActionResult.ok("当前还没有任何账户");
+            }
+
+            StringBuilder result = new StringBuilder("当前所有账户余额：\n");
+            int total = 0;
+            for (CardAccount account : accounts) {
+                result.append("• ").append(account.getName()).append("：").append(account.getBalance()).append(" 张\n");
+                total += account.getBalance();
+            }
+            result.append("\n总计：").append(total).append(" 张");
+
+            log.info("查询余额成功：共 {} 个账户，总计 {} 张卡", accounts.size(), total);
+            return ActionResult.ok(result.toString());
+
+        } catch (Exception e) {
+            log.error("查询余额失败", e);
+            return ActionResult.fail("查询余额失败：" + e.getMessage());
         }
     }
 

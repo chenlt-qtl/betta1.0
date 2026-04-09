@@ -2,6 +2,7 @@ package com.betta.message.service.impl;
 
 import com.betta.message.dto.AddCardDTO;
 import com.betta.message.dto.CommandDTO;
+import com.betta.message.dto.QueryBalanceDTO;
 import com.betta.message.service.ILLMParseService;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
@@ -24,6 +25,8 @@ public class LLMParseServiceImpl implements ILLMParseService {
     private static final Pattern ADD_CARD_PATTERN = Pattern.compile("(豆芽|桐桐)\\s*(.*?)\\s*(加卡|加|消费|扣|扣卡)\\s*(\\d+)\\s*(?:张|元|张卡)");
     /** 启动任务：启动xxx / 马上跑xxx */
     private static final Pattern START_TASK_PATTERN = Pattern.compile("(?:启动|运行|执行|马上跑一下?)\\s*(.+)");
+    /** 查询余额：有多少张卡 / 查询余额 / 卡数 */
+    private static final Pattern QUERY_BALANCE_PATTERN = Pattern.compile("(?:现在|当前)?(?:有多少|剩余|查询|还剩|余额)?(?:多少张卡|多少卡|卡数|余额|张卡|多少元|元|是多少)");
 
     @Override
     public CommandDTO parse(String rawText) {
@@ -51,6 +54,14 @@ public class LLMParseServiceImpl implements ILLMParseService {
             return dto;
         }
 
+        // 2) 查询余额
+        Matcher queryBalance = QUERY_BALANCE_PATTERN.matcher(text);
+        if (queryBalance.find()) {
+            QueryBalanceDTO dto = new QueryBalanceDTO();
+            dto.setIntent("query_balance");
+            dto.setQueryType("all");
+            return dto;
+        }
 
         // 可在此处调用真实 LLM API，将 prompt 和 text 发送，解析返回的 JSON 为 CommandDTO
         // return callRealLLM(text);
