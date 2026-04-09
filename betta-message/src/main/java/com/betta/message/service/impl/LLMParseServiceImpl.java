@@ -38,8 +38,9 @@ public class LLMParseServiceImpl implements ILLMParseService {
             AddCardDTO dto = new AddCardDTO();
             dto.setIntent("add_card");
             dto.setAccount(addCard.group(1).trim());
+            dto.setConent(addCard.group(2).trim());
             try {
-                dto.setQuantity(Integer.parseInt(addCard.group(2)));
+                dto.setQuantity(Integer.parseInt(addCard.group(4)));
             } catch (NumberFormatException e) {
                 dto.setQuantity(0);
             }
