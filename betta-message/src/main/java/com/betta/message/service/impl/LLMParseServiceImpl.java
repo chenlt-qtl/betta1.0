@@ -22,7 +22,7 @@ import java.util.regex.Pattern;
 public class LLMParseServiceImpl implements ILLMParseService {
 
     /** 加卡：xxx加卡N张 / xxx 加卡 N */
-    private static final Pattern ADD_CARD_PATTERN = Pattern.compile("(豆芽|桐桐)\\s*(.*?)\\s*(加卡|加|消费|扣|扣卡)\\s*(\\d+)\\s*(?:张|元|张卡)");
+    private static final Pattern ADD_CARD_PATTERN = Pattern.compile("(豆芽|桐桐)\\s*(.*?),*\\s*(加卡|加|消费|扣|扣卡)\\s*(\\d+)\\s*(?:张|元|张卡)");
     /** 启动任务：启动xxx / 马上跑xxx */
     private static final Pattern START_TASK_PATTERN = Pattern.compile("(?:启动|运行|执行|马上跑一下?)\\s*(.+)");
     /** 查询余额：有多少张卡 / 查询余额 / 卡数 */
@@ -87,7 +87,7 @@ public class LLMParseServiceImpl implements ILLMParseService {
 //        text = "今天天气怎么样,桐桐消费20元";
 //        System.out.println(ADD_CARD_PATTERN.matcher(text).find());
 
-        String text = "豆芽买笔加卡8张，今天天气不错";
+        String text = "豆芽买笔,加卡8张，今天天气不错";
         Matcher matcher = ADD_CARD_PATTERN.matcher(text);
 
         if (matcher.find()) { // 部分匹配用find()，千万别用matches()
