@@ -54,10 +54,10 @@
             <artifactId>betta-generator</artifactId>
         </dependency>
 
-        <!-- 消息通道-->
+        <!-- 机器人模块-->
         <dependency>
             <groupId>com.betta</groupId>
-            <artifactId>betta-message</artifactId>
+            <artifactId>betta-robot</artifactId>
         </dependency>
 
     </dependencies>
