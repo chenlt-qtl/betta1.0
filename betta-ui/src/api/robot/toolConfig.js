@@ -42,3 +42,22 @@ export function delConfig(id) {
     method: 'delete'
   })
 }
+
+// 测试正则表达式
+export function testRegex(data) {
+  return request({
+    url: '/tool/config/testRegex',
+    method: 'post',
+    data: data
+  })
+}
+
+// 模拟飞书消息
+export function simulateMessage(data) {
+  return request({
+    url: '/tool/config/simulateMessage',
+    method: 'post',
+    data: data
+  })
+}
+

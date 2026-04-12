@@ -7,8 +7,7 @@ import com.betta.robot.client.FeishuClient;
 import com.betta.robot.client.WeChatClient;
 import com.betta.robot.domain.MessageChannelConfig;
 import com.betta.robot.domain.MessageRecord;
-import com.betta.robot.dto.ActionResult;
-import com.betta.robot.dto.CommandDTO;
+import com.betta.robot.dto.MessageProcessResult;
 import com.betta.robot.service.*;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -31,9 +30,7 @@ public class MessageProcessServiceImpl implements IMessageProcessService {
     @Autowired
     private IMessageChannelConfigService messageChannelConfigService;
     @Autowired
-    private ILLMParseService llmParseService;
-    @Autowired
-    private ICommandDispatchService commandDispatchService;
+    private IApiDispatchService apiDispatchService;
     @Autowired
     private FeishuClient feishuClient;
     @Autowired
@@ -71,11 +68,8 @@ public class MessageProcessServiceImpl implements IMessageProcessService {
             updateRecordFail(record, "消息内容为空");
             return;
         }
-        CommandDTO command = llmParseService.parse(content);
-        record.setParsedIntent(command.getIntent());
-        record.setParsedJson(JSON.toJSONString(command));
-        ActionResult actionResult = commandDispatchService.dispatch(command);
-        String replyText = actionResult.isSuccess() ? ("操作成功：" + actionResult.getMessage()) : ("操作失败：" + actionResult.getMessage());
+        MessageProcessResult processResult = apiDispatchService.processMessage(content);
+        String replyText = processResult.getResult();
         boolean sent = sendReply(config, record, replyText);
         record.setReplyContent(replyText);
         record.setStatus(sent ? "SUCCESS" : "FAIL");

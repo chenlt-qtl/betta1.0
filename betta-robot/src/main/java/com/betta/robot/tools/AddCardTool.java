@@ -27,8 +27,8 @@ public class AddCardTool implements ITool {
     public ActionResult execute(CommandDTO commandDTO) {
         if (commandDTO instanceof AddCardDTO) {
             AddCardDTO addCardDTO = (AddCardDTO) commandDTO;
-            log.info("接收到加卡请求：account={}, quantity={}, content={}",
-                    addCardDTO.getAccount(), addCardDTO.getQuantity(), addCardDTO.getConent());
+            log.info("接收到加卡请求：account={}, action={}, quantity={}, content={}",
+                    addCardDTO.getAccount(), addCardDTO.getAction(), addCardDTO.getQuantity(), addCardDTO.getConent());
 
             // 参数校验
             String accountName = addCardDTO.getAccount();
@@ -39,6 +39,12 @@ public class AddCardTool implements ITool {
             Integer quantity = addCardDTO.getQuantity();
             if (quantity == null) {
                 return ActionResult.fail("请指定加卡数量");
+            }
+
+            // 根据动作判断正负数
+            String action = addCardDTO.getAction();
+            if (action != null && (action.contains("扣") || action.contains("消费") || action.contains("减"))) {
+                quantity = -Math.abs(quantity);
             }
 
             try {

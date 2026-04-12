@@ -7,10 +7,10 @@ import com.betta.robot.client.JsonHttpClient;
 import com.betta.robot.domain.MessageLlmConfig;
 import com.betta.robot.domain.RobotToolConfig;
 import com.betta.robot.dto.CommandDTO;
+import com.betta.robot.dto.MessageProcessResult;
 import com.betta.robot.mapper.MessageLlmConfigMapper;
 import com.betta.robot.mapper.RobotToolConfigMapper;
 import com.betta.robot.service.IApiDispatchService;
-import com.betta.robot.service.ILLMParseService;
 import com.betta.robot.tools.ITool;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
@@ -21,6 +21,8 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -36,24 +38,122 @@ public class ApiDispatchServiceImpl implements IApiDispatchService {
     @Autowired
     private ApplicationContext applicationContext;
 
-    @Autowired
-    private ILLMParseService llmParseService;
-
     @Override
-    public String processMessage(String messageText, String chatId, String userId, String channelType) {
+    public MessageProcessResult processMessage(String messageText) {
+        long startTime = System.currentTimeMillis();
         if (StringUtils.isBlank(messageText)) {
-            return "消息为空";
+            return new MessageProcessResult("ERROR", null, "消息为空", 0.0);
         }
 
-        // 1. 首先使用预设的正则规则进行匹配
-        CommandDTO parsedCommand = llmParseService.parse(messageText);
-        if (parsedCommand != null && !"unknown".equals(parsedCommand.getIntent())) {
-            // 正则匹配成功，直接执行工具
-            return executeToolWithCommandDTO(parsedCommand);
+        // 1. 首先尝试使用配置的正则进行匹配
+        MessageProcessResult regexMatchResult = tryMatchByRegex(messageText);
+        if (regexMatchResult != null) {
+            regexMatchResult.setDuration((System.currentTimeMillis() - startTime) / 1000.0);
+            return regexMatchResult;
         }
 
         // 2. 正则不匹配，进行智能路由
-        return intelligentRoute(messageText);
+        MessageProcessResult result = intelligentRoute(messageText);
+        result.setDuration((System.currentTimeMillis() - startTime) / 1000.0);
+        return result;
+    }
+
+    /**
+     * 尝试使用配置的正则进行匹配
+     *
+     * @param messageText 用户消息
+     * @return 执行结果，如果不匹配则返回null
+     */
+    private MessageProcessResult tryMatchByRegex(String messageText) {
+        // 获取所有启用且配置了正则的工具
+        RobotToolConfig query = new RobotToolConfig();
+        query.setStatus("0");
+        List<RobotToolConfig> allConfigs = robotToolConfigMapper.selectRobotToolConfigList(query);
+
+        if (allConfigs == null || allConfigs.isEmpty()) {
+            return null;
+        }
+
+        // 筛选出配置了正则表达式的工具
+        List<RobotToolConfig> regexConfigs = allConfigs.stream()
+                .filter(config -> StringUtils.isNotBlank(config.getRegexPattern()))
+                .collect(Collectors.toList());
+
+        if (regexConfigs.isEmpty()) {
+            return null;
+        }
+
+        // 按优先级从大到小排序
+        regexConfigs.sort((a, b) -> Long.compare(
+                b.getPriority() != null ? b.getPriority() : 0,
+                a.getPriority() != null ? a.getPriority() : 0
+        ));
+
+        // 依次尝试匹配
+        for (RobotToolConfig config : regexConfigs) {
+            try {
+                Pattern pattern = Pattern.compile(config.getRegexPattern());
+                Matcher matcher = pattern.matcher(messageText);
+
+                if (matcher.matches()) {
+                    log.info("消息匹配到正则配置：{}", config.getConfigName());
+
+                    // 提取参数
+                    String paramsJson = extractParamsFromMatcher(matcher, config.getRegexParamMap());
+                    if (paramsJson == null) {
+                        log.error("提取参数失败");
+                        continue;
+                    }
+
+                    // 执行工具
+                    String result = executeTool(config, paramsJson);
+                    return new MessageProcessResult("REGEX", config.getConfigName(), result, null);
+                }
+            } catch (Exception e) {
+                log.error("正则匹配失败，配置：{}，正则：{}", config.getConfigName(), config.getRegexPattern(), e);
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * 从正则匹配结果中提取参数
+     *
+     * @param matcher 正则匹配器
+     * @param regexParamMap 参数映射JSON
+     * @return 参数JSON字符串
+     */
+    private String extractParamsFromMatcher(Matcher matcher, String regexParamMap) {
+        if (StringUtils.isBlank(regexParamMap)) {
+            return "{}";
+        }
+
+        try {
+            JSONObject paramMapping = JSON.parseObject(regexParamMap);
+            JSONObject params = new JSONObject();
+
+            // 遍历映射关系
+            for (String key : paramMapping.keySet()) {
+                String groupName = paramMapping.getString(key);
+                try {
+                    int groupIndex = Integer.parseInt(key);
+                    if (groupIndex <= matcher.groupCount()) {
+                        String groupValue = matcher.group(groupIndex);
+                        if (groupValue != null) {
+                            params.put(groupName, groupValue);
+                        }
+                    }
+                } catch (NumberFormatException e) {
+                    log.warn("捕获组编号不是有效数字：{}", key);
+                }
+            }
+
+            return params.toJSONString();
+        } catch (Exception e) {
+            log.error("解析参数映射JSON失败", e);
+            return null;
+        }
     }
 
     /**
@@ -62,15 +162,16 @@ public class ApiDispatchServiceImpl implements IApiDispatchService {
      * @param messageText 用户消息
      * @return 执行结果或大模型回答
      */
-    private String intelligentRoute(String messageText) {
-        // 获取所有启用的工具配置，按优先级从大到小排序
+    private MessageProcessResult intelligentRoute(String messageText) {
+        // 获取所有启用的工具配置（包括没有正则的）
         RobotToolConfig query = new RobotToolConfig();
         query.setStatus("0");
         List<RobotToolConfig> allConfigs = robotToolConfigMapper.selectRobotToolConfigList(query);
 
         if (allConfigs == null || allConfigs.isEmpty()) {
             // 没有工具配置，直接用大模型回答
-            return askLLM(messageText);
+            String result = askLLM(messageText);
+            return new MessageProcessResult("LLM_DIRECT", null, result, null);
         }
 
         // 按优先级从大到小排序
@@ -86,18 +187,21 @@ public class ApiDispatchServiceImpl implements IApiDispatchService {
 
         if (candidateConfigs.isEmpty()) {
             // 没有匹配的关键字，直接用大模型回答
-            return askLLM(messageText);
+            String result = askLLM(messageText);
+            return new MessageProcessResult("LLM_DIRECT", null, result, null);
         }
 
         // 有多个候选工具，让大模型选择
         RobotToolConfig selectedConfig = selectBestConfigByLLM(candidateConfigs, messageText);
         if (selectedConfig == null) {
             // 大模型认为都不匹配，直接用大模型回答
-            return askLLM(messageText);
+            String result = askLLM(messageText);
+            return new MessageProcessResult("LLM_DIRECT", null, result, null);
         }
 
         // 大模型选择了某个工具，执行该工具
-        return executeTool(selectedConfig, messageText);
+        String result = executeTool(selectedConfig, messageText);
+        return new MessageProcessResult("LLM_ROUTE", selectedConfig.getConfigName(), result, null);
     }
 
     /**

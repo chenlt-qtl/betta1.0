@@ -1,9 +1,11 @@
 package com.betta.robot.controller;
 
 import java.util.List;
+import java.util.Map;
 
 import com.betta.robot.domain.RobotToolConfig;
 import com.betta.robot.service.IRobotToolConfigService;
+import com.betta.robot.service.IApiDispatchService;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -34,6 +36,33 @@ public class RobotToolConfigController extends BaseController
 {
     @Autowired
     private IRobotToolConfigService robotToolConfigService;
+
+    @Autowired
+    private IApiDispatchService apiDispatchService;
+
+    /**
+     * 测试正则表达式
+     */
+    @PreAuthorize("@ss.hasPermi('system:config:query')")
+    @PostMapping("/testRegex")
+    public AjaxResult testRegex(@RequestBody Map<String, String> request)
+    {
+        String regexPattern = request.get("regexPattern");
+        String regexParamMap = request.get("regexParamMap");
+        String testText = request.get("testText");
+        return success(robotToolConfigService.testRegex(regexPattern, regexParamMap, testText));
+    }
+
+    /**
+     * 模拟飞书消息
+     */
+    @PreAuthorize("@ss.hasPermi('system:config:query')")
+    @PostMapping("/simulateMessage")
+    public AjaxResult simulateMessage(@RequestBody Map<String, String> request)
+    {
+        String messageText = request.get("messageText");
+        return success(apiDispatchService.processMessage(messageText));
+    }
 
     /**
      * 查询工具配置列表

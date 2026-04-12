@@ -3,6 +3,7 @@ package com.betta.robot.service;
 import com.betta.robot.domain.RobotToolConfig;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 工具配置Service接口
@@ -12,6 +13,16 @@ import java.util.List;
  */
 public interface IRobotToolConfigService 
 {
+    /**
+     * 测试正则表达式
+     * 
+     * @param regexPattern 正则表达式
+     * @param regexParamMap 捕获组参数映射（JSON格式）
+     * @param testText 测试文本
+     * @return 匹配结果
+     */
+    public Map<String, Object> testRegex(String regexPattern, String regexParamMap, String testText);
+
     /**
      * 查询工具配置
      * 
