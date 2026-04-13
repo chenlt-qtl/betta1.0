@@ -163,6 +163,17 @@ public class ApiDispatchServiceImpl implements IApiDispatchService {
      * @return 执行结果或大模型回答
      */
     private MessageProcessResult intelligentRoute(String messageText) {
+        // 检查"问题识别"配置是否存在
+        RobotToolConfig problemRecognitionQuery = new RobotToolConfig();
+        problemRecognitionQuery.setConfigName("问题识别");
+        problemRecognitionQuery.setStatus("0");
+        List<RobotToolConfig> problemRecognitionConfigs = robotToolConfigMapper.selectRobotToolConfigList(problemRecognitionQuery);
+
+        if (problemRecognitionConfigs == null || problemRecognitionConfigs.isEmpty()) {
+            log.error("未找到'问题识别'配置");
+            return new MessageProcessResult("ERROR", null, "未找到'问题识别'配置，请先配置", null);
+        }
+
         // 获取所有启用的工具配置（包括没有正则的）
         RobotToolConfig query = new RobotToolConfig();
         query.setStatus("0");
@@ -212,34 +223,63 @@ public class ApiDispatchServiceImpl implements IApiDispatchService {
      * @return 选择的工具配置，如果不匹配则返回null
      */
     private RobotToolConfig selectBestConfigByLLM(List<RobotToolConfig> candidateConfigs, String messageText) {
-        // 获取ID为1的大模型配置
-        MessageLlmConfig llmConfig = messageLlmConfigMapper.selectById(1L);
-        if (llmConfig == null || StringUtils.isBlank(llmConfig.getApiKey())) {
-            log.warn("未找到ID为1的大模型配置或API Key为空，使用第一个候选工具");
+        // 1. 查询"问题识别"配置
+        RobotToolConfig query = new RobotToolConfig();
+        query.setConfigName("问题识别");
+        query.setStatus("0");
+        List<RobotToolConfig> problemRecognitionConfigs = robotToolConfigMapper.selectRobotToolConfigList(query);
+
+        if (problemRecognitionConfigs == null || problemRecognitionConfigs.isEmpty()) {
+            log.warn("未找到'问题识别'配置，使用第一个候选工具");
             return candidateConfigs.get(0);
         }
 
-        // 构造提示词
-        StringBuilder prompt = new StringBuilder();
-        prompt.append("你是一个智能助手，需要根据用户的消息选择最合适的工具。\n\n");
-        prompt.append("用户消息：\"").append(messageText).append("\"\n\n");
-        prompt.append("可选工具列表：\n");
+        RobotToolConfig problemRecognitionConfig = problemRecognitionConfigs.get(0);
 
-        for (int i = 0; i < candidateConfigs.size(); i++) {
-            RobotToolConfig config = candidateConfigs.get(i);
-            prompt.append(i + 1).append(". 工具ID：").append(config.getId());
-            prompt.append("，工具名称：").append(config.getConfigName());
-            if (StringUtils.isNotBlank(config.getDescription())) {
-                prompt.append("，描述：").append(config.getDescription());
-            }
-            prompt.append("\n");
+        // 2. 获取提示词和大模型配置
+        String prompt = problemRecognitionConfig.getPrompt();
+        if (StringUtils.isBlank(prompt)) {
+            log.warn("'问题识别'配置的提示词为空，使用第一个候选工具");
+            return candidateConfigs.get(0);
         }
 
-        prompt.append("\n请从以上工具中选择最合适的一个，只返回工具ID（纯数字）。");
-        prompt.append("如果以上工具都不适合处理用户消息，请回复\"不匹配\"。");
+        Long llmConfigId = problemRecognitionConfig.getLlmConfigId();
+        if (llmConfigId == null) {
+            log.warn("'问题识别'配置的大模型配置ID为空，使用第一个候选工具");
+            return candidateConfigs.get(0);
+        }
+
+        MessageLlmConfig llmConfig = messageLlmConfigMapper.selectById(llmConfigId);
+        if (llmConfig == null || StringUtils.isBlank(llmConfig.getApiKey())) {
+            log.warn("'问题识别'配置的大模型配置不存在或API Key为空，使用第一个候选工具");
+            return candidateConfigs.get(0);
+        }
+
+        // 3. 构造 toolArray 参数（排除"问题识别"配置本身）
+        JSONArray toolArray = new JSONArray();
+        for (RobotToolConfig config : candidateConfigs) {
+            // 跳过"问题识别"配置（因为它是用来选择工具的，不是实际工具）
+            if ("问题识别".equals(config.getConfigName())) {
+                continue;
+            }
+
+            JSONObject tool = new JSONObject();
+            tool.put("id", config.getId());
+            tool.put("description", StringUtils.isNotBlank(config.getDescription()) ? config.getDescription() : config.getConfigName());
+            toolArray.add(tool);
+        }
+
+        if (toolArray.isEmpty()) {
+            log.warn("没有可用的工具，直接用大模型回答");
+            return null;
+        }
+
+        // 4. 替换提示词中的占位符
+        String fullPrompt = prompt.replace("{{question}}", messageText);
+        fullPrompt = fullPrompt.replace("{{toolArray}}", toolArray.toJSONString());
 
         try {
-            String llmResponse = callLlm(llmConfig, prompt.toString());
+            String llmResponse = callLlm(llmConfig, fullPrompt);
             if (StringUtils.isBlank(llmResponse)) {
                 log.warn("大模型返回空响应，使用第一个候选工具");
                 return candidateConfigs.get(0);
@@ -247,15 +287,69 @@ public class ApiDispatchServiceImpl implements IApiDispatchService {
 
             llmResponse = llmResponse.trim();
 
+            // 5. 解析大模型返回的工具ID
+            try {
+                // 尝试直接解析为JSON
+                JSONObject jsonResponse = JSON.parseObject(llmResponse);
+                
+                // 优先处理 result 数组格式
+                if (jsonResponse.containsKey("result")) {
+                    JSONArray resultArray = jsonResponse.getJSONArray("result");
+                    if (resultArray == null || resultArray.isEmpty()) {
+                        log.info("大模型返回的result数组为空，认为没有合适的工具");
+                        return null;
+                    }
+                    JSONObject firstResult = resultArray.getJSONObject(0);
+                    if (firstResult.containsKey("id")) {
+                        Long selectedId = firstResult.getLong("id");
+                        for (RobotToolConfig config : candidateConfigs) {
+                            if (config.getId().equals(selectedId)) {
+                                log.info("大模型选择了工具：{}", config.getConfigName());
+                                return config;
+                            }
+                        }
+                    }
+                }
+                
+                // 处理直接返回 id 字段的格式
+                if (jsonResponse.containsKey("id")) {
+                    Long selectedId = jsonResponse.getLong("id");
+                    for (RobotToolConfig config : candidateConfigs) {
+                        if (config.getId().equals(selectedId)) {
+                            log.info("大模型选择了工具：{}", config.getConfigName());
+                            return config;
+                        }
+                    }
+                } else if (jsonResponse.containsKey("toolId")) {
+                    Long selectedId = jsonResponse.getLong("toolId");
+                    for (RobotToolConfig config : candidateConfigs) {
+                        if (config.getId().equals(selectedId)) {
+                            log.info("大模型选择了工具：{}", config.getConfigName());
+                            return config;
+                        }
+                    }
+                } else if (jsonResponse.containsKey("selectedToolId")) {
+                    Long selectedId = jsonResponse.getLong("selectedToolId");
+                    for (RobotToolConfig config : candidateConfigs) {
+                        if (config.getId().equals(selectedId)) {
+                            log.info("大模型选择了工具：{}", config.getConfigName());
+                            return config;
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                // JSON解析失败，尝试纯数字解析
+            }
+
             // 检查是否回复"不匹配"
             if (llmResponse.contains("不匹配")) {
                 log.info("大模型认为没有合适的工具");
                 return null;
             }
 
-            // 尝试解析工具ID
+            // 尝试解析工具ID（纯数字）
             try {
-                Long selectedId = Long.parseLong(llmResponse);
+                Long selectedId = Long.parseLong(llmResponse.replaceAll("[^0-9]", ""));
                 for (RobotToolConfig config : candidateConfigs) {
                     if (config.getId().equals(selectedId)) {
                         log.info("大模型选择了工具：{}", config.getConfigName());
@@ -349,7 +443,31 @@ public class ApiDispatchServiceImpl implements IApiDispatchService {
     }
 
     private String executeTool(RobotToolConfig config, String messageText) {
-        if (config.getLlmConfigId() == null) {
+        // 1. 如果配置了正则表达式，先尝试正则匹配
+        if (StringUtils.isNotBlank(config.getRegexPattern())) {
+            try {
+                Pattern pattern = Pattern.compile(config.getRegexPattern());
+                Matcher matcher = pattern.matcher(messageText);
+
+                if (matcher.matches()) {
+                    log.info("工具 {} 正则匹配成功", config.getConfigName());
+                    // 提取参数
+                    String paramsJson = extractParamsFromMatcher(matcher, config.getRegexParamMap());
+                    if (paramsJson == null) {
+                        paramsJson = "{}";
+                    }
+                    return callTool(config, paramsJson);
+                } else {
+                    log.info("工具 {} 正则匹配失败，继续使用大模型提取参数", config.getConfigName());
+                }
+            } catch (Exception e) {
+                log.error("工具 {} 正则匹配失败：{}", config.getConfigName(), e.getMessage());
+            }
+        }
+
+        // 2. 正则不匹配或没有配置正则，使用大模型提取参数
+        if (config.getLlmConfigId() == null || StringUtils.isBlank(config.getPrompt())) {
+            // 没有配置大模型或提示词，使用简单参数处理
             return callToolWithSimpleParams(config, messageText);
         }
 
@@ -358,7 +476,7 @@ public class ApiDispatchServiceImpl implements IApiDispatchService {
             return callToolWithSimpleParams(config, messageText);
         }
 
-        String extractedParams = extractParamsByLlm(llmConfig, config.getPrompt(), messageText);
+        String extractedParams = extractParamsByLlm(llmConfig, config.getPrompt(), config.getToolParams(), messageText);
         if (extractedParams == null) {
             return "参数提取失败";
         }
@@ -393,12 +511,14 @@ public class ApiDispatchServiceImpl implements IApiDispatchService {
         return messageText.replaceAll(".*?" + paramName + "[是为：:]*\\s*", "").trim();
     }
 
-    private String extractParamsByLlm(MessageLlmConfig llmConfig, String prompt, String messageText) {
+    private String extractParamsByLlm(MessageLlmConfig llmConfig, String prompt, String toolParams, String messageText) {
         if (StringUtils.isBlank(prompt)) {
             return "{}";
         }
 
-        String fullPrompt = prompt + "\n\n用户消息：" + messageText + "\n\n请从消息中提取参数，输出JSON格式。";
+        // 替换提示词中的占位符
+        String fullPrompt = prompt.replace("{{userQuestion}}", messageText);
+        fullPrompt = fullPrompt.replace("{{params}}", toolParams);
 
         try {
             String llmResponse = callLlm(llmConfig, fullPrompt);

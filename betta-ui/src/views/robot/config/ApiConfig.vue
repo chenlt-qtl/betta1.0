@@ -213,7 +213,7 @@ export default {
       paramList: [],
       rules: {
         configName: [{ required: true, message: '请输入配置名称', trigger: 'blur' }],
-        className: [{ required: true, message: '请输入完整类名', trigger: 'blur' }]
+        //className: [{ required: true, message: '请输入完整类名', trigger: 'blur' }]
       },
       queryParams: {
         pageNum: 1,
