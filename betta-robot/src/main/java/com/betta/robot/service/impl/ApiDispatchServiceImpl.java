@@ -3,7 +3,6 @@ package com.betta.robot.service.impl;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
-import com.betta.robot.client.JsonHttpClient;
 import com.betta.robot.domain.MessageLlmConfig;
 import com.betta.robot.domain.RobotToolConfig;
 import com.betta.robot.dto.CommandDTO;
@@ -12,13 +11,15 @@ import com.betta.robot.mapper.MessageLlmConfigMapper;
 import com.betta.robot.mapper.RobotToolConfigMapper;
 import com.betta.robot.service.IApiDispatchService;
 import com.betta.robot.tools.ITool;
+import com.betta.robot.utils.LlmUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
 import org.springframework.stereotype.Service;
 
-import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -37,6 +38,9 @@ public class ApiDispatchServiceImpl implements IApiDispatchService {
 
     @Autowired
     private ApplicationContext applicationContext;
+
+    @Autowired
+    private LlmUtils llmUtils;
 
     @Override
     public MessageProcessResult processMessage(String messageText) {
@@ -193,7 +197,10 @@ public class ApiDispatchServiceImpl implements IApiDispatchService {
 
         // 匹配关键字，筛选候选工具
         List<RobotToolConfig> candidateConfigs = allConfigs.stream()
-                .filter(config -> matchesKeywords(messageText, config))
+                //过滤className不为空的 提示词不为空 问题包含关键字
+                .filter(config -> StringUtils.isNotBlank( config.getClassName()) &&
+                        matchesKeywords(messageText, config) &&
+                        StringUtils.isNotBlank(config.getPrompt()))
                 .collect(Collectors.toList());
 
         if (candidateConfigs.isEmpty()) {
@@ -202,27 +209,57 @@ public class ApiDispatchServiceImpl implements IApiDispatchService {
             return new MessageProcessResult("LLM_DIRECT", null, result, null);
         }
 
-        // 有多个候选工具，让大模型选择
-        RobotToolConfig selectedConfig = selectBestConfigByLLM(candidateConfigs, messageText);
-        if (selectedConfig == null) {
+        // 让大模型选择工具（可能返回多个）
+        List<ToolWithQuestion> toolWithQuestions = selectBestConfigByLLM(candidateConfigs, messageText);
+        if (toolWithQuestions.isEmpty()) {
             // 大模型认为都不匹配，直接用大模型回答
             String result = askLLM(messageText);
             return new MessageProcessResult("LLM_DIRECT", null, result, null);
         }
 
-        // 大模型选择了某个工具，执行该工具
-        String result = executeTool(selectedConfig, messageText);
-        return new MessageProcessResult("LLM_ROUTE", selectedConfig.getConfigName(), result, null);
+        // 循环执行每个工具
+        JSONArray results = new JSONArray();
+        boolean hasError = false;
+
+        for (ToolWithQuestion toolWithQuestion : toolWithQuestions) {
+            try {
+                String result = executeTool(toolWithQuestion.config, toolWithQuestion.question);
+
+                JSONObject resultItem = new JSONObject();
+                resultItem.put("toolName", toolWithQuestion.config.getConfigName());
+                resultItem.put("question", toolWithQuestion.question);
+                resultItem.put("result", result);
+                resultItem.put("success", true);
+                results.add(resultItem);
+            } catch (Exception e) {
+                log.error("执行工具失败：{}，子问题：{}", toolWithQuestion.config.getConfigName(), toolWithQuestion.question, e);
+                hasError = true;
+
+                JSONObject resultItem = new JSONObject();
+                resultItem.put("toolName", toolWithQuestion.config.getConfigName());
+                resultItem.put("question", toolWithQuestion.question);
+                resultItem.put("result", "执行失败：" + e.getMessage());
+                resultItem.put("success", false);
+                results.add(resultItem);
+            }
+        }
+
+        // 返回所有执行结果
+        JSONObject finalResult = new JSONObject();
+        finalResult.put("status", hasError ? "PARTIAL_SUCCESS" : "SUCCESS");
+        finalResult.put("results", results);
+
+        return new MessageProcessResult("LLM_MULTI_ROUTE", "多工具执行", finalResult.toJSONString(), null);
     }
 
     /**
-     * 用大模型选择最合适的工具
+     * 大模型拆解问题并选择工具
      *
      * @param candidateConfigs 候选工具列表
      * @param messageText      用户消息
-     * @return 选择的工具配置，如果不匹配则返回null
+     * @return 带子问题的工具配置列表
      */
-    private RobotToolConfig selectBestConfigByLLM(List<RobotToolConfig> candidateConfigs, String messageText) {
+    private List<ToolWithQuestion> selectBestConfigByLLM(List<RobotToolConfig> candidateConfigs, String messageText) {
         // 1. 查询"问题识别"配置
         RobotToolConfig query = new RobotToolConfig();
         query.setConfigName("问题识别");
@@ -230,8 +267,8 @@ public class ApiDispatchServiceImpl implements IApiDispatchService {
         List<RobotToolConfig> problemRecognitionConfigs = robotToolConfigMapper.selectRobotToolConfigList(query);
 
         if (problemRecognitionConfigs == null || problemRecognitionConfigs.isEmpty()) {
-            log.warn("未找到'问题识别'配置，使用第一个候选工具");
-            return candidateConfigs.get(0);
+            log.warn("未找到'问题识别'配置");
+            return Collections.emptyList();
         }
 
         RobotToolConfig problemRecognitionConfig = problemRecognitionConfigs.get(0);
@@ -239,30 +276,25 @@ public class ApiDispatchServiceImpl implements IApiDispatchService {
         // 2. 获取提示词和大模型配置
         String prompt = problemRecognitionConfig.getPrompt();
         if (StringUtils.isBlank(prompt)) {
-            log.warn("'问题识别'配置的提示词为空，使用第一个候选工具");
-            return candidateConfigs.get(0);
+            log.warn("'问题识别'配置的提示词为空");
+            return Collections.emptyList();
         }
 
         Long llmConfigId = problemRecognitionConfig.getLlmConfigId();
         if (llmConfigId == null) {
-            log.warn("'问题识别'配置的大模型配置ID为空，使用第一个候选工具");
-            return candidateConfigs.get(0);
+            log.warn("'问题识别'配置的大模型配置ID为空");
+            return Collections.emptyList();
         }
 
         MessageLlmConfig llmConfig = messageLlmConfigMapper.selectById(llmConfigId);
         if (llmConfig == null || StringUtils.isBlank(llmConfig.getApiKey())) {
-            log.warn("'问题识别'配置的大模型配置不存在或API Key为空，使用第一个候选工具");
-            return candidateConfigs.get(0);
+            log.warn("'问题识别'配置的大模型配置不存在或API Key为空");
+            return Collections.emptyList();
         }
 
         // 3. 构造 toolArray 参数（排除"问题识别"配置本身）
         JSONArray toolArray = new JSONArray();
         for (RobotToolConfig config : candidateConfigs) {
-            // 跳过"问题识别"配置（因为它是用来选择工具的，不是实际工具）
-            if ("问题识别".equals(config.getConfigName())) {
-                continue;
-            }
-
             JSONObject tool = new JSONObject();
             tool.put("id", config.getId());
             tool.put("description", StringUtils.isNotBlank(config.getDescription()) ? config.getDescription() : config.getConfigName());
@@ -271,7 +303,7 @@ public class ApiDispatchServiceImpl implements IApiDispatchService {
 
         if (toolArray.isEmpty()) {
             log.warn("没有可用的工具，直接用大模型回答");
-            return null;
+            return Collections.emptyList();
         }
 
         // 4. 替换提示词中的占位符
@@ -279,100 +311,55 @@ public class ApiDispatchServiceImpl implements IApiDispatchService {
         fullPrompt = fullPrompt.replace("{{toolArray}}", toolArray.toJSONString());
 
         try {
-            String llmResponse = callLlm(llmConfig, fullPrompt);
+            String llmResponse = llmUtils.callWithRecord(llmConfig, fullPrompt);
             if (StringUtils.isBlank(llmResponse)) {
-                log.warn("大模型返回空响应，使用第一个候选工具");
-                return candidateConfigs.get(0);
+                log.warn("大模型返回空响应");
+                return Collections.emptyList();
             }
 
             llmResponse = llmResponse.trim();
 
-            // 5. 解析大模型返回的工具ID
+            // 检查是否返回空数组
+            if ("[]".equals(llmResponse)) {
+                log.info("大模型返回空数组，认为没有合适的工具");
+                return Collections.emptyList();
+            }
+
+            // 解析大模型返回的结果
             try {
-                // 尝试直接解析为JSON
                 JSONObject jsonResponse = JSON.parseObject(llmResponse);
-                
-                // 优先处理 result 数组格式
-                if (jsonResponse.containsKey("result")) {
-                    JSONArray resultArray = jsonResponse.getJSONArray("result");
-                    if (resultArray == null || resultArray.isEmpty()) {
-                        log.info("大模型返回的result数组为空，认为没有合适的工具");
-                        return null;
-                    }
-                    JSONObject firstResult = resultArray.getJSONObject(0);
-                    if (firstResult.containsKey("id")) {
-                        Long selectedId = firstResult.getLong("id");
+                JSONArray resultArray = jsonResponse.getJSONArray("result");
+
+                if (resultArray == null || resultArray.isEmpty()) {
+                    log.info("大模型返回的result数组为空");
+                    return Collections.emptyList();
+                }
+
+                List<ToolWithQuestion> toolList = new ArrayList<>();
+                for (int i = 0; i < resultArray.size(); i++) {
+                    JSONObject resultItem = resultArray.getJSONObject(i);
+                    if (resultItem.containsKey("id")) {
+                        Long selectedId = resultItem.getLong("id");
+                        String question = resultItem.getString("question");
+
                         for (RobotToolConfig config : candidateConfigs) {
                             if (config.getId().equals(selectedId)) {
-                                log.info("大模型选择了工具：{}", config.getConfigName());
-                                return config;
+                                log.info("大模型选择了工具：{}，子问题：{}", config.getConfigName(), question);
+                                toolList.add(new ToolWithQuestion(config, question));
+                                break;
                             }
                         }
                     }
                 }
-                
-                // 处理直接返回 id 字段的格式
-                if (jsonResponse.containsKey("id")) {
-                    Long selectedId = jsonResponse.getLong("id");
-                    for (RobotToolConfig config : candidateConfigs) {
-                        if (config.getId().equals(selectedId)) {
-                            log.info("大模型选择了工具：{}", config.getConfigName());
-                            return config;
-                        }
-                    }
-                } else if (jsonResponse.containsKey("toolId")) {
-                    Long selectedId = jsonResponse.getLong("toolId");
-                    for (RobotToolConfig config : candidateConfigs) {
-                        if (config.getId().equals(selectedId)) {
-                            log.info("大模型选择了工具：{}", config.getConfigName());
-                            return config;
-                        }
-                    }
-                } else if (jsonResponse.containsKey("selectedToolId")) {
-                    Long selectedId = jsonResponse.getLong("selectedToolId");
-                    for (RobotToolConfig config : candidateConfigs) {
-                        if (config.getId().equals(selectedId)) {
-                            log.info("大模型选择了工具：{}", config.getConfigName());
-                            return config;
-                        }
-                    }
-                }
+
+                return toolList;
             } catch (Exception e) {
-                // JSON解析失败，尝试纯数字解析
+                log.error("解析大模型响应失败", e);
+                return Collections.emptyList();
             }
-
-            // 检查是否回复"不匹配"
-            if (llmResponse.contains("不匹配")) {
-                log.info("大模型认为没有合适的工具");
-                return null;
-            }
-
-            // 尝试解析工具ID（纯数字）
-            try {
-                Long selectedId = Long.parseLong(llmResponse.replaceAll("[^0-9]", ""));
-                for (RobotToolConfig config : candidateConfigs) {
-                    if (config.getId().equals(selectedId)) {
-                        log.info("大模型选择了工具：{}", config.getConfigName());
-                        return config;
-                    }
-                }
-            } catch (NumberFormatException e) {
-                log.warn("大模型返回的不是数字格式：{}，使用第一个候选工具", llmResponse);
-            }
-
-            // 如果无法解析，尝试匹配工具名称
-            for (RobotToolConfig config : candidateConfigs) {
-                if (llmResponse.contains(config.getConfigName())) {
-                    log.info("大模型选择了工具（名称匹配）：{}", config.getConfigName());
-                    return config;
-                }
-            }
-
-            log.warn("无法从大模型响应中解析出工具ID：{}，使用第一个候选工具", llmResponse);
-            return candidateConfigs.get(0);
         } catch (Exception e) {
-            log.error("调用大模型选择工具失败，使用第一个候选工具", e);
-            return candidateConfigs.get(0);
+            log.error("调用大模型选择工具失败", e);
+            return Collections.emptyList();
         }
     }
 
@@ -390,7 +377,7 @@ public class ApiDispatchServiceImpl implements IApiDispatchService {
         }
 
         try {
-            String response = callLlm(llmConfig, messageText);
+            String response = llmUtils.callWithRecord(llmConfig, messageText);
             if (StringUtils.isNotBlank(response)) {
                 return response;
             }
@@ -479,6 +466,8 @@ public class ApiDispatchServiceImpl implements IApiDispatchService {
         String extractedParams = extractParamsByLlm(llmConfig, config.getPrompt(), config.getToolParams(), messageText);
         if (extractedParams == null) {
             return "参数提取失败";
+        }else{
+            log.info("参数提取成功：{}", extractedParams);
         }
 
         return callTool(config, extractedParams);
@@ -521,7 +510,7 @@ public class ApiDispatchServiceImpl implements IApiDispatchService {
         fullPrompt = fullPrompt.replace("{{params}}", toolParams);
 
         try {
-            String llmResponse = callLlm(llmConfig, fullPrompt);
+            String llmResponse = llmUtils.callWithRecord(llmConfig, fullPrompt);
             llmResponse = llmResponse.trim();
             if (llmResponse.startsWith("```json")) {
                 llmResponse = llmResponse.substring(7);
@@ -583,102 +572,16 @@ public class ApiDispatchServiceImpl implements IApiDispatchService {
     }
 
     /**
-     * 调用大模型API
-     *
-     * @param llmConfig LLM配置
-     * @param prompt    提示词
-     * @return 大模型回复内容
+     * 带子问题的工具配置
      */
-    private String callLlm(MessageLlmConfig llmConfig, String prompt) {
-        try {
-            String endpoint = resolveEndpoint(llmConfig);
-            String apiKey = llmConfig.getApiKey();
+    private static class ToolWithQuestion {
+        RobotToolConfig config;
+        String question;
 
-            // 构造OpenAI格式的请求体
-            JSONObject requestBody = new JSONObject();
-            requestBody.put("model", llmConfig.getModelName());
-
-            JSONArray messages = new JSONArray();
-            JSONObject message = new JSONObject();
-            message.put("role", "user");
-            message.put("content", prompt);
-            messages.add(message);
-            requestBody.put("messages", messages);
-
-            // 添加可选参数
-            if (llmConfig.getTemperature() != null && llmConfig.getTemperature().compareTo(BigDecimal.ZERO) >= 0) {
-                requestBody.put("temperature", llmConfig.getTemperature().doubleValue());
-            }
-            if (llmConfig.getMaxTokens() != null && llmConfig.getMaxTokens() > 0) {
-                requestBody.put("max_tokens", llmConfig.getMaxTokens());
-            }
-            if (llmConfig.getTopP() != null && llmConfig.getTopP().compareTo(BigDecimal.ZERO) > 0) {
-                requestBody.put("top_p", llmConfig.getTopP().doubleValue());
-            }
-
-            // 发送请求
-            String response = JsonHttpClient.postJson(endpoint, requestBody, apiKey);
-
-            if (StringUtils.isBlank(response)) {
-                log.error("LLM返回空响应");
-                return null;
-            }
-
-            // 解析响应，从OpenAI格式的响应中提取内容
-            JSONObject jsonResponse = JSON.parseObject(response);
-            if (jsonResponse.containsKey("choices")) {
-                JSONArray choices = jsonResponse.getJSONArray("choices");
-                if (choices != null && !choices.isEmpty()) {
-                    JSONObject choice = choices.getJSONObject(0);
-                    if (choice.containsKey("message")) {
-                        JSONObject messageObj = choice.getJSONObject("message");
-                        if (messageObj.containsKey("content")) {
-                            return messageObj.getString("content");
-                        }
-                    }
-                }
-            }
-
-            log.error("LLM响应格式不正确: {}", response);
-            return null;
-        } catch (Exception e) {
-            log.error("调用LLM失败", e);
-            return null;
+        ToolWithQuestion(RobotToolConfig config, String question) {
+            this.config = config;
+            this.question = question;
         }
     }
 
-    /**
-     * 根据提供商解析API端点
-     *
-     * @param llmConfig LLM配置
-     * @return API端点URL
-     */
-    private String resolveEndpoint(MessageLlmConfig llmConfig) {
-        // 如果配置了自定义端点，优先使用
-        if (StringUtils.isNotBlank(llmConfig.getApiEndpoint())) {
-            return llmConfig.getApiEndpoint();
-        }
-
-        // 根据provider类型返回默认端点
-        String provider = llmConfig.getProvider();
-        if (StringUtils.isBlank(provider)) {
-            provider = "OPENAI"; // 默认使用OpenAI
-        }
-
-        switch (provider.toUpperCase()) {
-            case "ALIYUN":
-                return "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions";
-            case "OPENAI":
-                return "https://api.openai.com/v1/chat/completions";
-            case "ANTHROPIC":
-                // Anthropic暂不支持标准OpenAI格式，需要特殊处理
-                return "https://api.anthropic.com/v1/messages";
-            case "BAIDU":
-                // 百度文心一言需要特殊适配
-                return "https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/completions";
-            default:
-                // 默认使用OpenAI端点
-                return "https://api.openai.com/v1/chat/completions";
-        }
-    }
 }

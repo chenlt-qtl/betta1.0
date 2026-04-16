@@ -227,7 +227,7 @@ export default {
       testText: '',
       regexTestResult: null,
       simulateOpen: false,
-      simulateMessageText: '',
+      simulateMessageText: '豆芽加卡30张吧',
       simulateSending: false,
       simulateResult: null,
       simulateDuration: 0
@@ -412,7 +412,7 @@ export default {
     },
     handleSimulateMessage() {
       this.simulateOpen = true
-      this.simulateMessageText = ''
+      this.simulateMessageText = '豆芽加卡30张吧'
       this.simulateResult = null
       this.simulateDuration = 0
     },
