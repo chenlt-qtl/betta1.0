@@ -53,7 +53,7 @@
           <img src="@/assets/shortcuts/积分.svg" />
           加卡
         </a>
-        <a href="n/note" class="item">
+        <a href="/note" class="item">
           <img src="@/assets/shortcuts/档案.svg" />
           笔记
         </a>

@@ -7,11 +7,15 @@ ruoyi:
   # 版权年份
   copyrightYear: 2026
   # 文件路径 示例（ Windows配置D:/ruoyi/uploadPath，Linux配置 /home/ruoyi/uploadPath）
-  profile: E:/betta/upload
+  profile: /Users/unagi/Documents/file/betta/upload
   # 获取ip地址开关
   addressEnabled: false
   # 验证码类型 math 数字计算 char 字符验证
   captchaType: math
+  # 笔记图片保存位置模板，兼容 Obsidian Custom Attachment Location
+  noteAttachmentLocation: 999.图片/{noteFileName}
+  # 笔记图片文件名模板，不含扩展名
+  noteAttachmentFileName: file-{date:YYYYMMDDHHmmssSSS}
 
 # 开发环境配置
 server:
