@@ -74,7 +74,7 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         <trim prefix="values (" suffix=")" suffixOverrides=",">
             <if test="configName != null and configName != ''">#{configName},</if>
             <if test="className != null and className != ''">#{className},</if>
-            <if test="toolParams != null">#{tool_params},</if>
+            <if test="toolParams != null">#{toolParams},</if>
             <if test="keywords != null">#{keywords},</if>
             <if test="priority != null">#{priority},</if>
             <if test="description != null">#{description},</if>

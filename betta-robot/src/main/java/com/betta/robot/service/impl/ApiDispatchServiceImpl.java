@@ -5,6 +5,7 @@ import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
 import com.betta.robot.domain.MessageLlmConfig;
 import com.betta.robot.domain.RobotToolConfig;
+import com.betta.robot.dto.ActionResult;
 import com.betta.robot.dto.CommandDTO;
 import com.betta.robot.dto.MessageProcessResult;
 import com.betta.robot.mapper.MessageLlmConfigMapper;
@@ -559,9 +560,14 @@ public class ApiDispatchServiceImpl implements IApiDispatchService {
             }
 
             // 调用execute方法
-            ((ITool) bean).execute(commandDTO);
-
-            return "执行成功";
+            ActionResult actionResult = ((ITool) bean).execute(commandDTO);
+            if (actionResult == null) {
+                return "执行成功";
+            }
+            if (StringUtils.isNotBlank(actionResult.getMessage())) {
+                return actionResult.getMessage();
+            }
+            return actionResult.isSuccess() ? "执行成功" : "执行失败";
         } catch (ClassNotFoundException e) {
             log.error("工具类或DTO类不存在", e);
             return "工具类或DTO类不存在: " + e.getMessage();

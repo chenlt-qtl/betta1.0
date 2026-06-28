@@ -43,7 +43,7 @@ public class RobotToolConfigController extends BaseController
     /**
      * 测试正则表达式
      */
-    @PreAuthorize("@ss.hasPermi('system:config:query')")
+    @PreAuthorize("@ss.hasPermi('message:api:query')")
     @PostMapping("/testRegex")
     public AjaxResult testRegex(@RequestBody Map<String, String> request)
     {
@@ -56,7 +56,7 @@ public class RobotToolConfigController extends BaseController
     /**
      * 模拟飞书消息
      */
-    @PreAuthorize("@ss.hasPermi('system:config:query')")
+    @PreAuthorize("@ss.hasPermi('message:api:query')")
     @PostMapping("/simulateMessage")
     public AjaxResult simulateMessage(@RequestBody Map<String, String> request)
     {
@@ -67,7 +67,7 @@ public class RobotToolConfigController extends BaseController
     /**
      * 查询工具配置列表
      */
-    @PreAuthorize("@ss.hasPermi('system:config:list')")
+    @PreAuthorize("@ss.hasPermi('message:api:list')")
     @GetMapping("/list")
     public TableDataInfo list(RobotToolConfig robotToolConfig)
     {
@@ -79,7 +79,7 @@ public class RobotToolConfigController extends BaseController
     /**
      * 导出工具配置列表
      */
-    @PreAuthorize("@ss.hasPermi('system:config:export')")
+    @PreAuthorize("@ss.hasPermi('message:api:export')")
     @Log(title = "工具配置", businessType = BusinessType.EXPORT)
     @PostMapping("/export")
     public void export(HttpServletResponse response, RobotToolConfig robotToolConfig)
@@ -92,7 +92,7 @@ public class RobotToolConfigController extends BaseController
     /**
      * 获取工具配置详细信息
      */
-    @PreAuthorize("@ss.hasPermi('system:config:query')")
+    @PreAuthorize("@ss.hasPermi('message:api:query')")
     @GetMapping(value = "/{id}")
     public AjaxResult getInfo(@PathVariable("id") Long id)
     {
@@ -102,7 +102,7 @@ public class RobotToolConfigController extends BaseController
     /**
      * 新增工具配置
      */
-    @PreAuthorize("@ss.hasPermi('system:config:add')")
+    @PreAuthorize("@ss.hasPermi('message:api:add')")
     @Log(title = "工具配置", businessType = BusinessType.INSERT)
     @PostMapping
     public AjaxResult add(@RequestBody RobotToolConfig robotToolConfig)
@@ -113,7 +113,7 @@ public class RobotToolConfigController extends BaseController
     /**
      * 修改工具配置
      */
-    @PreAuthorize("@ss.hasPermi('system:config:edit')")
+    @PreAuthorize("@ss.hasPermi('message:api:edit')")
     @Log(title = "工具配置", businessType = BusinessType.UPDATE)
     @PutMapping
     public AjaxResult edit(@RequestBody RobotToolConfig robotToolConfig)
@@ -124,7 +124,7 @@ public class RobotToolConfigController extends BaseController
     /**
      * 删除工具配置
      */
-    @PreAuthorize("@ss.hasPermi('system:config:remove')")
+    @PreAuthorize("@ss.hasPermi('message:api:remove')")
     @Log(title = "工具配置", businessType = BusinessType.DELETE)
 	@DeleteMapping("/{ids}")
     public AjaxResult remove(@PathVariable Long[] ids)

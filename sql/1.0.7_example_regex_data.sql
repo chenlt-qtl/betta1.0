@@ -4,7 +4,7 @@
 
 -- 示例：配置加卡工具的正则
 UPDATE robot_tool_config
-SET regex_pattern = '(豆芽|桐桐)\s*(.*?),*\s*(加卡|加|消费|扣|扣卡)\s*(\d+)\s*(?:张|元|张卡)',
+SET regex_pattern = '(豆芽|桐桐)\s*(.*?),*\s*(加卡|加|消费|扣|扣卡)\s*(\d+)\s*(?:张|元|张卡|块)',
     regex_param_map = '{"1":"account","2":"conent","3":"action","4":"quantity"}'
 WHERE config_name = '加卡工具';
 
