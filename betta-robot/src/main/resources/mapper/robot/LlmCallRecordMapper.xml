@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.betta.robot.mapper.LlmCallRecordMapper">
+
+    <resultMap type="com.betta.robot.domain.LlmCallRecord" id="LlmCallRecordResult">
+        <id     property="id"                column="id"                />
+        <result property="llmConfigId"       column="llm_config_id"     />
+        <result property="modelName"         column="model_name"        />
+        <result property="provider"          column="provider"          />
+        <result property="prompt"            column="prompt"   />
+        <result property="responseContent"   column="response_content"  />
+        <result property="status"            column="status"            />
+        <result property="errorMsg"          column="error_msg"         />
+        <result property="duration"          column="duration"          />
+        <result property="createTime"        column="create_time"       />
+    </resultMap>
+
+    <insert id="insert" parameterType="com.betta.robot.domain.LlmCallRecord" useGeneratedKeys="true" keyProperty="id">
+        insert into llm_call_record
+        <trim prefix="(" suffix=")" suffixOverrides=",">
+            <if test="llmConfigId != null">llm_config_id,</if>
+            <if test="modelName != null">model_name,</if>
+            <if test="provider != null">provider,</if>
+            <if test="prompt != null">prompt,</if>
+            <if test="responseContent != null">response_content,</if>
+            <if test="status != null">status,</if>
+            <if test="errorMsg != null">error_msg,</if>
+            <if test="duration != null">duration,</if>
+            <if test="createTime != null">create_time,</if>
+        </trim>
+        <trim prefix="values (" suffix=")" suffixOverrides=",">
+            <if test="llmConfigId != null">#{llmConfigId},</if>
+            <if test="modelName != null">#{modelName},</if>
+            <if test="provider != null">#{provider},</if>
+            <if test="prompt != null">#{prompt},</if>
+            <if test="responseContent != null">#{responseContent},</if>
+            <if test="status != null">#{status},</if>
+            <if test="errorMsg != null">#{errorMsg},</if>
+            <if test="duration != null">#{duration},</if>
+            <if test="createTime != null">#{createTime},</if>
+        </trim>
+    </insert>
+
+    <update id="update" parameterType="com.betta.robot.domain.LlmCallRecord">
+        update llm_call_record
+        <trim prefix="SET" suffixOverrides=",">
+            <if test="responseContent != null">response_content = #{responseContent},</if>
+            <if test="status != null">status = #{status},</if>
+            <if test="errorMsg != null">error_msg = #{errorMsg},</if>
+            <if test="duration != null">duration = #{duration},</if>
+        </trim>
+        where id = #{id}
+    </update>
+</mapper>

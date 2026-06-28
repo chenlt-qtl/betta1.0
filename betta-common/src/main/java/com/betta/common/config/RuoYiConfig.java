@@ -30,6 +30,12 @@ public class RuoYiConfig
     /** 验证码类型 */
     private static String captchaType;
 
+    /** 笔记图片保存位置模板 */
+    private static String noteAttachmentLocation = "999.图片/${noteFileName}";
+
+    /** 笔记图片文件名模板 */
+    private static String noteAttachmentFileName = "file-${date:{momentJsFormat:'YYYYMMDDHHmmssSSS'}}";
+
     public String getName()
     {
         return name;
@@ -86,6 +92,26 @@ public class RuoYiConfig
 
     public void setCaptchaType(String captchaType) {
         RuoYiConfig.captchaType = captchaType;
+    }
+
+    public static String getNoteAttachmentLocation()
+    {
+        return noteAttachmentLocation;
+    }
+
+    public void setNoteAttachmentLocation(String noteAttachmentLocation)
+    {
+        RuoYiConfig.noteAttachmentLocation = noteAttachmentLocation;
+    }
+
+    public static String getNoteAttachmentFileName()
+    {
+        return noteAttachmentFileName;
+    }
+
+    public void setNoteAttachmentFileName(String noteAttachmentFileName)
+    {
+        RuoYiConfig.noteAttachmentFileName = noteAttachmentFileName;
     }
 
     /**

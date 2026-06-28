@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <artifactId>betta</artifactId>
+        <groupId>com.betta</groupId>
+        <version>3.9.2</version>
+    </parent>
+    <artifactId>betta-robot</artifactId>
+    <description>机器人模块：飞书/微信配置、接收消息、LLM解析、命令分发、回复</description>
+    <dependencies>
+        <dependency>
+            <groupId>com.betta</groupId>
+            <artifactId>betta-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.betta</groupId>
+            <artifactId>betta-framework</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.betta</groupId>
+            <artifactId>betta-quartz</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.betta</groupId>
+            <artifactId>betta-system</artifactId>
+        </dependency>
+    </dependencies>
+</project>

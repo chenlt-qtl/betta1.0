@@ -9,7 +9,9 @@ import { isRelogin } from '@/utils/request'
 
 NProgress.configure({ showSpinner: false })
 
-const whiteList = ['/login', '/register']
+// /auto-login 是机器人自动登录中转页：用户还没有 token 时必须允许进入。
+// 业务页面本身（例如 /dance）不加入白名单，兑换成功后仍以正常登录态访问。
+const whiteList = ['/login', '/register', '/auto-login']
 
 const isWhiteList = (path) => {
   return whiteList.some(pattern => isPathMatch(pattern, path))

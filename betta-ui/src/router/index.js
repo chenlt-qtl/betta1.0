@@ -62,6 +62,13 @@ export const constantRoutes = [
     hidden: true
   },
   {
+    // 机器人自动登录通用中转页。
+    // 具体业务目标页不写死在路由里，而是由后端 ticket 兑换结果的 targetPath 决定。
+    path: '/auto-login',
+    component: () => import('@/views/autoLogin/index'),
+    hidden: true
+  },
+  {
     name: "dance",
     path: "/dance",
     component: () => import("@/components/other/timer/VideoPlayer"),

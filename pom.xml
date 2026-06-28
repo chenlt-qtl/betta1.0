@@ -167,10 +167,10 @@
                 <version>${betta.version}</version>
             </dependency>
 
-            <!-- 消息通道-->
+            <!-- 机器人模块-->
             <dependency>
                 <groupId>com.betta</groupId>
-                <artifactId>betta-message</artifactId>
+                <artifactId>betta-robot</artifactId>
                 <version>${betta.version}</version>
             </dependency>
         </dependencies>
@@ -183,7 +183,7 @@
         <module>betta-quartz</module>
         <module>betta-generator</module>
         <module>betta-common</module>
-        <module>betta-message</module>
+        <module>betta-robot</module>
     </modules>
     <packaging>pom</packaging>
 

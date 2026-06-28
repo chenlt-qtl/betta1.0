@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS `message_record`
 
 -- 菜单：消息通道管理（放在"系统管理"下，parent_id 需根据实际 sys_menu 中"系统管理"的 id 调整，这里用 1 占位）
 INSERT INTO sys_menu (menu_name, parent_id, order_num, path, component, is_frame, is_cache, menu_type, visible, status, perms, icon, create_by, create_time, update_by, update_time, remark)
-VALUES ('消息通道', 1, 10, 'message', 'message/config/index', 1, 0, 'C', '0', '0', 'message:config:list', 'message', 'admin', sysdate(), '', NULL, '飞书/微信通道配置与消息记录');
+VALUES ('消息通道', 1, 10, 'message', 'robot/config/index', 1, 0, 'C', '0', '0', 'message:config:list', 'message', 'admin', sysdate(), '', NULL, '飞书/微信通道配置与消息记录');
 
 SET @messageMenuId := LAST_INSERT_ID();
 
@@ -102,13 +102,13 @@ VALUES ('配置修改', @messageMenuId, 9, '', '', 1, 0, 'F', '0', '0', 'message
 INSERT INTO sys_menu (menu_name, parent_id, order_num, path, component, is_frame, is_cache, menu_type, visible, status, perms, icon, create_by, create_time, update_by, update_time, remark)
 VALUES ('配置删除', @messageMenuId, 10, '', '', 1, 0, 'F', '0', '0', 'message:llm:remove', '#', 'admin', sysdate(), '', NULL, '');
 
--- API配置表
-CREATE TABLE IF NOT EXISTS `message_api_config`
+-- 工具配置表
+CREATE TABLE IF NOT EXISTS `robot_tool_config`
 (
     `id`              BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键',
     `config_name`     VARCHAR(64)  NOT NULL COMMENT '配置名称',
-    `api_url`         VARCHAR(512) NOT NULL COMMENT 'API地址',
-    `api_params`      TEXT         NULL COMMENT 'API参数（JSON格式，如：{"name":"${name}"}）',
+    `class_name`      VARCHAR(512) NOT NULL COMMENT '工具类名',
+    `tool_params`     TEXT         NULL COMMENT '参数（JSON格式）',
     `keywords`        VARCHAR(512) NULL DEFAULT NULL COMMENT '关键词（多个用逗号分隔）',
     `priority`        INT          NULL DEFAULT 0 COMMENT '优先级（数字越大越优先）',
     `description`     VARCHAR(500) NULL DEFAULT NULL COMMENT '描述（用于大模型选择）',
@@ -124,11 +124,11 @@ CREATE TABLE IF NOT EXISTS `message_api_config`
     KEY `idx_priority` (`priority`),
     KEY `idx_status` (`status`)
 ) ENGINE = InnoDB
-  DEFAULT CHARSET = utf8mb4 COMMENT ='API配置';
+  DEFAULT CHARSET = utf8mb4 COMMENT ='工具配置';
 
--- 菜单：API配置（改为按钮权限）
+-- 菜单：工具配置（改为按钮权限）
 INSERT INTO sys_menu (menu_name, parent_id, order_num, path, component, is_frame, is_cache, menu_type, visible, status, perms, icon, create_by, create_time, update_by, update_time, remark)
-VALUES ('API配置', @messageMenuId, 11, '', '', 1, 0, 'F', '0', '0', 'message:api:list', '#', 'admin', sysdate(), '', NULL, '');
+VALUES ('工具配置', @messageMenuId, 11, '', '', 1, 0, 'F', '0', '0', 'message:api:list', '#', 'admin', sysdate(), '', NULL, '');
 
 INSERT INTO sys_menu (menu_name, parent_id, order_num, path, component, is_frame, is_cache, menu_type, visible, status, perms, icon, create_by, create_time, update_by, update_time, remark)
 VALUES ('配置查询', @messageMenuId, 12, '', '', 1, 0, 'F', '0', '0', 'message:api:query', '#', 'admin', sysdate(), '', NULL, '');
@@ -138,6 +138,8 @@ INSERT INTO sys_menu (menu_name, parent_id, order_num, path, component, is_frame
 VALUES ('配置修改', @messageMenuId, 14, '', '', 1, 0, 'F', '0', '0', 'message:api:edit', '#', 'admin', sysdate(), '', NULL, '');
 INSERT INTO sys_menu (menu_name, parent_id, order_num, path, component, is_frame, is_cache, menu_type, visible, status, perms, icon, create_by, create_time, update_by, update_time, remark)
 VALUES ('配置删除', @messageMenuId, 15, '', '', 1, 0, 'F', '0', '0', 'message:api:remove', '#', 'admin', sysdate(), '', NULL, '');
+INSERT INTO sys_menu (menu_name, parent_id, order_num, path, component, is_frame, is_cache, menu_type, visible, status, perms, icon, create_by, create_time, update_by, update_time, remark)
+VALUES ('配置导出', @messageMenuId, 16, '', '', 1, 0, 'F', '0', '0', 'message:api:export', '#', 'admin', sysdate(), '', NULL, '');
 
 -- 角色菜单权限分配：将消息通道相关菜单分配给admin角色(role_id=1)
 INSERT INTO sys_role_menu (role_id, menu_id) VALUES (1, @messageMenuId);
