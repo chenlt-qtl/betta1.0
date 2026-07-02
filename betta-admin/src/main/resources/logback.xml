@@ -56,6 +56,23 @@
             <onMismatch>DENY</onMismatch>
         </filter>
     </appender>
+
+    <!-- SQL日志输出 -->
+    <appender name="file_sql" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${log.path}/sys-sql.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>${log.path}/sys-sql.%d{yyyy-MM-dd}.log</fileNamePattern>
+            <maxHistory>30</maxHistory>
+        </rollingPolicy>
+        <encoder>
+            <pattern>${log.pattern}</pattern>
+        </encoder>
+        <filter class="ch.qos.logback.classic.filter.LevelFilter">
+            <level>DEBUG</level>
+            <onMatch>ACCEPT</onMatch>
+            <onMismatch>DENY</onMismatch>
+        </filter>
+    </appender>
 	
 	<!-- 用户访问日志输出  -->
     <appender name="sys-user" class="ch.qos.logback.core.rolling.RollingFileAppender">
@@ -73,6 +90,23 @@
 	
 	<!-- 系统模块日志级别控制  -->
 	<logger name="com.betta" level="info" />
+    <!-- MyBatis SQL日志级别控制 -->
+    <logger name="com.betta.system.mapper" level="debug" additivity="false">
+        <appender-ref ref="file_sql" />
+        <appender-ref ref="console" />
+    </logger>
+    <logger name="com.betta.quartz.mapper" level="debug" additivity="false">
+        <appender-ref ref="file_sql" />
+        <appender-ref ref="console" />
+    </logger>
+    <logger name="com.betta.generator.mapper" level="debug" additivity="false">
+        <appender-ref ref="file_sql" />
+        <appender-ref ref="console" />
+    </logger>
+    <logger name="com.betta.robot.mapper" level="debug" additivity="false">
+        <appender-ref ref="file_sql" />
+        <appender-ref ref="console" />
+    </logger>
 	<!-- Spring日志级别控制  -->
 	<logger name="org.springframework" level="warn" />
 
