@@ -7,8 +7,8 @@ spring:
             # 主库数据源
             master:
                 url: jdbc:mysql://114.132.222.76:3306/betta1.0?useUnicode=true&characterEncoding=utf8&zeroDateTimeBehavior=convertToNull&useSSL=true&serverTimezone=GMT%2B8
-                username: root
-                password: root123456
+                username: corn
+                password: Corn2020!@#
             # 从库数据源
             slave:
                 # 从数据源开关/默认关闭
