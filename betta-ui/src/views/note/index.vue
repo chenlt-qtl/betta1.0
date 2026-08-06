@@ -30,6 +30,32 @@
         />
       </div>
       <div v-if="activePanel === 'files'" class="sidebar-actions">
+        <el-popover
+          v-model="folderDropdownVisible"
+          placement="bottom-start"
+          width="260"
+          trigger="click"
+          popper-class="note-folder-popover"
+        >
+          <el-tree
+            class="folder-filter-tree"
+            node-key="path"
+            :data="folderTreeData"
+            :props="treeProps"
+            :expand-on-click-node="false"
+            default-expand-all
+            @node-click="handleFolderFilterClick"
+          >
+            <span slot-scope="{ node, data }" class="tree-node" :class="{ active: data.path === selectedFolderPath }">
+              <i :class="data.path ? 'el-icon-folder' : 'el-icon-folder-opened'"></i>
+              <span class="tree-label">{{ node.label }}</span>
+            </span>
+          </el-tree>
+          <el-button slot="reference" class="folder-filter-btn" size="mini" icon="el-icon-folder-opened">
+            {{ selectedFolderName }}
+            <i class="el-icon-arrow-down el-icon--right"></i>
+          </el-button>
+        </el-popover>
         <el-button size="mini" icon="el-icon-plus" type="primary" plain @click="handleCreate('file')" v-hasPermi="['system:note:add']">笔记</el-button>
         <el-button size="mini" icon="el-icon-folder-add" plain @click="handleCreate('directory')" v-hasPermi="['system:note:add']">文件夹</el-button>
       </div>
@@ -39,7 +65,7 @@
           ref="tree"
           class="note-tree"
           node-key="path"
-          :data="treeData"
+          :data="visibleTreeData"
           :props="treeProps"
           :expand-on-click-node="false"
           default-expand-all
@@ -166,6 +192,9 @@ export default {
         children: 'children',
         label: 'name'
       },
+      // 文件夹筛选只影响左侧主树展示；空路径代表 vault 根目录。
+      selectedFolderPath: '',
+      folderDropdownVisible: false,
       // 当前选中的 vault 相对路径和节点类型；文件夹选中时会清空正文区域。
       currentPath: '',
       currentNodeType: '',
@@ -187,6 +216,31 @@ export default {
   created() {
     this.loadTree()
   },
+  computed: {
+    folderTreeData() {
+      // 下拉框只展示文件夹节点，并额外提供根目录入口用于恢复显示全部根级内容。
+      return [{
+        name: '全部笔记',
+        path: '',
+        type: 'directory',
+        children: this.buildFolderTree(this.treeData)
+      }]
+    },
+    visibleTreeData() {
+      if (!this.selectedFolderPath) {
+        return this.treeData
+      }
+      const selectedNode = this.findNodeByPath(this.treeData, this.selectedFolderPath)
+      return selectedNode && selectedNode.children ? selectedNode.children : []
+    },
+    selectedFolderName() {
+      if (!this.selectedFolderPath) {
+        return '全部笔记'
+      }
+      const selectedNode = this.findNodeByPath(this.treeData, this.selectedFolderPath)
+      return selectedNode ? selectedNode.name : '全部笔记'
+    }
+  },
   mounted() {
     window.addEventListener('resize', this.handleResize)
   },
@@ -206,7 +260,68 @@ export default {
     loadTree() {
       getNoteTree().then(res => {
         this.treeData = res.data || []
+        this.ensureSelectedFolderExists()
       })
+    },
+    buildFolderTree(nodes) {
+      // 主树里同时有文件和文件夹；下拉筛选树只保留文件夹，避免用户选中文件后语义不清。
+      return (nodes || []).filter(item => item.type === 'directory').map(item => ({
+        ...item,
+        children: this.buildFolderTree(item.children || [])
+      }))
+    },
+    findNodeByPath(nodes, path) {
+      for (const item of nodes || []) {
+        if (item.path === path) {
+          return item
+        }
+        const child = this.findNodeByPath(item.children || [], path)
+        if (child) {
+          return child
+        }
+      }
+      return null
+    },
+    ensureSelectedFolderExists() {
+      // 目录被删除或重命名后，筛选路径会失效；此时回到根目录，避免主树长期显示空白。
+      if (this.selectedFolderPath && !this.findNodeByPath(this.treeData, this.selectedFolderPath)) {
+        this.selectedFolderPath = ''
+      }
+    },
+    handleFolderFilterClick(data) {
+      const nextPath = data.path || ''
+      const applyFolderFilter = () => {
+        this.selectedFolderPath = nextPath
+        this.folderDropdownVisible = false
+        // 切换筛选目录后，如果右侧仍停留在目录外的旧笔记，清空详情避免保存/删除对象和左树上下文不一致。
+        if (!this.isPathInDirectory(this.currentPath, nextPath)) {
+          this.clearCurrentSelection()
+        }
+      }
+      if (this.dirty && !this.isPathInDirectory(this.currentPath, nextPath)) {
+        this.$confirm('当前笔记尚未保存，切换文件夹会清空当前详情，是否继续？', '提示', { type: 'warning' })
+          .then(applyFolderFilter)
+          .catch(() => {})
+        return
+      }
+      applyFolderFilter()
+    },
+    isPathInDirectory(path, directory) {
+      if (!path || !directory) {
+        return true
+      }
+      return path === directory || path.indexOf(directory + '/') === 0
+    },
+    clearCurrentSelection() {
+      // 统一清空右侧详情状态，供删除和筛选目录切换复用。
+      this.currentPath = ''
+      this.currentNodeType = ''
+      this.title = ''
+      this.content = ''
+      this.hash = ''
+      this.resourceBase = ''
+      this.dirty = false
+      this.loadingNote = false
     },
     switchPanel(panel) {
       this.activePanel = panel
@@ -353,12 +468,7 @@ export default {
       this.$confirm(`确认删除 ${path}？`, '提示', { type: 'warning' }).then(() => {
         deleteNoteFile(path).then(() => {
           this.$modal.msgSuccess('删除成功')
-          this.currentPath = ''
-          this.currentNodeType = ''
-          this.title = ''
-          this.content = ''
-          this.hash = ''
-          this.dirty = false
+          this.clearCurrentSelection()
           this.loadTree()
         })
       }).catch(() => {})
@@ -402,6 +512,10 @@ export default {
       })
     },
     selectedDirectory() {
+      // 下拉筛选目录代表当前文件管理上下文，新建笔记/文件夹时优先使用它作为目标目录。
+      if (this.selectedFolderPath) {
+        return this.selectedFolderPath
+      }
       if (!this.currentPath) {
         return ''
       }
@@ -494,6 +608,7 @@ export default {
 
 .sidebar-actions {
   display: flex;
+  align-items: center;
   gap: 8px;
   padding: 0 16px 10px;
 }
@@ -502,6 +617,28 @@ export default {
   border-color: transparent;
   background: transparent;
   color: #606266;
+}
+
+.folder-filter-btn {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-filter-tree {
+  max-height: 320px;
+  overflow: auto;
+  background: #fff;
+}
+
+.folder-filter-tree ::v-deep .el-tree-node__content {
+  height: 28px;
+  border-radius: 5px;
+}
+
+.folder-filter-tree ::v-deep .el-tree-node__content:hover {
+  background: #f5f7fa;
 }
 
 .sidebar-body {
@@ -683,7 +820,7 @@ export default {
 .editor-wrap {
   flex: 1;
   min-height: 0;
-  padding: 24px 8vw 48px;
+  padding: 24px 2vw 48px;
 }
 
 .note-empty {

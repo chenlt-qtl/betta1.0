@@ -173,6 +173,13 @@
                 <artifactId>betta-robot</artifactId>
                 <version>${betta.version}</version>
             </dependency>
+
+            <!-- 其他模块-->
+            <dependency>
+                <groupId>com.betta</groupId>
+                <artifactId>betta-other</artifactId>
+                <version>${betta.version}</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 
@@ -184,6 +191,7 @@
         <module>betta-generator</module>
         <module>betta-common</module>
         <module>betta-robot</module>
+        <module>betta-other</module>
     </modules>
     <packaging>pom</packaging>
 

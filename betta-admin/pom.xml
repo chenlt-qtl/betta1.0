@@ -60,6 +60,12 @@
             <artifactId>betta-robot</artifactId>
         </dependency>
 
+        <!-- 其他模块-->
+        <dependency>
+            <groupId>com.betta</groupId>
+            <artifactId>betta-other</artifactId>
+        </dependency>
+
     </dependencies>
 
     <build>
