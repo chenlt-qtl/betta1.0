@@ -1,5 +1,33 @@
 <template>
   <div class="note-markdown">
+    <el-popover
+      v-if="!viewer"
+      v-model="emojiPopoverVisible"
+      placement="bottom-end"
+      width="260"
+      trigger="click"
+      popper-class="note-emoji-popover"
+    >
+      <div class="emoji-panel">
+        <button
+          v-for="emoji in emojiList"
+          :key="emoji"
+          type="button"
+          class="emoji-item"
+          @click="insertEmoji(emoji)"
+        >
+          {{ emoji }}
+        </button>
+      </div>
+      <el-button
+        slot="reference"
+        class="emoji-trigger"
+        size="mini"
+        title="插入表情"
+      >
+        😊
+      </el-button>
+    </el-popover>
     <editor
       v-show="!viewer"
       ref="editor"
@@ -77,6 +105,15 @@ export default {
       headings: [],
       // setMarkdown 会触发编辑器 change，使用该标记区分“程序同步”和“用户编辑”。
       syncingEditor: false,
+      emojiPopoverVisible: false,
+      // 第一版只放高频表情，作为普通 Unicode 字符写入 Markdown，Obsidian 和网页端都能直接显示。
+      emojiList: [
+        '😄', '😂', '😊', '😍', '😘', '👍', '👎', '👏',
+        '🙏', '🔥', '✨', '🎉', '🎀', '🎊', '🎁', '💡',
+        '✅', '❌', '⭐', '📌', '📎', '📅', '⏰', '🚀',
+        '❤️', '💔', '☕', '🍀', '🌈', '⚠️', '📊', '📈',
+        '✏️', '🍔', '☀️'
+      ],
       editorOptions: {
         hooks: {
           addImageBlobHook: this.uploadImage
@@ -124,6 +161,9 @@ export default {
       })
     },
     handleChange() {
+      this.syncMarkdownFromEditor()
+    },
+    syncMarkdownFromEditor() {
       const markdown = this.$refs.editor.invoke('getMarkdown')
       // 忽略初始化/同步触发的 change，以及内容未变化的冗余事件。
       if (this.syncingEditor || markdown === (this.value || '')) {
@@ -131,6 +171,15 @@ export default {
       }
       this.$emit('input', markdown)
       this.$emit('change', markdown)
+    },
+    insertEmoji(emoji) {
+      if (!this.$refs.editor) {
+        return
+      }
+      this.$refs.editor.invoke('insertText', emoji)
+      this.emojiPopoverVisible = false
+      // insertText 通常会触发 change；这里再主动同步一次，确保父页面 dirty 状态立即更新。
+      this.syncMarkdownFromEditor()
     },
     handleBlur() {
       this.$emit('blur', this.$refs.editor.invoke('getMarkdown'))
@@ -233,7 +282,56 @@ export default {
 
 <style scoped lang="scss">
 .note-markdown {
+  position: relative;
   min-height: 420px;
+}
+
+.emoji-trigger {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 3;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: #555;
+  font-size: 18px;
+}
+
+.emoji-trigger:hover,
+.emoji-trigger:focus {
+  border-color: #dadde1;
+  background: #f7f8fa;
+}
+
+.emoji-panel {
+  display: grid;
+  grid-template-columns: repeat(7, 28px);
+  gap: 6px;
+  box-sizing: border-box;
+  max-width: 100%;
+  padding: 2px;
+  overflow: hidden;
+}
+
+.emoji-item {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: #fff;
+  font-size: 18px;
+  line-height: 26px;
+  cursor: pointer;
+}
+
+.emoji-item:hover {
+  border-color: #dcdfe6;
+  background: #f5f7fa;
 }
 
 .viewer-shell {
