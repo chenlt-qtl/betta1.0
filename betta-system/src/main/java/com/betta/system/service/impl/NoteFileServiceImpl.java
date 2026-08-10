@@ -273,6 +273,239 @@ public class NoteFileServiceImpl implements INoteFileService
         }
     }
 
+    /**
+     * 将多个普通文件或单个目录移动到指定目录，并同步映射收藏路径。
+     *
+     * @param userName 当前登录用户名，用于定位独立的用户 vault
+     * @param paths 待移动的文件相对路径列表，或仅包含一个目录路径的列表
+     * @param targetDirectory 目标目录相对于当前用户 vault 的路径
+     * @return 与输入 paths 顺序一致的移动后相对路径列表
+     */
+    @Override
+    public List<String> move(String userName, List<String> paths, String targetDirectory)
+    {
+        // 移动文件和收藏路径映射必须串行，避免并发收藏请求在移动期间重新写回旧路径。
+        synchronized (favoriteMetadataLock)
+        {
+            return moveAndUpdateFavorites(userName, paths, targetDirectory);
+        }
+    }
+
+    /**
+     * 在完成全部路径、类型和冲突预检后执行移动，并在失败时尽力恢复已移动项目。
+     *
+     * @param userName 当前登录用户名
+     * @param paths 待移动的相对路径列表
+     * @param targetDirectory 目标目录相对路径
+     * @return 与输入路径顺序一致的新相对路径列表
+     */
+    private List<String> moveAndUpdateFavorites(String userName, List<String> paths, String targetDirectory)
+    {
+        if (paths == null || paths.isEmpty())
+        {
+            throw new ServiceException("待移动路径不能为空");
+        }
+
+        Path root = vaultRoot(userName);
+        Path targetDirectoryPath = resolveMoveTargetDirectory(userName, targetDirectory);
+        if (!Files.exists(targetDirectoryPath, LinkOption.NOFOLLOW_LINKS)
+                || !Files.isDirectory(targetDirectoryPath, LinkOption.NOFOLLOW_LINKS)
+                || Files.isSymbolicLink(targetDirectoryPath))
+        {
+            throw new ServiceException("移动目标必须是已存在的目录");
+        }
+        Path realRoot = toRealPath(root, "校验笔记根目录失败");
+        Path realTargetDirectory = toRealPath(targetDirectoryPath, "校验移动目标目录失败");
+        if (!realTargetDirectory.startsWith(realRoot))
+        {
+            throw new ServiceException("移动目标路径越界");
+        }
+
+        List<Path> sources = new ArrayList<>();
+        List<Path> targets = new ArrayList<>();
+        List<String> movedRelativePaths = new ArrayList<>();
+        Set<Path> uniqueSources = new HashSet<>();
+        Set<Path> uniqueTargets = new HashSet<>();
+        boolean containsDirectory = false;
+        for (String path : paths)
+        {
+            Path source = resolvePath(userName, path);
+            if (!Files.exists(source, LinkOption.NOFOLLOW_LINKS))
+            {
+                throw new ServiceException("待移动文件或目录不存在");
+            }
+            if (Files.isSymbolicLink(source))
+            {
+                throw new ServiceException("不支持移动符号链接");
+            }
+            boolean directory = Files.isDirectory(source, LinkOption.NOFOLLOW_LINKS);
+            if (!directory && !Files.isRegularFile(source, LinkOption.NOFOLLOW_LINKS))
+            {
+                throw new ServiceException("仅支持移动普通文件或目录");
+            }
+            Path realSource = toRealPath(source, "校验待移动路径失败");
+            if (!realSource.startsWith(realRoot))
+            {
+                throw new ServiceException("待移动路径越界");
+            }
+            if (directory && (realTargetDirectory.equals(realSource)
+                    || realTargetDirectory.startsWith(realSource)))
+            {
+                throw new ServiceException("目录不能移动到自身或其子目录");
+            }
+            // 使用真实路径去重，避免同一项目经 vault 内符号链接父目录形成不同文本路径后被重复移动。
+            if (!uniqueSources.add(realSource))
+            {
+                throw new ServiceException("待移动路径不能重复");
+            }
+
+            Path target = targetDirectoryPath.resolve(source.getFileName()).normalize();
+            if (target.equals(source))
+            {
+                throw new ServiceException("文件或目录已位于目标目录");
+            }
+            if (!target.startsWith(root))
+            {
+                throw new ServiceException("移动目标路径越界");
+            }
+            if (!uniqueTargets.add(target))
+            {
+                throw new ServiceException("多个待移动项目在目标目录中重名");
+            }
+            if (Files.exists(target, LinkOption.NOFOLLOW_LINKS))
+            {
+                throw new ServiceException("目标目录中已存在同名文件或目录");
+            }
+
+            containsDirectory = containsDirectory || directory;
+            sources.add(source);
+            targets.add(target);
+            movedRelativePaths.add(toRelative(root, target));
+        }
+        if (containsDirectory && paths.size() > 1)
+        {
+            throw new ServiceException("不能混合移动文件和目录，且一次只能移动一个目录");
+        }
+
+        // 收藏读取也属于移动前预检；如果元数据当前不可读，不能先移动文件再留下无法同步的旧收藏路径。
+        Set<String> favoritePaths = loadValidFavoritePaths(userName);
+        Set<String> movedFavoritePaths = new LinkedHashSet<>(favoritePaths);
+        for (int index = 0; index < sources.size(); index++)
+        {
+            boolean directory = Files.isDirectory(sources.get(index), LinkOption.NOFOLLOW_LINKS);
+            movedFavoritePaths = renameFavoritePaths(movedFavoritePaths, toRelative(root, sources.get(index)),
+                    toRelative(root, targets.get(index)), directory);
+        }
+
+        int movedCount = 0;
+        try
+        {
+            for (int index = 0; index < sources.size(); index++)
+            {
+                // 不使用覆盖选项，确保预检后若出现并发重名也会失败并进入统一回滚。
+                Files.move(sources.get(index), targets.get(index));
+                movedCount++;
+            }
+        }
+        catch (IOException | RuntimeException e)
+        {
+            throw rollbackMovedPaths(sources, targets, movedCount, "移动失败", e);
+        }
+
+        try
+        {
+            if (!movedFavoritePaths.equals(favoritePaths))
+            {
+                writeFavoritePaths(root, movedFavoritePaths);
+            }
+        }
+        catch (RuntimeException e)
+        {
+            // 收藏保存失败时恢复所有已移动项目，使文件位置与原收藏元数据继续保持一致。
+            throw rollbackMovedPaths(sources, targets, movedCount, "移动失败：收藏信息保存失败", e);
+        }
+        return movedRelativePaths;
+    }
+
+    /**
+     * 将已完成移动的项目按逆序恢复到原路径，并明确报告是否发生部分成功。
+     *
+     * @param sources 原路径列表
+     * @param targets 新路径列表
+     * @param movedCount 已成功移动的项目数量
+     * @param message 原始失败阶段说明
+     * @param cause 导致移动或收藏保存失败的异常
+     * @return 描述回滚结果并保留底层异常证据的业务异常
+     */
+    private ServiceException rollbackMovedPaths(List<Path> sources, List<Path> targets, int movedCount,
+            String message, Throwable cause)
+    {
+        Throwable rollbackFailure = null;
+        for (int index = movedCount - 1; index >= 0; index--)
+        {
+            try
+            {
+                Files.move(targets.get(index), sources.get(index));
+            }
+            catch (IOException | RuntimeException e)
+            {
+                if (rollbackFailure == null)
+                {
+                    rollbackFailure = e;
+                }
+                else
+                {
+                    rollbackFailure.addSuppressed(e);
+                }
+            }
+        }
+        if (rollbackFailure == null)
+        {
+            return serviceException(message + "，已移动项目已恢复到原路径", cause);
+        }
+        ServiceException failure = serviceException(message + "，且部分项目回滚失败，请刷新笔记树确认实际位置", cause);
+        failure.addSuppressed(rollbackFailure);
+        return failure;
+    }
+
+    /**
+     * 获取路径未跟随符号链接后的真实位置，并将读取失败转换为包含原因的业务异常。
+     *
+     * @param path 待读取真实位置的路径
+     * @param message 读取失败时返回给调用方的业务提示
+     * @return 文件系统解析后的真实绝对路径
+     */
+    private Path toRealPath(Path path, String message)
+    {
+        try
+        {
+            return path.toRealPath();
+        }
+        catch (IOException | RuntimeException e)
+        {
+            throw serviceException(message, e);
+        }
+    }
+
+    /**
+     * 解析移动目标目录，单独允许空字符串表示当前用户 vault 根目录。
+     *
+     * <p>该兼容仅用于移动目标目录选择器；其他文件接口仍统一通过 {@link #resolvePath(String, String)}
+     * 拒绝空路径，避免意外操作 vault 根目录。</p>
+     *
+     * @param userName 当前登录用户名
+     * @param targetDirectory 目标目录相对路径，空字符串表示 vault 根目录
+     * @return 规范化后的目标目录绝对路径
+     */
+    private Path resolveMoveTargetDirectory(String userName, String targetDirectory)
+    {
+        if ("".equals(targetDirectory))
+        {
+            return vaultRoot(userName);
+        }
+        return resolvePath(userName, targetDirectory);
+    }
+
     @Override
     public void delete(String userName, String path)
     {
@@ -306,12 +539,23 @@ public class NoteFileServiceImpl implements INoteFileService
             return;
         }
 
+        boolean directory = Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS);
+        if (directory)
+        {
+            assertDirectoryContainsOnlyDirectories(target);
+        }
+
         Throwable deleteFailure = null;
         List<Path> deletePaths = new ArrayList<>();
-        try (Stream<Path> paths = Files.walk(target))
+        try
         {
-            // 先固定反序路径清单，再逐项尽力删除；单个失败不会阻止其他兄弟节点继续清理。
-            deletePaths = paths.sorted(Comparator.reverseOrder()).toList();
+            // 目录在构建最终删除清单时再次校验类型，确保发现并发写入的文件后不会开始任何删除。
+            deletePaths = directory ? listDirectoryDeletionPaths(target) : listDeletionPaths(target);
+        }
+        catch (ServiceException e)
+        {
+            // 类型复检失败表示目录中已经出现非目录项，必须在删除循环开始前直接拒绝。
+            throw e;
         }
         catch (IOException e)
         {
@@ -334,6 +578,16 @@ public class NoteFileServiceImpl implements INoteFileService
         {
             try
             {
+                if (directory && !Files.exists(deletePath, LinkOption.NOFOLLOW_LINKS))
+                {
+                    // 并发流程已删除的目录无需再次操作，避免对不存在的非目录目标调用删除方法。
+                    continue;
+                }
+                if (directory && !Files.isDirectory(deletePath, LinkOption.NOFOLLOW_LINKS))
+                {
+                    // 清单完成后若目录被替换成文件或符号链接，绝不调用删除方法处理该非目录项。
+                    throw new IOException("目录删除期间检测到非目录项");
+                }
                 Files.deleteIfExists(deletePath);
             }
             catch (IOException | RuntimeException e)
@@ -377,6 +631,74 @@ public class NoteFileServiceImpl implements INoteFileService
             // 删除动作已经完整执行，仅元数据清理失败；明确告知实际状态，后续删除重试或收藏查询会继续自愈。
             throw serviceException("文件删除已完成，但收藏信息清理失败；重试删除或查询收藏可自动修复",
                     favoriteCleanupFailure);
+        }
+    }
+
+    /**
+     * 构建普通文件删除使用的反序路径清单，保持单文件删除的既有行为不变。
+     *
+     * @param target 待删除的普通文件路径
+     * @return 按子项优先顺序排列的删除路径清单
+     * @throws IOException 遍历目标失败时抛出
+     */
+    private List<Path> listDeletionPaths(Path target) throws IOException
+    {
+        try (Stream<Path> paths = Files.walk(target))
+        {
+            return paths.sorted(Comparator.reverseOrder()).toList();
+        }
+    }
+
+    /**
+     * 再次遍历待删除目录并构建仅包含目录的反序清单，发现任何非目录项时立即拒绝。
+     *
+     * <p>清单必须在删除动作开始前完整生成；生成后新建的文件不会进入清单，父目录删除将通过
+     * {@code DirectoryNotEmptyException} 失败，从而保留并发写入的文件。</p>
+     *
+     * @param directory 待删除的目录路径
+     * @return 仅包含目录且按子目录优先顺序排列的删除路径清单
+     * @throws IOException 遍历目录失败时抛出
+     */
+    private List<Path> listDirectoryDeletionPaths(Path directory) throws IOException
+    {
+        List<Path> deletePaths = new ArrayList<>();
+        try (Stream<Path> paths = Files.walk(directory))
+        {
+            paths.forEach(path -> {
+                if (!Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS))
+                {
+                    throw new ServiceException("目录中仍有文件，请先移动或删除后再删除目录");
+                }
+                deletePaths.add(path);
+            });
+        }
+        deletePaths.sort(Comparator.reverseOrder());
+        return deletePaths;
+    }
+
+    /**
+     * 递归确认待删除目录仅由目录组成，不包含任何深度的文件、符号链接或其他非目录项。
+     *
+     * @param directory 待检查的真实目录路径
+     */
+    private void assertDirectoryContainsOnlyDirectories(Path directory)
+    {
+        try (Stream<Path> paths = Files.walk(directory))
+        {
+            boolean containsNonDirectory = paths.skip(1)
+                    .anyMatch(path -> !Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS));
+            if (containsNonDirectory)
+            {
+                throw new ServiceException("目录中仍有文件，请先移动或删除后再删除目录");
+            }
+        }
+        catch (ServiceException e)
+        {
+            throw e;
+        }
+        catch (IOException | UncheckedIOException | SecurityException e)
+        {
+            throw serviceException("检查目录内容失败，未执行删除", e);
         }
     }
 

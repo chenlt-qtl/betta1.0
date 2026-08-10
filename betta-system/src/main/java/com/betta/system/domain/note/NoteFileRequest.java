@@ -1,5 +1,7 @@
 package com.betta.system.domain.note;
 
+import java.util.List;
+
 /**
  * 笔记文件操作请求对象。
  *
@@ -10,6 +12,12 @@ public class NoteFileRequest
     private String path;
 
     private String newPath;
+
+    /** 待移动的文件相对路径列表，或仅包含一个目录相对路径的列表。 */
+    private List<String> paths;
+
+    /** 移动目标目录相对于当前用户 vault 的路径。 */
+    private String targetDirectory;
 
     private String type;
 
@@ -39,6 +47,46 @@ public class NoteFileRequest
     public void setNewPath(String newPath)
     {
         this.newPath = newPath;
+    }
+
+    /**
+     * 获取待移动的相对路径列表。
+     *
+     * @return 文件相对路径列表，或仅包含一个目录路径的列表
+     */
+    public List<String> getPaths()
+    {
+        return paths;
+    }
+
+    /**
+     * 设置待移动的相对路径列表。
+     *
+     * @param paths 文件相对路径列表，或仅包含一个目录路径的列表
+     */
+    public void setPaths(List<String> paths)
+    {
+        this.paths = paths;
+    }
+
+    /**
+     * 获取移动目标目录。
+     *
+     * @return 目标目录相对于当前用户 vault 的路径
+     */
+    public String getTargetDirectory()
+    {
+        return targetDirectory;
+    }
+
+    /**
+     * 设置移动目标目录。
+     *
+     * @param targetDirectory 目标目录相对于当前用户 vault 的路径
+     */
+    public void setTargetDirectory(String targetDirectory)
+    {
+        this.targetDirectory = targetDirectory;
     }
 
     public String getType()

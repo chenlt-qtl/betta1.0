@@ -28,6 +28,16 @@ public interface INoteFileService
 
     NoteTreeNode rename(String userName, String path, String newPath);
 
+    /**
+     * 将多个普通文件或单个目录移动到指定目录，并同步更新受影响的收藏路径。
+     *
+     * @param userName 当前登录用户名，用于定位独立的用户 vault
+     * @param paths 待移动的文件相对路径列表，或仅包含一个目录路径的列表
+     * @param targetDirectory 目标目录相对于当前用户 vault 的路径
+     * @return 与输入 paths 顺序一致的移动后相对路径列表
+     */
+    List<String> move(String userName, List<String> paths, String targetDirectory);
+
     void delete(String userName, String path);
 
     /**

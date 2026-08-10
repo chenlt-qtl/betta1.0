@@ -140,9 +140,26 @@ public class NoteFileController extends BaseController
     }
 
     /**
+     * 将多个文件或单个目录移动到指定目录。
+     *
+     * <p>Controller 只传递当前用户、待移动路径和目标目录；类型、冲突、越界及回滚校验统一由服务层处理。</p>
+     *
+     * @param request 包含待移动 paths 和目标 targetDirectory 的请求对象
+     * @return 包含与请求 paths 顺序一致的新相对路径列表的统一响应
+     */
+    @PreAuthorize("@ss.hasPermi('system:note:edit')")
+    @Log(title = "笔记文件移动", businessType = BusinessType.UPDATE)
+    @PutMapping("/file/move")
+    public AjaxResult move(@RequestBody NoteFileRequest request)
+    {
+        List<String> movedPaths = noteFileService.move(getUsername(), request.getPaths(), request.getTargetDirectory());
+        return success(movedPaths);
+    }
+
+    /**
      * 删除笔记文件或目录。
      *
-     * <p>目录删除会递归删除其子项；具体递归顺序和安全路径校验由服务层完成。</p>
+     * <p>目录仅在递归确认不含文件等非目录项时删除；具体检查、递归顺序和安全路径校验由服务层完成。</p>
      */
     @PreAuthorize("@ss.hasPermi('system:note:remove')")
     @Log(title = "笔记文件", businessType = BusinessType.DELETE)

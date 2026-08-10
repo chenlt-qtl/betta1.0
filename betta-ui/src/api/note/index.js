@@ -39,6 +39,15 @@ export function renameNoteFile(data) {
   })
 }
 
+// 将多个笔记文件或单个文件夹移动到目标目录
+export function moveNoteFiles(data) {
+  return request({
+    url: '/system/note/file/move',
+    method: 'put',
+    data
+  })
+}
+
 export function deleteNoteFile(path) {
   return request({
     url: '/system/note/file',

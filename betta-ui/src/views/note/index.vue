@@ -56,8 +56,26 @@
             <i class="el-icon-arrow-down el-icon--right"></i>
           </el-button>
         </el-popover>
-        <el-button size="mini" icon="el-icon-plus" type="primary" plain @click="handleCreate('file')" v-hasPermi="['system:note:add']">笔记</el-button>
-        <el-button size="mini" icon="el-icon-folder-add" plain @click="handleCreate('directory')" v-hasPermi="['system:note:add']">文件夹</el-button>
+        <el-dropdown trigger="click" @command="handleCreate" v-hasPermi="['system:note:add']">
+          <el-button size="mini" icon="el-icon-plus" type="primary" plain>
+            <i class="el-icon-arrow-down el-icon--right"></i>
+          </el-button>
+          <el-dropdown-menu slot="dropdown">
+            <el-dropdown-item command="file">文件</el-dropdown-item>
+            <el-dropdown-item command="directory">文件夹</el-dropdown-item>
+          </el-dropdown-menu>
+        </el-dropdown>
+        <el-tooltip content="移动已勾选项目" placement="top">
+          <span>
+            <el-button
+              size="mini"
+              icon="el-icon-rank"
+              :disabled="!moveSelection.length || moveSubmitting"
+              @click="openMoveDialog"
+              v-hasPermi="['system:note:edit']"
+            >移动</el-button>
+          </span>
+        </el-tooltip>
       </div>
       <div class="sidebar-body">
         <el-tree
@@ -68,7 +86,10 @@
           :data="visibleTreeData"
           :props="treeProps"
           :expand-on-click-node="false"
+          show-checkbox
+          check-strictly
           default-expand-all
+          @check-change="handleMoveCheckChange"
           @node-click="handleNodeClick"
         >
           <span slot-scope="{ node, data }" class="tree-node" :class="{ active: data.path === currentPath }">
@@ -187,6 +208,41 @@
         <el-empty v-else class="note-empty" description="选择或新建一篇笔记" />
       </div>
     </main>
+
+    <el-dialog
+      title="移动到"
+      :visible.sync="moveDialogVisible"
+      width="500px"
+      append-to-body
+      :close-on-click-modal="false"
+      @closed="resetMoveTarget"
+    >
+      <div class="move-summary">
+        已选择 {{ moveSelection.length }} 个{{ moveSelectionType === 'directory' ? '文件夹' : '文件' }}
+      </div>
+      <el-tree
+        class="move-folder-tree"
+        node-key="path"
+        :data="moveFolderTreeData"
+        :props="treeProps"
+        :expand-on-click-node="false"
+        default-expand-all
+        @node-click="handleMoveTargetClick"
+      >
+        <span
+          slot-scope="{ node, data }"
+          class="tree-node"
+          :class="{ active: moveTargetSelected && data.path === moveTargetDirectory, disabled: data.disabled }"
+        >
+          <i :class="data.path ? 'el-icon-folder' : 'el-icon-folder-opened'"></i>
+          <span class="tree-label">{{ node.label }}</span>
+        </span>
+      </el-tree>
+      <span slot="footer" class="dialog-footer">
+        <el-button @click="moveDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="moveSubmitting" @click="submitMove">确定移动</el-button>
+      </span>
+    </el-dialog>
   </div>
 </template>
 
@@ -200,6 +256,7 @@ import {
   getFavoriteNotes,
   getNoteContent,
   getNoteTree,
+  moveNoteFiles,
   renameNoteFile,
   saveNoteContent,
   searchNotes,
@@ -235,6 +292,13 @@ export default {
       // 文件夹筛选只影响左侧主树展示；空路径代表 vault 根目录。
       selectedFolderPath: '',
       folderDropdownVisible: false,
+      // 移动选择与普通节点点击相互独立；文件可多选，文件夹只能单选且不能与文件混选。
+      moveSelection: [],
+      syncingMoveChecks: false,
+      moveDialogVisible: false,
+      moveTargetDirectory: '',
+      moveTargetSelected: false,
+      moveSubmitting: false,
       // 当前选中的 vault 相对路径和节点类型；文件夹选中时会清空正文区域。
       currentPath: '',
       currentNodeType: '',
@@ -247,6 +311,8 @@ export default {
       // dirty 只代表正文是否有真实用户改动；初始化/切换笔记不会置为未保存。
       dirty: false,
       loadingNote: false,
+      // 保存 Promise 用于串行化移动，避免旧路径保存与文件移动并发后重新创建源文件。
+      savePromise: null,
       renamingTitle: false,
       // 目录状态由页面持有，按钮放在顶部工具栏；手机端默认收起以节省横向空间。
       tocCollapsed: this.isMobileViewport(),
@@ -282,6 +348,19 @@ export default {
       const selectedNode = this.findNodeByPath(this.treeData, this.selectedFolderPath)
       return selectedNode ? selectedNode.name : '全部笔记'
     },
+    moveSelectionType() {
+      return this.moveSelection.length ? this.moveSelection[0].type : ''
+    },
+    moveFolderTreeData() {
+      // 目标树只保留目录，并标记会造成原地移动或目录循环的非法目标。
+      return [{
+        name: '全部笔记（根目录）',
+        path: '',
+        type: 'directory',
+        disabled: this.isInvalidMoveTarget(''),
+        children: this.buildMoveFolderTree(this.treeData)
+      }]
+    },
     currentFavorite() {
       return this.currentNodeType === 'file' && this.favoriteNotes.some(item => item.path === this.currentPath)
     }
@@ -306,6 +385,7 @@ export default {
       getNoteTree().then(res => {
         this.treeData = res.data || []
         this.ensureSelectedFolderExists()
+        this.syncMoveSelectionWithTree()
       })
     },
     loadFavorites() {
@@ -341,6 +421,13 @@ export default {
         children: this.buildFolderTree(item.children || [])
       }))
     },
+    buildMoveFolderTree(nodes) {
+      return (nodes || []).filter(item => item.type === 'directory').map(item => ({
+        ...item,
+        disabled: this.isInvalidMoveTarget(item.path),
+        children: this.buildMoveFolderTree(item.children || [])
+      }))
+    },
     findNodeByPath(nodes, path) {
       for (const item of nodes || []) {
         if (item.path === path) {
@@ -362,6 +449,8 @@ export default {
     handleFolderFilterClick(data) {
       const nextPath = data.path || ''
       const applyFolderFilter = () => {
+        // 主树数据范围即将变化，清空移动选择，避免隐藏项目仍保留在待移动列表中。
+        this.clearMoveSelection()
         this.selectedFolderPath = nextPath
         this.folderDropdownVisible = false
         // 切换筛选目录后，如果右侧仍停留在目录外的旧笔记，清空详情避免保存/删除对象和左树上下文不一致。
@@ -400,9 +489,11 @@ export default {
         // 切回文件树时清空搜索状态，避免下次进入搜索面板看到旧结果。
         this.clearSearch()
       } else if (panel === 'favorites') {
+        this.clearMoveSelection()
         // 每次进入收藏面板都从服务端刷新，覆盖重命名等场景下可能变化的路径。
         this.loadFavorites()
       } else if (panel === 'search') {
+        this.clearMoveSelection()
         // 搜索面板打开后自动聚焦，让用户可以直接输入。
         this.$nextTick(() => {
           if (this.$refs.searchInput) {
@@ -459,6 +550,132 @@ export default {
         this.resourceBase = ''
         this.dirty = false
       }
+    },
+    handleMoveCheckChange(data, checked) {
+      if (this.syncingMoveChecks || !this.$refs.tree) {
+        return
+      }
+      const checkedNodes = this.$refs.tree.getCheckedNodes(false, false)
+      let nextSelection = checkedNodes
+      if (checked && data.type === 'directory') {
+        // 目录移动会携带全部后代，一次仅允许选择一个目录。
+        nextSelection = [data]
+      } else if (checked && data.type === 'file' && checkedNodes.some(item => item.type === 'directory')) {
+        // 从目录切换到文件时清除目录，随后可以继续勾选其他文件。
+        nextSelection = [data]
+      }
+      this.moveSelection = nextSelection
+      const nextKeys = nextSelection.map(item => item.path)
+      if (nextKeys.length !== checkedNodes.length || checkedNodes.some(item => !nextKeys.includes(item.path))) {
+        this.syncingMoveChecks = true
+        this.$refs.tree.setCheckedKeys(nextKeys)
+        this.$nextTick(() => {
+          this.syncingMoveChecks = false
+        })
+      }
+    },
+    openMoveDialog() {
+      if (!this.moveSelection.length || this.moveSubmitting) {
+        return
+      }
+      // 默认选择当前筛选目录；若任一源项目已在该目录，则要求用户重新选择有效目标。
+      this.moveTargetDirectory = this.selectedFolderPath || ''
+      this.moveTargetSelected = !this.isInvalidMoveTarget(this.moveTargetDirectory)
+      this.moveDialogVisible = true
+    },
+    handleMoveTargetClick(data) {
+      if (data.disabled || this.isInvalidMoveTarget(data.path)) {
+        return
+      }
+      this.moveTargetDirectory = data.path || ''
+      this.moveTargetSelected = true
+    },
+    isInvalidMoveTarget(targetDirectory) {
+      if (!this.moveSelection.length) {
+        return false
+      }
+      return this.moveSelection.some(item => {
+        // 任一项目已位于目标目录时，整批移动都会被后端拒绝。
+        if (this.dirname(item.path) === targetDirectory) {
+          return true
+        }
+        return item.type === 'directory'
+          && (targetDirectory === item.path || targetDirectory.indexOf(item.path + '/') === 0)
+      })
+    },
+    submitMove() {
+      if (!this.moveTargetSelected || this.isInvalidMoveTarget(this.moveTargetDirectory)) {
+        this.$modal.msgWarning('请选择其他目标文件夹')
+        return
+      }
+      const sources = this.moveSelection.map(item => item.path)
+      const sourceTypes = this.moveSelection.map(item => item.type)
+      this.moveSubmitting = true
+      // 若编辑器失焦已经触发自动保存，必须等旧路径保存完成后才能移动。
+      const pendingSave = this.savePromise || Promise.resolve()
+      pendingSave.then(() => moveNoteFiles({
+        paths: sources,
+        targetDirectory: this.moveTargetDirectory
+      })).then(res => {
+        const movedPaths = res.data || []
+        // 响应顺序与请求一致，可据此更新当前编辑对象和筛选目录而无需重新读取正文。
+        this.updatePathsAfterMove(sources, sourceTypes, movedPaths)
+        this.clearMoveSelection()
+        this.moveDialogVisible = false
+        this.$modal.msgSuccess('移动成功')
+        this.loadTree()
+        this.loadFavorites()
+      }).finally(() => {
+        this.moveSubmitting = false
+      })
+    },
+    updatePathsAfterMove(sources, sourceTypes, movedPaths) {
+      sources.forEach((source, index) => {
+        const movedPath = movedPaths[index]
+        if (!movedPath) {
+          return
+        }
+        if (this.currentPath === source) {
+          this.currentPath = movedPath
+        } else if (sourceTypes[index] === 'directory' && this.currentPath.indexOf(source + '/') === 0) {
+          this.currentPath = movedPath + this.currentPath.substring(source.length)
+        }
+        if (this.selectedFolderPath === source) {
+          this.selectedFolderPath = movedPath
+        } else if (sourceTypes[index] === 'directory' && this.selectedFolderPath.indexOf(source + '/') === 0) {
+          this.selectedFolderPath = movedPath + this.selectedFolderPath.substring(source.length)
+        }
+      })
+    },
+    clearMoveSelection() {
+      this.moveSelection = []
+      if (this.$refs.tree) {
+        this.syncingMoveChecks = true
+        this.$refs.tree.setCheckedKeys([])
+        this.$nextTick(() => {
+          this.syncingMoveChecks = false
+        })
+      }
+    },
+    syncMoveSelectionWithTree() {
+      const selectedPaths = this.moveSelection.map(item => item.path)
+      // 树刷新会重建 Element UI 节点，只恢复当前筛选范围内仍存在的项目，保持视觉勾选与业务状态一致。
+      const nextSelection = selectedPaths.map(path => this.findNodeByPath(this.visibleTreeData, path)).filter(Boolean)
+      this.moveSelection = nextSelection
+      this.$nextTick(() => {
+        if (!this.$refs.tree) {
+          return
+        }
+        this.syncingMoveChecks = true
+        this.$refs.tree.setCheckedKeys(nextSelection.map(item => item.path))
+        this.$nextTick(() => {
+          this.syncingMoveChecks = false
+        })
+      })
+    },
+    resetMoveTarget() {
+      this.moveTargetDirectory = ''
+      this.moveTargetSelected = false
     },
     openNote(path) {
       if (this.dirty) {
@@ -519,23 +736,39 @@ export default {
       }
     },
     save() {
-      saveNoteContent({
-        path: this.currentPath,
-        content: this.content,
+      if (this.savePromise) {
+        return this.savePromise
+      }
+      const savingPath = this.currentPath
+      const savingContent = this.content
+      const request = saveNoteContent({
+        path: savingPath,
+        content: savingContent,
         lastKnownHash: this.hash
       }).then(res => {
         const data = res.data || {}
+        // 路径已被移动或重命名时，迟到的保存响应不得把页面状态覆盖回旧路径。
+        if (this.currentPath !== savingPath) {
+          return
+        }
         this.currentPath = data.path
         this.hash = data.hash || ''
         this.resourceBase = data.resourceBase || this.resourceBase
-        this.dirty = false
+        // 保存期间继续编辑时仅更新服务端 hash，保留未保存标记等待下一次保存。
+        this.dirty = this.content !== savingContent
         this.$modal.msgSuccess('保存成功')
         this.loadTree()
+      }).finally(() => {
+        if (this.savePromise === request) {
+          this.savePromise = null
+        }
       })
+      this.savePromise = request
+      return request
     },
     handleEditorBlur() {
       // 保持轻量自动保存：编辑器失焦且正文有改动时保存。
-      if (this.dirty) {
+      if (this.dirty && !this.moveSubmitting) {
         this.save()
       }
     },
@@ -705,12 +938,16 @@ export default {
 
 .sidebar-actions {
   display: flex;
+  // 侧栏宽度不足时允许操作入口换行，避免移动按钮被父级裁剪。
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 0 16px 10px;
 }
 
 .sidebar-actions .el-button {
+  // 按钮间距统一由 flex gap 控制，避免 Element UI 默认左边距重复叠加。
+  margin-left: 0;
   border-color: transparent;
   background: transparent;
   color: #606266;
@@ -727,6 +964,22 @@ export default {
   max-height: 320px;
   overflow: auto;
   background: #fff;
+}
+
+.move-summary {
+  margin-bottom: 10px;
+  color: #606266;
+  font-size: 13px;
+}
+
+.move-folder-tree {
+  max-height: 360px;
+  overflow: auto;
+}
+
+.move-folder-tree .tree-node.disabled {
+  color: #c0c4cc;
+  cursor: not-allowed;
 }
 
 .folder-filter-tree ::v-deep .el-tree-node__content {
