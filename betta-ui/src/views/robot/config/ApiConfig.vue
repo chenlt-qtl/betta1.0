@@ -217,7 +217,6 @@
         <el-form-item label="消息内容">
           <el-input v-model="simulateMessageText" type="textarea" :rows="4" placeholder="请输入要模拟发送的消息..." />
         </el-form-item>
-        <el-divider content-position="left">直接模拟处理</el-divider>
         <el-form-item>
           <el-button type="primary" @click="sendSimulateMessage" :loading="simulateSending">发送</el-button>
         </el-form-item>
@@ -236,37 +235,6 @@
         <el-divider style="margin: 12px 0;" />
         <div style="white-space: pre-wrap; word-wrap: break-word; line-height: 1.6; color: #303133;">{{ simulateResult.result }}</div>
       </div>
-      <el-divider content-position="left">真实飞书回调测试</el-divider>
-      <el-alert
-        title="请谨慎填写真实 chat_id：回调会执行真实工具业务，并尝试向该飞书会话回复。"
-        type="warning"
-        :closable="false"
-        show-icon
-        style="margin-bottom: 16px;"
-      />
-      <el-form label-width="100px">
-        <el-form-item label="chat_id" required>
-          <el-input v-model="feishuChatId" placeholder="请输入飞书会话 chat_id" />
-        </el-form-item>
-        <el-form-item label="open_id">
-          <el-input v-model="feishuOpenId" placeholder="可选，发送人的飞书 open_id" />
-        </el-form-item>
-        <el-form-item>
-          <el-button type="warning" @click="sendFeishuCallback" :loading="feishuCallbackSending">调用真实回调</el-button>
-        </el-form-item>
-      </el-form>
-      <div v-if="feishuCallbackResult" style="background: #f5f7fa; padding: 16px; border-radius: 4px;">
-        <div :style="{ color: feishuCallbackResult.success ? '#67c23a' : '#f56c6c', marginBottom: '8px' }">
-          <i :class="feishuCallbackResult.success ? 'el-icon-success' : 'el-icon-error'" />
-          {{ feishuCallbackResult.message }}
-        </div>
-        <div style="margin-bottom: 8px; color: #909399; font-size: 13px;">
-          <i class="el-icon-time" /> 耗时: {{ feishuCallbackDuration }}s
-        </div>
-        <div v-if="feishuCallbackResult.success" style="color: #606266; font-size: 13px;">
-          回调处理为异步流程，请到“消息记录”页签查看最终执行与回复结果。
-        </div>
-      </div>
       <div slot="footer">
         <el-button @click="simulateOpen = false">关 闭</el-button>
       </div>
@@ -275,7 +243,7 @@
 </template>
 
 <script>
-import { listConfig, getConfig, addConfig, updateConfig, delConfig, testRegex, simulateMessage, simulateFeishuCallback } from '@/api/robot/toolConfig'
+import { listConfig, getConfig, addConfig, updateConfig, delConfig, testRegex, simulateMessage } from '@/api/robot/toolConfig'
 import { listLlmConfig } from '@/api/robot/llm'
 
 export default {
@@ -319,12 +287,7 @@ export default {
       simulateMessageText: '豆芽加卡30张吧',
       simulateSending: false,
       simulateResult: null,
-      simulateDuration: 0,
-      feishuChatId: '',
-      feishuOpenId: '',
-      feishuCallbackSending: false,
-      feishuCallbackResult: null,
-      feishuCallbackDuration: 0
+      simulateDuration: 0
     }
   },
   watch: {
@@ -616,8 +579,6 @@ export default {
       this.simulateMessageText = '豆芽加卡30张吧'
       this.simulateResult = null
       this.simulateDuration = 0
-      this.feishuCallbackResult = null
-      this.feishuCallbackDuration = 0
     },
     sendSimulateMessage() {
       if (!this.simulateMessageText.trim()) {
@@ -646,68 +607,6 @@ export default {
         })
         .finally(() => {
           this.simulateSending = false
-        })
-    },
-    sendFeishuCallback() {
-      const messageText = this.simulateMessageText.trim()
-      const chatId = this.feishuChatId.trim()
-      const openId = this.feishuOpenId.trim()
-      if (!messageText) {
-        this.$modal.msgWarning('请输入消息内容')
-        return
-      }
-      if (!chatId) {
-        this.$modal.msgWarning('请输入 chat_id')
-        return
-      }
-
-      const timestamp = Date.now()
-      const uniqueSuffix = timestamp + '_' + Math.random().toString(36).slice(2, 10)
-      // 飞书的 message.content 字段本身是 JSON 字符串，不能直接传入对象。
-      const payload = {
-        schema: '2.0',
-        header: {
-          event_id: 'event_' + uniqueSuffix,
-          event_type: 'im.message.receive_v1',
-          create_time: String(timestamp)
-        },
-        event: {
-          sender: {
-            sender_id: openId ? { open_id: openId } : {}
-          },
-          message: {
-            message_id: 'message_' + uniqueSuffix,
-            create_time: String(timestamp),
-            chat_id: chatId,
-            chat_type: 'group',
-            message_type: 'text',
-            content: JSON.stringify({ text: messageText })
-          }
-        }
-      }
-
-      this.feishuCallbackSending = true
-      this.feishuCallbackResult = null
-      const startTime = Date.now()
-      simulateFeishuCallback(payload)
-        .then(() => {
-          this.feishuCallbackDuration = ((Date.now() - startTime) / 1000).toFixed(2)
-          // HTTP 成功仅代表服务端已接收，工具执行和飞书回复由后端异步完成。
-          this.feishuCallbackResult = {
-            success: true,
-            message: '飞书回调已接收'
-          }
-          this.$modal.msgSuccess('飞书回调已接收')
-        })
-        .catch(error => {
-          this.feishuCallbackDuration = ((Date.now() - startTime) / 1000).toFixed(2)
-          this.feishuCallbackResult = {
-            success: false,
-            message: '回调失败: ' + (error.message || '未知错误')
-          }
-        })
-        .finally(() => {
-          this.feishuCallbackSending = false
         })
     }
   }

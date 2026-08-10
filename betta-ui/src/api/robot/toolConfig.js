@@ -60,15 +60,3 @@ export function simulateMessage(data) {
     data: data
   })
 }
-
-// 模拟飞书事件订阅回调；该公开接口与飞书平台一致，不携带登录令牌
-export function simulateFeishuCallback(data) {
-  return request({
-    url: '/message/feishu/callback',
-    method: 'post',
-    headers: {
-      isToken: false
-    },
-    data: data
-  })
-}
