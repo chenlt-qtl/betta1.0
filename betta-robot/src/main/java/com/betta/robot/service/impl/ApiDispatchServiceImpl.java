@@ -21,6 +21,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -532,6 +533,13 @@ public class ApiDispatchServiceImpl implements IApiDispatchService {
         }
     }
 
+    /**
+     * 加载配置指定的工具 Bean，并使用合并后的 Map 参数执行工具。
+     *
+     * @param config 工具配置，提供工具类名和基础参数 JSON
+     * @param params 动态参数 JSON，来源可以是正则捕获、大模型提取或简单参数提取
+     * @return 工具返回的用户提示；调用失败时返回明确错误信息
+     */
     private String callTool(RobotToolConfig config, String params) {
         try {
             String className = config.getClassName();
@@ -547,20 +555,9 @@ public class ApiDispatchServiceImpl implements IApiDispatchService {
                 return "工具类未实现ITool接口";
             }
 
-            // 创建CommandDTO，根据配置的dtoClass反序列化为具体的DTO子类
-            CommandDTO commandDTO;
-            String dtoClassName = config.getDtoClass();
-            if (StringUtils.isNotBlank(dtoClassName)) {
-                // 将JSON反序列化为具体的DTO子类
-                commandDTO = (CommandDTO) JSON.parseObject(params, Class.forName(dtoClassName));
-            } else {
-                // 没有配置DTO类名，使用默认的CommandDTO，将params作为intent字段
-                commandDTO = new CommandDTO();
-                commandDTO.setIntent(params);
-            }
-
-            // 调用execute方法
-            ActionResult actionResult = ((ITool) bean).execute(commandDTO);
+            // toolParams 是完整基础参数，正则或大模型提取的动态值覆盖其中同名占位值。
+            Map<String, Object> mergedParams = mergeToolParams(config.getToolParams(), params);
+            ActionResult actionResult = ((ITool) bean).execute(mergedParams);
             if (actionResult == null) {
                 return "执行成功";
             }
@@ -569,12 +566,41 @@ public class ApiDispatchServiceImpl implements IApiDispatchService {
             }
             return actionResult.isSuccess() ? "执行成功" : "执行失败";
         } catch (ClassNotFoundException e) {
-            log.error("工具类或DTO类不存在", e);
-            return "工具类或DTO类不存在: " + e.getMessage();
+            log.error("工具类不存在", e);
+            return "工具类不存在: " + e.getMessage();
         } catch (Exception e) {
             log.error("工具调用失败", e);
             return "工具调用失败: " + e.getMessage();
         }
+    }
+
+    /**
+     * 合并工具基础参数和动态参数，并保证动态值覆盖同名基础值。
+     *
+     * @param toolParams 基础参数 JSON，空值按空 Map 处理
+     * @param dynamicParams 动态参数 JSON，空值按空 Map 处理
+     * @return 合并后的独立参数 Map，保留 JSON 中数字、布尔值等原始类型
+     */
+    private Map<String, Object> mergeToolParams(String toolParams, String dynamicParams) {
+        Map<String, Object> mergedParams = new LinkedHashMap<>();
+        mergedParams.putAll(parseParamJson(toolParams));
+        // 后写入动态参数，使正则捕获值或大模型提取值覆盖同名固定占位值。
+        mergedParams.putAll(parseParamJson(dynamicParams));
+        return mergedParams;
+    }
+
+    /**
+     * 将参数 JSON 解析为 Map。
+     *
+     * @param paramsJson 参数 JSON，允许为空
+     * @return 非空参数 Map；空 JSON 或 JSON null 返回空 Map
+     */
+    private Map<String, Object> parseParamJson(String paramsJson) {
+        if (StringUtils.isBlank(paramsJson)) {
+            return Collections.emptyMap();
+        }
+        JSONObject params = JSON.parseObject(paramsJson);
+        return params == null ? Collections.emptyMap() : params;
     }
 
     /**

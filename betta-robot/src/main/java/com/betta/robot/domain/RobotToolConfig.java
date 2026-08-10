@@ -46,16 +46,12 @@ public class RobotToolConfig extends BaseEntity
     @Excel(name = "提示词", readConverterExp = "用=于提取参数")
     private String prompt;
 
-    /** DTO类名（用于参数反序列化） */
-    @Excel(name = "DTO类名", readConverterExp = "用=于参数反序列化")
-    private String dtoClass;
-
     /** 正则表达式 */
     @Excel(name = "正则表达式")
     private String regexPattern;
 
-    /** 捕获组参数映射（JSON格式，key为组号，value为DTO字段名） */
-    @Excel(name = "捕获组参数映射", readConverterExp = "J=SON格式，key为组号，value为DTO字段名")
+    /** 捕获组参数映射（JSON格式，key为组号，value为工具参数名） */
+    @Excel(name = "捕获组参数映射", readConverterExp = "J=SON格式，key为组号，value为工具参数名")
     private String regexParamMap;
 
     /** 关联的大模型配置ID */

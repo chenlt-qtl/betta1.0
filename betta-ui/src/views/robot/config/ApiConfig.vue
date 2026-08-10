@@ -30,7 +30,7 @@
     <el-table v-loading="loading" :data="list">
       <el-table-column label="ID" align="center" prop="id" width="60" />
       <el-table-column label="配置名称" align="center" prop="configName" :show-overflow-tooltip="true" />
-      <el-table-column label="完整类名" align="center" prop="className" :show-overflow-tooltip="true" min-width="150" />
+      <el-table-column label="工具类名" align="center" prop="className" :show-overflow-tooltip="true" min-width="150" />
       <el-table-column label="关键词" align="center" prop="keywords" :show-overflow-tooltip="true" />
       <el-table-column label="正则表达式" align="center" prop="regexPattern" :show-overflow-tooltip="true" width="120" />
       <el-table-column label="优先级" align="center" prop="priority" width="80" />
@@ -51,7 +51,7 @@
     <pagination v-show="total > 0" :total="total" :page.sync="queryParams.pageNum" :limit.sync="queryParams.pageSize" @pagination="getList" />
 
     <!-- 新增/修改 对话框 -->
-    <el-dialog :title="formTitle" :visible.sync="open" width="700px" append-to-body>
+    <el-dialog :title="formTitle" :visible.sync="open" width="1100px" append-to-body>
       <el-form ref="form" :model="form" :rules="rules" label-width="100px">
         <!-- 四个页签共用同一表单，切换时保留已填写内容和测试结果 -->
         <el-tabs v-model="formActiveTab">
@@ -70,20 +70,76 @@
             </el-form-item>
           </el-tab-pane>
 
-          <el-tab-pane label="参数配置" name="params">
-            <el-form-item label="完整类名" prop="className">
-              <el-input v-model="form.className" placeholder="请输入完整类名，如：http://xxx/api" />
+          <el-tab-pane label="工具配置" name="params">
+            <el-form-item label="工具类名" prop="className">
+              <el-input v-model="form.className" placeholder="请输入工具类名，如：http://xxx/api" />
+            </el-form-item>
+            <el-form-item label="关键词" prop="keywords">
+              <el-input v-model="form.keywords" placeholder="多个关键词用逗号分隔，如：加卡,打卡" />
+              <div class="el-form-item__tip">消息中包含任一关键词则命中；留空则所有消息都命中</div>
+            </el-form-item>
+            <el-form-item label="优先级" prop="priority">
+              <el-input-number v-model="form.priority" :min="0" :max="100" :step="1" style="width: 200px" />
+              <div class="el-form-item__tip">数值越大优先级越高</div>
+            </el-form-item>
+          </el-tab-pane>
+
+          <el-tab-pane label="正则配置" name="matching">
+            <el-form-item label="正则表达式" prop="regexPattern">
+              <el-input v-model="form.regexPattern" placeholder="如：(豆芽|桐桐)\s*(.*?)\s*(加卡|扣卡)\s*(\d+)" />
+              <div class="el-form-item__tip">用于匹配用户消息的正则表达式，留空则使用大模型智能匹配</div>
             </el-form-item>
             <el-form-item label="参数配置">
               <el-table :data="paramList" border size="small" style="margin-bottom: 12px;">
-                <el-table-column label="DTO字段名" prop="name" min-width="150">
+                <el-table-column label="参数名" prop="name" min-width="150">
                   <template slot-scope="scope">
                     <el-input v-model="scope.row.name" placeholder="如：account" />
                   </template>
                 </el-table-column>
-                <el-table-column label="正则组号" prop="regexGroup" width="100">
+                <el-table-column label="来源" prop="source" width="120">
                   <template slot-scope="scope">
-                    <el-input-number v-model="scope.row.regexGroup" :min="1" controls-position="right" style="width: 100%" />
+                    <el-select v-model="scope.row.source" @change="handleParamSourceChange(scope.row)">
+                      <el-option label="固定值" value="fixed" />
+                      <el-option label="动态提取" value="dynamic" />
+                    </el-select>
+                  </template>
+                </el-table-column>
+                <el-table-column label="数据类型" prop="dataType" width="120">
+                  <template slot-scope="scope">
+                    <el-select v-if="scope.row.source === 'fixed'" v-model="scope.row.dataType">
+                      <el-option label="string" value="string" />
+                      <el-option label="number" value="number" />
+                      <el-option label="boolean" value="boolean" />
+                      <el-option label="json" value="json" />
+                    </el-select>
+                    <span v-else>-</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="固定值" prop="fixedValue" min-width="200">
+                  <template slot-scope="scope">
+                    <el-select v-if="scope.row.source === 'fixed' && scope.row.dataType === 'boolean'" v-model="scope.row.fixedValue" placeholder="请选择">
+                      <el-option label="true" value="true" />
+                      <el-option label="false" value="false" />
+                    </el-select>
+                    <el-input
+                      v-else
+                      v-model="scope.row.fixedValue"
+                      :disabled="scope.row.source !== 'fixed'"
+                      :placeholder="scope.row.source === 'fixed' ? '请输入固定值' : '由消息动态提取'"
+                    />
+                  </template>
+                </el-table-column>
+                <el-table-column label="正则组号" prop="regexGroup" width="110">
+                  <template slot-scope="scope">
+                    <el-input-number
+                      v-if="scope.row.source === 'dynamic'"
+                      v-model="scope.row.regexGroup"
+                      :min="1"
+                      :precision="0"
+                      controls-position="right"
+                      style="width: 100%"
+                    />
+                    <span v-else>-</span>
                   </template>
                 </el-table-column>
                 <el-table-column label="操作" width="60" align="center">
@@ -92,18 +148,8 @@
                   </template>
                 </el-table-column>
               </el-table>
-              <el-button type="primary" plain size="mini" icon="el-icon-plus" @click="addParam">添加参数</el-button>
-            </el-form-item>
-          </el-tab-pane>
-
-          <el-tab-pane label="匹配规则" name="matching">
-            <el-form-item label="关键词" prop="keywords">
-              <el-input v-model="form.keywords" placeholder="多个关键词用逗号分隔，如：加卡,打卡" />
-              <div class="el-form-item__tip">消息中包含任一关键词则命中；留空则所有消息都命中</div>
-            </el-form-item>
-            <el-form-item label="正则表达式" prop="regexPattern">
-              <el-input v-model="form.regexPattern" placeholder="如：(豆芽|桐桐)\s*(.*?)\s*(加卡|扣卡)\s*(\d+)" />
-              <div class="el-form-item__tip">用于匹配用户消息的正则表达式，留空则使用大模型智能匹配</div>
+              <el-button type="primary" plain size="mini" icon="el-icon-plus" @click="addParam('fixed')">添加固定参数</el-button>
+              <el-button type="success" plain size="mini" icon="el-icon-plus" @click="addParam('dynamic')">添加动态参数</el-button>
             </el-form-item>
             <el-divider content-position="left">
               <el-button type="text" size="small" @click="showRegexTest = !showRegexTest">
@@ -141,10 +187,6 @@
                 </div>
               </div>
             </div>
-            <el-form-item label="优先级" prop="priority">
-              <el-input-number v-model="form.priority" :min="0" :max="100" :step="1" style="width: 200px" />
-              <div class="el-form-item__tip">数值越大优先级越高</div>
-            </el-form-item>
           </el-tab-pane>
 
           <el-tab-pane label="大模型配置" name="llm">
@@ -175,7 +217,6 @@
         <el-form-item label="消息内容">
           <el-input v-model="simulateMessageText" type="textarea" :rows="4" placeholder="请输入要模拟发送的消息..." />
         </el-form-item>
-        <el-divider content-position="left">直接模拟处理</el-divider>
         <el-form-item>
           <el-button type="primary" @click="sendSimulateMessage" :loading="simulateSending">发送</el-button>
         </el-form-item>
@@ -194,37 +235,6 @@
         <el-divider style="margin: 12px 0;" />
         <div style="white-space: pre-wrap; word-wrap: break-word; line-height: 1.6; color: #303133;">{{ simulateResult.result }}</div>
       </div>
-      <el-divider content-position="left">真实飞书回调测试</el-divider>
-      <el-alert
-        title="请谨慎填写真实 chat_id：回调会执行真实工具业务，并尝试向该飞书会话回复。"
-        type="warning"
-        :closable="false"
-        show-icon
-        style="margin-bottom: 16px;"
-      />
-      <el-form label-width="100px">
-        <el-form-item label="chat_id" required>
-          <el-input v-model="feishuChatId" placeholder="请输入飞书会话 chat_id" />
-        </el-form-item>
-        <el-form-item label="open_id">
-          <el-input v-model="feishuOpenId" placeholder="可选，发送人的飞书 open_id" />
-        </el-form-item>
-        <el-form-item>
-          <el-button type="warning" @click="sendFeishuCallback" :loading="feishuCallbackSending">调用真实回调</el-button>
-        </el-form-item>
-      </el-form>
-      <div v-if="feishuCallbackResult" style="background: #f5f7fa; padding: 16px; border-radius: 4px;">
-        <div :style="{ color: feishuCallbackResult.success ? '#67c23a' : '#f56c6c', marginBottom: '8px' }">
-          <i :class="feishuCallbackResult.success ? 'el-icon-success' : 'el-icon-error'" />
-          {{ feishuCallbackResult.message }}
-        </div>
-        <div style="margin-bottom: 8px; color: #909399; font-size: 13px;">
-          <i class="el-icon-time" /> 耗时: {{ feishuCallbackDuration }}s
-        </div>
-        <div v-if="feishuCallbackResult.success" style="color: #606266; font-size: 13px;">
-          回调处理为异步流程，请到“消息记录”页签查看最终执行与回复结果。
-        </div>
-      </div>
       <div slot="footer">
         <el-button @click="simulateOpen = false">关 闭</el-button>
       </div>
@@ -233,7 +243,7 @@
 </template>
 
 <script>
-import { listConfig, getConfig, addConfig, updateConfig, delConfig, testRegex, simulateMessage, simulateFeishuCallback } from '@/api/robot/toolConfig'
+import { listConfig, getConfig, addConfig, updateConfig, delConfig, testRegex, simulateMessage } from '@/api/robot/toolConfig'
 import { listLlmConfig } from '@/api/robot/llm'
 
 export default {
@@ -260,7 +270,7 @@ export default {
       paramList: [],
       rules: {
         configName: [{ required: true, message: '请输入配置名称', trigger: 'blur' }],
-        //className: [{ required: true, message: '请输入完整类名', trigger: 'blur' }]
+        //className: [{ required: true, message: '请输入工具类名', trigger: 'blur' }]
       },
       queryParams: {
         pageNum: 1,
@@ -277,12 +287,7 @@ export default {
       simulateMessageText: '豆芽加卡30张吧',
       simulateSending: false,
       simulateResult: null,
-      simulateDuration: 0,
-      feishuChatId: '',
-      feishuOpenId: '',
-      feishuCallbackSending: false,
-      feishuCallbackResult: null,
-      feishuCallbackDuration: 0
+      simulateDuration: 0
     }
   },
   watch: {
@@ -331,19 +336,7 @@ export default {
       this.getLlmOptions()
     },
     submitForm() {
-      for (let i = 0; i < this.paramList.length; i++) {
-        const p = this.paramList[i]
-        if (!p.name) {
-          this.formActiveTab = 'params'
-          this.$modal.msgWarning(`第 ${i + 1} 行参数的 DTO 字段名不能为空`)
-          return
-        }
-        if (!p.regexGroup) {
-          this.formActiveTab = 'params'
-          this.$modal.msgWarning(`第 ${i + 1} 行参数的正则组号不能为空`)
-          return
-        }
-      }
+      if (!this.validateParamList()) return
       this.buildParamsFromList()
       this.$refs['form'].validate(valid => {
         if (!valid) {
@@ -408,24 +401,40 @@ export default {
         this.llmOptions = response.rows
       })
     },
-    addParam() {
-      this.paramList.push({ name: '', regexGroup: 1 })
+    addParam(source) {
+      this.paramList.push({
+        name: '',
+        source,
+        dataType: 'string',
+        fixedValue: '',
+        regexGroup: source === 'dynamic' ? undefined : null
+      })
+    },
+    handleParamSourceChange(param) {
+      // 切换来源时清理另一种来源的输入，避免隐藏值被误序列化。
+      if (param.source === 'fixed') {
+        param.regexGroup = null
+      } else {
+        param.fixedValue = ''
+        param.dataType = 'string'
+      }
     },
     removeParam(index) {
       this.paramList.splice(index, 1)
     },
     buildParamsFromList() {
-      if (this.paramList.length === 0) {
-        this.form.regexParamMap = null
-        this.form.toolParams = null
-        return
-      }
       const regexParamMap = {}
       const toolParams = {}
 
       this.paramList.forEach(p => {
-        regexParamMap[String(p.regexGroup)] = p.name
-        toolParams[p.name] = '${' + p.name + '}'
+        const name = p.name.trim()
+        if (p.source === 'dynamic') {
+          if (p.regexGroup != null) regexParamMap[String(p.regexGroup)] = name
+          // 动态参数沿用后端既有占位符契约，捕获值会在执行时覆盖该占位值。
+          toolParams[name] = this.getDynamicPlaceholder(name)
+        } else {
+          toolParams[name] = this.convertFixedValue(p.fixedValue, p.dataType)
+        }
       })
 
       this.form.regexParamMap = JSON.stringify(regexParamMap)
@@ -433,16 +442,115 @@ export default {
     },
     parseParamsToList() {
       this.paramList = []
-      if (this.form.regexParamMap) {
-        try {
-          const map = JSON.parse(this.form.regexParamMap)
-          for (const [group, field] of Object.entries(map)) {
-            this.paramList.push({ name: field, regexGroup: parseInt(group) })
-          }
-        } catch (e) {
-          console.error('解析 regexParamMap 失败', e)
-        }
+      const toolParams = this.parseJsonObject(this.form.toolParams, 'toolParams')
+      const regexParamMap = this.parseJsonObject(this.form.regexParamMap, 'regexParamMap')
+      const dynamicMappings = Object.entries(regexParamMap).map(([group, name]) => ({
+        name: String(name),
+        regexGroup: Number(group)
+      }))
+
+      // 先按 toolParams 顺序生成完整参数，再补充仅存在于旧正则映射中的动态参数。
+      Object.entries(toolParams).forEach(([name, value]) => {
+        const mappingIndex = dynamicMappings.findIndex(item => item.name === name)
+        const mapping = mappingIndex >= 0 ? dynamicMappings.splice(mappingIndex, 1)[0] : null
+        const isDynamic = Boolean(mapping || this.isDynamicPlaceholder(name, value))
+        this.paramList.push({
+          name,
+          source: isDynamic ? 'dynamic' : 'fixed',
+          dataType: isDynamic ? 'string' : this.inferDataType(value),
+          fixedValue: isDynamic ? '' : this.formatFixedValue(value),
+          regexGroup: mapping ? mapping.regexGroup : null
+        })
+      })
+      dynamicMappings.forEach(mapping => {
+        this.paramList.push({
+          name: mapping.name,
+          source: 'dynamic',
+          dataType: 'string',
+          fixedValue: '',
+          regexGroup: mapping.regexGroup
+        })
+      })
+    },
+    parseJsonObject(rawValue, fieldName) {
+      if (!rawValue) return {}
+      try {
+        const value = typeof rawValue === 'string' ? JSON.parse(rawValue) : rawValue
+        if (value && typeof value === 'object' && !Array.isArray(value)) return value
+      } catch (e) {
+        console.error(`解析 ${fieldName} 失败`, e)
       }
+      return {}
+    },
+    inferDataType(value) {
+      if (typeof value === 'number') return 'number'
+      if (typeof value === 'boolean') return 'boolean'
+      if (value === null || typeof value === 'object') return 'json'
+      return 'string'
+    },
+    formatFixedValue(value) {
+      if (value !== null && typeof value === 'object') return JSON.stringify(value)
+      if (value === null) return 'null'
+      return String(value)
+    },
+    getDynamicPlaceholder(name) {
+      return '${' + name + '}'
+    },
+    isDynamicPlaceholder(name, value) {
+      return value === '${' + name + '}'
+    },
+    convertFixedValue(value, dataType) {
+      if (dataType === 'number') return Number(value)
+      if (dataType === 'boolean') return value === true || value === 'true'
+      if (dataType === 'json') return JSON.parse(value)
+      return value == null ? '' : String(value)
+    },
+    validateParamList() {
+      const names = new Set()
+      const groups = new Set()
+      const allowedSources = ['fixed', 'dynamic']
+      const allowedTypes = ['string', 'number', 'boolean', 'json']
+      for (let i = 0; i < this.paramList.length; i++) {
+        const param = this.paramList[i]
+        const rowNumber = i + 1
+        const name = typeof param.name === 'string' ? param.name.trim() : ''
+        let message = ''
+        if (!name) message = `第 ${rowNumber} 行参数名不能为空`
+        else if (names.has(name)) message = `第 ${rowNumber} 行参数名“${name}”重复`
+        else if (!allowedSources.includes(param.source)) message = `第 ${rowNumber} 行参数来源无效`
+        else if (!allowedTypes.includes(param.dataType)) message = `第 ${rowNumber} 行数据类型无效`
+
+        if (!message && param.source === 'dynamic') {
+          if (param.regexGroup != null && (!Number.isInteger(param.regexGroup) || param.regexGroup < 1)) {
+            message = `第 ${rowNumber} 行正则组号必须为正整数`
+          } else if (param.regexGroup != null && groups.has(param.regexGroup)) {
+            message = `第 ${rowNumber} 行正则组号 ${param.regexGroup} 重复`
+          } else if (this.form.regexPattern && param.regexGroup == null) {
+            message = `第 ${rowNumber} 行动态参数在正则场景下必须填写正则组号`
+          }
+        }
+        if (!message && param.source === 'fixed') {
+          if (param.dataType === 'number' && (param.fixedValue === '' || !Number.isFinite(Number(param.fixedValue)))) {
+            message = `第 ${rowNumber} 行固定值不是有效数字`
+          } else if (param.dataType === 'boolean' && ![true, false, 'true', 'false'].includes(param.fixedValue)) {
+            message = `第 ${rowNumber} 行固定值不是有效布尔值`
+          } else if (param.dataType === 'json') {
+            try {
+              JSON.parse(param.fixedValue)
+            } catch (e) {
+              message = `第 ${rowNumber} 行固定值不是有效 JSON`
+            }
+          }
+        }
+        if (message) {
+          this.formActiveTab = 'matching'
+          this.$modal.msgWarning(message)
+          return false
+        }
+        names.add(name)
+        if (param.source === 'dynamic' && param.regexGroup != null) groups.add(param.regexGroup)
+      }
+      return true
     },
     handleTestRegex() {
       if (!this.form.regexPattern) {
@@ -453,13 +561,10 @@ export default {
         this.$modal.msgWarning('请输入测试消息')
         return
       }
-      if (this.paramList.length === 0) {
-        this.$modal.msgWarning('请先添加参数配置')
-        return
-      }
+      if (!this.validateParamList()) return
       const regexParamMap = {}
-      this.paramList.forEach(p => {
-        regexParamMap[String(p.regexGroup)] = p.name
+      this.paramList.filter(p => p.source === 'dynamic' && p.regexGroup != null).forEach(p => {
+        regexParamMap[String(p.regexGroup)] = p.name.trim()
       })
       testRegex({
         regexPattern: this.form.regexPattern,
@@ -474,8 +579,6 @@ export default {
       this.simulateMessageText = '豆芽加卡30张吧'
       this.simulateResult = null
       this.simulateDuration = 0
-      this.feishuCallbackResult = null
-      this.feishuCallbackDuration = 0
     },
     sendSimulateMessage() {
       if (!this.simulateMessageText.trim()) {
@@ -504,68 +607,6 @@ export default {
         })
         .finally(() => {
           this.simulateSending = false
-        })
-    },
-    sendFeishuCallback() {
-      const messageText = this.simulateMessageText.trim()
-      const chatId = this.feishuChatId.trim()
-      const openId = this.feishuOpenId.trim()
-      if (!messageText) {
-        this.$modal.msgWarning('请输入消息内容')
-        return
-      }
-      if (!chatId) {
-        this.$modal.msgWarning('请输入 chat_id')
-        return
-      }
-
-      const timestamp = Date.now()
-      const uniqueSuffix = timestamp + '_' + Math.random().toString(36).slice(2, 10)
-      // 飞书的 message.content 字段本身是 JSON 字符串，不能直接传入对象。
-      const payload = {
-        schema: '2.0',
-        header: {
-          event_id: 'event_' + uniqueSuffix,
-          event_type: 'im.message.receive_v1',
-          create_time: String(timestamp)
-        },
-        event: {
-          sender: {
-            sender_id: openId ? { open_id: openId } : {}
-          },
-          message: {
-            message_id: 'message_' + uniqueSuffix,
-            create_time: String(timestamp),
-            chat_id: chatId,
-            chat_type: 'group',
-            message_type: 'text',
-            content: JSON.stringify({ text: messageText })
-          }
-        }
-      }
-
-      this.feishuCallbackSending = true
-      this.feishuCallbackResult = null
-      const startTime = Date.now()
-      simulateFeishuCallback(payload)
-        .then(() => {
-          this.feishuCallbackDuration = ((Date.now() - startTime) / 1000).toFixed(2)
-          // HTTP 成功仅代表服务端已接收，工具执行和飞书回复由后端异步完成。
-          this.feishuCallbackResult = {
-            success: true,
-            message: '飞书回调已接收'
-          }
-          this.$modal.msgSuccess('飞书回调已接收')
-        })
-        .catch(error => {
-          this.feishuCallbackDuration = ((Date.now() - startTime) / 1000).toFixed(2)
-          this.feishuCallbackResult = {
-            success: false,
-            message: '回调失败: ' + (error.message || '未知错误')
-          }
-        })
-        .finally(() => {
-          this.feishuCallbackSending = false
         })
     }
   }
