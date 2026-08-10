@@ -53,101 +53,115 @@
     <!-- 新增/修改 对话框 -->
     <el-dialog :title="formTitle" :visible.sync="open" width="700px" append-to-body>
       <el-form ref="form" :model="form" :rules="rules" label-width="100px">
-        <el-form-item label="配置名称" prop="configName">
-          <el-input v-model="form.configName" placeholder="请输入配置名称" />
-        </el-form-item>
-        <el-form-item label="完整类名" prop="className">
-          <el-input v-model="form.className" placeholder="请输入完整类名，如：http://xxx/api" />
-        </el-form-item>
-        <el-form-item label="参数配置">
-          <el-table :data="paramList" border size="small" style="margin-bottom: 12px;">
-            <el-table-column label="DTO字段名" prop="name" min-width="150">
-              <template slot-scope="scope">
-                <el-input v-model="scope.row.name" placeholder="如：account" />
-              </template>
-            </el-table-column>
-            <el-table-column label="正则组号" prop="regexGroup" width="100">
-              <template slot-scope="scope">
-                <el-input-number v-model="scope.row.regexGroup" :min="1" controls-position="right" style="width: 100%" />
-              </template>
-            </el-table-column>
-            <el-table-column label="操作" width="60" align="center">
-              <template slot-scope="scope">
-                <el-button type="text" icon="el-icon-delete" style="color: #f56c6c;" @click="removeParam(scope.$index)" />
-              </template>
-            </el-table-column>
-          </el-table>
-          <el-button type="primary" plain size="mini" icon="el-icon-plus" @click="addParam">添加参数</el-button>
-        </el-form-item>
-        <el-form-item label="关键词" prop="keywords">
-          <el-input v-model="form.keywords" placeholder="多个关键词用逗号分隔，如：加卡,打卡" />
-          <div class="el-form-item__tip">消息中包含任一关键词则命中；留空则所有消息都命中</div>
-        </el-form-item>
-        <el-form-item label="正则表达式" prop="regexPattern">
-          <el-input v-model="form.regexPattern" placeholder="如：(豆芽|桐桐)\s*(.*?)\s*(加卡|扣卡)\s*(\d+)" />
-          <div class="el-form-item__tip">用于匹配用户消息的正则表达式，留空则使用大模型智能匹配</div>
-        </el-form-item>
-        <el-divider content-position="left">
-          <el-button type="text" size="small" @click="showRegexTest = !showRegexTest">
-            <i :class="showRegexTest ? 'el-icon-arrow-up' : 'el-icon-arrow-down'" />
-            正则测试
-          </el-button>
-        </el-divider>
-        <div v-show="showRegexTest" style="background: #f5f7fa; padding: 16px; border-radius: 4px; margin-bottom: 16px;">
-          <el-form-item label="测试消息">
-            <el-input v-model="testText" placeholder="输入要测试的消息" @keyup.enter.native="handleTestRegex" />
-          </el-form-item>
-          <el-form-item>
-            <el-button type="primary" size="small" @click="handleTestRegex">测试匹配</el-button>
-          </el-form-item>
-          <div v-if="regexTestResult" style="margin-top: 12px;">
-            <div v-if="regexTestResult.matched" style="color: #67c23a; margin-bottom: 8px;">
-              <i class="el-icon-success" /> 匹配成功
-            </div>
-            <div v-else style="color: #f56c6c; margin-bottom: 8px;">
-              <i class="el-icon-error" /> 匹配失败
-            </div>
-            <div v-if="regexTestResult.error" style="color: #e6a23c; margin-bottom: 8px;">
-              <i class="el-icon-warning" /> {{ regexTestResult.error }}
-            </div>
-            <div v-if="regexTestResult.matched && Object.keys(regexTestResult.groups).length > 0">
-              <div style="font-weight: bold; margin-bottom: 8px; font-size: 13px; color: #303133;">捕获组明细：</div>
-              <div v-for="(value, key) in regexTestResult.groups" :key="key" style="font-size: 12px; color: #606266; line-height: 1.8; padding-left: 16px;">
-                <span style="color: #409eff; font-weight: 500;">Group {{ key }}</span
-                >{{ key === '0' ? '（整句）' : '' }}：{{ value }}
+        <!-- 四个页签共用同一表单，切换时保留已填写内容和测试结果 -->
+        <el-tabs v-model="formActiveTab">
+          <el-tab-pane label="基本信息" name="basic">
+            <el-form-item label="配置名称" prop="configName">
+              <el-input v-model="form.configName" placeholder="请输入配置名称" />
+            </el-form-item>
+            <el-form-item label="状态" prop="status">
+              <el-radio-group v-model="form.status">
+                <el-radio label="0">启用</el-radio>
+                <el-radio label="1">停用</el-radio>
+              </el-radio-group>
+            </el-form-item>
+            <el-form-item label="备注" prop="remark">
+              <el-input v-model="form.remark" type="textarea" placeholder="可选" />
+            </el-form-item>
+          </el-tab-pane>
+
+          <el-tab-pane label="参数配置" name="params">
+            <el-form-item label="完整类名" prop="className">
+              <el-input v-model="form.className" placeholder="请输入完整类名，如：http://xxx/api" />
+            </el-form-item>
+            <el-form-item label="参数配置">
+              <el-table :data="paramList" border size="small" style="margin-bottom: 12px;">
+                <el-table-column label="DTO字段名" prop="name" min-width="150">
+                  <template slot-scope="scope">
+                    <el-input v-model="scope.row.name" placeholder="如：account" />
+                  </template>
+                </el-table-column>
+                <el-table-column label="正则组号" prop="regexGroup" width="100">
+                  <template slot-scope="scope">
+                    <el-input-number v-model="scope.row.regexGroup" :min="1" controls-position="right" style="width: 100%" />
+                  </template>
+                </el-table-column>
+                <el-table-column label="操作" width="60" align="center">
+                  <template slot-scope="scope">
+                    <el-button type="text" icon="el-icon-delete" style="color: #f56c6c;" @click="removeParam(scope.$index)" />
+                  </template>
+                </el-table-column>
+              </el-table>
+              <el-button type="primary" plain size="mini" icon="el-icon-plus" @click="addParam">添加参数</el-button>
+            </el-form-item>
+          </el-tab-pane>
+
+          <el-tab-pane label="匹配规则" name="matching">
+            <el-form-item label="关键词" prop="keywords">
+              <el-input v-model="form.keywords" placeholder="多个关键词用逗号分隔，如：加卡,打卡" />
+              <div class="el-form-item__tip">消息中包含任一关键词则命中；留空则所有消息都命中</div>
+            </el-form-item>
+            <el-form-item label="正则表达式" prop="regexPattern">
+              <el-input v-model="form.regexPattern" placeholder="如：(豆芽|桐桐)\s*(.*?)\s*(加卡|扣卡)\s*(\d+)" />
+              <div class="el-form-item__tip">用于匹配用户消息的正则表达式，留空则使用大模型智能匹配</div>
+            </el-form-item>
+            <el-divider content-position="left">
+              <el-button type="text" size="small" @click="showRegexTest = !showRegexTest">
+                <i :class="showRegexTest ? 'el-icon-arrow-up' : 'el-icon-arrow-down'" />
+                正则测试
+              </el-button>
+            </el-divider>
+            <div v-show="showRegexTest" style="background: #f5f7fa; padding: 16px; border-radius: 4px; margin-bottom: 16px;">
+              <el-form-item label="测试消息">
+                <el-input v-model="testText" placeholder="输入要测试的消息" @keyup.enter.native="handleTestRegex" />
+              </el-form-item>
+              <el-form-item>
+                <el-button type="primary" size="small" @click="handleTestRegex">测试匹配</el-button>
+              </el-form-item>
+              <div v-if="regexTestResult" style="margin-top: 12px;">
+                <div v-if="regexTestResult.matched" style="color: #67c23a; margin-bottom: 8px;">
+                  <i class="el-icon-success" /> 匹配成功
+                </div>
+                <div v-else style="color: #f56c6c; margin-bottom: 8px;">
+                  <i class="el-icon-error" /> 匹配失败
+                </div>
+                <div v-if="regexTestResult.error" style="color: #e6a23c; margin-bottom: 8px;">
+                  <i class="el-icon-warning" /> {{ regexTestResult.error }}
+                </div>
+                <div v-if="regexTestResult.matched && Object.keys(regexTestResult.groups).length > 0">
+                  <div style="font-weight: bold; margin-bottom: 8px; font-size: 13px; color: #303133;">捕获组明细：</div>
+                  <div v-for="(value, key) in regexTestResult.groups" :key="key" style="font-size: 12px; color: #606266; line-height: 1.8; padding-left: 16px;">
+                    <span style="color: #409eff; font-weight: 500;">Group {{ key }}</span
+                    >{{ key === '0' ? '（整句）' : '' }}：{{ value }}
+                  </div>
+                </div>
+                <div v-if="regexTestResult.matched && Object.keys(regexTestResult.params).length > 0" style="margin-top: 12px;">
+                  <div style="font-weight: bold; margin-bottom: 8px; font-size: 13px; color: #303133;">生成的参数JSON：</div>
+                  <pre style="background: #fff; padding: 12px; border-radius: 4px; font-size: 12px; color: #303133; overflow-x: auto;">{{ JSON.stringify(regexTestResult.params, null, 2) }}</pre>
+                </div>
               </div>
             </div>
-            <div v-if="regexTestResult.matched && Object.keys(regexTestResult.params).length > 0" style="margin-top: 12px;">
-              <div style="font-weight: bold; margin-bottom: 8px; font-size: 13px; color: #303133;">生成的参数JSON：</div>
-              <pre style="background: #fff; padding: 12px; border-radius: 4px; font-size: 12px; color: #303133; overflow-x: auto;">{{ JSON.stringify(regexTestResult.params, null, 2) }}</pre>
-            </div>
-          </div>
-        </div>
-        <el-form-item label="优先级" prop="priority">
-          <el-input-number v-model="form.priority" :min="0" :max="100" :step="1" style="width: 200px" />
-          <div class="el-form-item__tip">数值越大优先级越高</div>
-        </el-form-item>
-        <el-form-item label="描述" prop="description">
-          <el-input v-model="form.description" type="textarea" :rows="2" placeholder="用于大模型选择最合适的配置" />
-        </el-form-item>
-        <el-form-item label="提示词" prop="prompt">
-          <el-input v-model="form.prompt" type="textarea" :rows="3" placeholder="用于从消息中提取参数的提示词" />
-          <div class="el-form-item__tip">如：从消息中提取姓名和卡号，输出JSON</div>
-        </el-form-item>
-        <el-form-item label="大模型" prop="llmConfigId">
-          <el-select v-model="form.llmConfigId" placeholder="请选择大模型配置" clearable style="width: 100%">
-            <el-option v-for="item in llmOptions" :key="item.id" :label="item.configName" :value="item.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="状态" prop="status">
-          <el-radio-group v-model="form.status">
-            <el-radio label="0">启用</el-radio>
-            <el-radio label="1">停用</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item label="备注" prop="remark">
-          <el-input v-model="form.remark" type="textarea" placeholder="可选" />
-        </el-form-item>
+            <el-form-item label="优先级" prop="priority">
+              <el-input-number v-model="form.priority" :min="0" :max="100" :step="1" style="width: 200px" />
+              <div class="el-form-item__tip">数值越大优先级越高</div>
+            </el-form-item>
+          </el-tab-pane>
+
+          <el-tab-pane label="大模型配置" name="llm">
+            <el-form-item label="描述" prop="description">
+              <el-input v-model="form.description" type="textarea" :rows="2" placeholder="用于大模型选择最合适的配置" />
+            </el-form-item>
+            <el-form-item label="提示词" prop="prompt">
+              <el-input v-model="form.prompt" type="textarea" :rows="3" placeholder="用于从消息中提取参数的提示词" />
+              <div class="el-form-item__tip">如：从消息中提取姓名和卡号，输出JSON</div>
+            </el-form-item>
+            <el-form-item label="大模型" prop="llmConfigId">
+              <el-select v-model="form.llmConfigId" placeholder="请选择大模型配置" clearable style="width: 100%">
+                <el-option v-for="item in llmOptions" :key="item.id" :label="item.configName" :value="item.id" />
+              </el-select>
+            </el-form-item>
+          </el-tab-pane>
+        </el-tabs>
       </el-form>
       <div slot="footer" class="dialog-footer">
         <el-button type="primary" @click="submitForm">确 定</el-button>
@@ -209,6 +223,7 @@ export default {
       total: 0,
       open: false,
       formTitle: '',
+      formActiveTab: 'basic',
       form: {},
       paramList: [],
       rules: {
@@ -282,17 +297,23 @@ export default {
       for (let i = 0; i < this.paramList.length; i++) {
         const p = this.paramList[i]
         if (!p.name) {
+          this.formActiveTab = 'params'
           this.$modal.msgWarning(`第 ${i + 1} 行参数的 DTO 字段名不能为空`)
           return
         }
         if (!p.regexGroup) {
+          this.formActiveTab = 'params'
           this.$modal.msgWarning(`第 ${i + 1} 行参数的正则组号不能为空`)
           return
         }
       }
       this.buildParamsFromList()
       this.$refs['form'].validate(valid => {
-        if (!valid) return
+        if (!valid) {
+          // 校验项位于隐藏页签时，先展示基础信息以便用户处理错误。
+          this.formActiveTab = 'basic'
+          return
+        }
         if (this.form.id != null) {
           updateConfig(this.form).then(() => {
             this.$modal.msgSuccess('修改成功')
@@ -309,6 +330,7 @@ export default {
       })
     },
     resetForm() {
+      this.formActiveTab = 'basic'
       this.form = {
         id: undefined,
         configName: undefined,

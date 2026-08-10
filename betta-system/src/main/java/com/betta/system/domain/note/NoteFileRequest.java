@@ -1,5 +1,10 @@
 package com.betta.system.domain.note;
 
+/**
+ * 笔记文件操作请求对象。
+ *
+ * <p>用于承载笔记路径、重命名目标、文件类型、正文、版本哈希和收藏状态等接口参数。</p>
+ */
 public class NoteFileRequest
 {
     private String path;
@@ -10,7 +15,11 @@ public class NoteFileRequest
 
     private String content;
 
+    /** 前端上次读取到的文件哈希，用于保存时检测并发冲突。 */
     private String lastKnownHash;
+
+    /** 期望设置的收藏状态，true 表示收藏，false 表示取消收藏。 */
+    private Boolean favorite;
 
     public String getPath()
     {
@@ -60,5 +69,15 @@ public class NoteFileRequest
     public void setLastKnownHash(String lastKnownHash)
     {
         this.lastKnownHash = lastKnownHash;
+    }
+
+    public Boolean getFavorite()
+    {
+        return favorite;
+    }
+
+    public void setFavorite(Boolean favorite)
+    {
+        this.favorite = favorite;
     }
 }

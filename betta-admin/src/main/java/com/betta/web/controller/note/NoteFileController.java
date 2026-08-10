@@ -55,6 +55,38 @@ public class NoteFileController extends BaseController
     }
 
     /**
+     * 获取当前登录用户的有效收藏笔记。
+     *
+     * <p>服务层会过滤并清理已删除、非 Markdown 或非法路径，仅返回仍真实存在的笔记节点。</p>
+     *
+     * @return 包含收藏笔记节点列表的统一响应
+     */
+    @PreAuthorize("@ss.hasPermi('system:note:list')")
+    @GetMapping("/favorites")
+    public AjaxResult favorites()
+    {
+        List<NoteTreeNode> favorites = noteFileService.favorites(getUsername());
+        return success(favorites);
+    }
+
+    /**
+     * 设置指定笔记的收藏状态。
+     *
+     * <p>请求中的 path 表示当前用户 vault 内的笔记路径，favorite 表示期望状态；业务校验和幂等持久化由服务层完成。</p>
+     *
+     * @param request 包含笔记相对路径和期望收藏状态的请求对象
+     * @return 包含持久化后最终 boolean 收藏状态的统一响应
+     */
+    @PreAuthorize("@ss.hasPermi('system:note:edit')")
+    @Log(title = "笔记收藏", businessType = BusinessType.UPDATE)
+    @PutMapping("/favorite")
+    public AjaxResult favorite(@RequestBody NoteFileRequest request)
+    {
+        boolean favorite = noteFileService.favorite(getUsername(), request.getPath(), request.getFavorite());
+        return success(favorite);
+    }
+
+    /**
      * 读取单篇笔记正文。
      *
      * <p>返回内容、文件 hash 和图片资源前缀。前端保存时会带回 hash，用于检测是否被同步脚本或其他端修改。</p>

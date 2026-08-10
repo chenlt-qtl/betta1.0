@@ -55,6 +55,21 @@ export function searchNotes(keyword) {
   })
 }
 
+export function getFavoriteNotes() {
+  return request({
+    url: '/system/note/favorites',
+    method: 'get'
+  })
+}
+
+export function updateNoteFavorite(data) {
+  return request({
+    url: '/system/note/favorite',
+    method: 'put',
+    data
+  })
+}
+
 export function uploadNoteImage(file, notePath) {
   const data = new FormData()
   data.append('file', file)

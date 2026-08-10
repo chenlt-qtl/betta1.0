@@ -8,7 +8,7 @@
         <i class="el-icon-search" :class="{ active: activePanel === 'search' }" @click="switchPanel('search')"></i>
       </el-tooltip>
       <el-tooltip content="收藏" placement="right">
-        <i class="el-icon-collection-tag"></i>
+        <i class="el-icon-collection-tag" :class="{ active: activePanel === 'favorites' }" @click="switchPanel('favorites')"></i>
       </el-tooltip>
 <!--      <el-tooltip content="日历" placement="right">-->
 <!--        <i class="el-icon-date"></i>-->
@@ -76,7 +76,7 @@
             <span class="tree-label">{{ node.label }}</span>
           </span>
         </el-tree>
-        <div v-else class="search-results">
+        <div v-else-if="activePanel === 'search'" class="search-results">
           <div v-if="searchLoading" class="search-empty">搜索中...</div>
           <template v-else>
             <div
@@ -93,6 +93,25 @@
           <div v-if="!searchLoading && !searchResults.length" class="search-empty">
             {{ keyword ? '未找到匹配结果。' : '输入关键词后开始搜索。' }}
           </div>
+        </div>
+        <div v-else class="favorite-results">
+          <div v-if="favoriteLoading" class="favorite-empty">收藏加载中...</div>
+          <template v-else>
+            <div v-if="favoriteLoadError" class="favorite-empty">
+              收藏加载失败，
+              <el-button type="text" size="mini" @click="loadFavorites">重新加载</el-button>
+            </div>
+            <div
+              v-for="item in favoriteNotes"
+              :key="item.path"
+              class="favorite-item"
+              @click="openNote(item.path)"
+            >
+              <div class="favorite-title">{{ item.name }}</div>
+              <div class="favorite-path">{{ item.path }}</div>
+            </div>
+            <div v-if="!favoriteLoadError && !favoriteNotes.length" class="favorite-empty">暂无收藏笔记。</div>
+          </template>
         </div>
       </div>
     </aside>
@@ -125,6 +144,19 @@
               :disabled="!currentPath || currentNodeType !== 'file' || !viewer"
               @click="tocCollapsed = !tocCollapsed"
             ></el-button>
+          </el-tooltip>
+          <el-tooltip :content="currentFavorite ? '取消收藏' : '收藏笔记'" placement="bottom">
+            <span>
+              <el-button
+                class="favorite-button"
+                :class="{ 'is-favorite': currentFavorite }"
+                size="mini"
+                :icon="'el-icon-star-off'"
+                :disabled="!currentPath || currentNodeType !== 'file' || favoriteUpdating"
+                @click="handleFavorite"
+                v-hasPermi="['system:note:edit']"
+              ></el-button>
+            </span>
           </el-tooltip>
           <el-button size="mini" icon="el-icon-check" type="primary" :disabled="!currentPath || currentNodeType !== 'file' || !dirty" @click="save" v-hasPermi="['system:note:edit']">保存</el-button>
           <el-button size="mini" icon="el-icon-download" :disabled="!currentPath || currentNodeType !== 'file'" @click="handleDownload" v-hasPermi="['system:note:download']"></el-button>
@@ -165,11 +197,13 @@ import {
   createNoteFile,
   deleteNoteFile,
   downloadNoteFile,
+  getFavoriteNotes,
   getNoteContent,
   getNoteTree,
   renameNoteFile,
   saveNoteContent,
-  searchNotes
+  searchNotes,
+  updateNoteFavorite
 } from '@/api/note'
 
 export default {
@@ -179,13 +213,19 @@ export default {
     return {
       // 左侧搜索关键词；搜索面板输入时会做防抖请求。
       keyword: '',
-      // 左侧工具栏当前激活的面板：files 显示文件树，search 显示搜索框和结果。
+      // 左侧工具栏当前激活的面板：files 文件树、search 搜索结果、favorites 收藏列表。
       activePanel: 'files',
       searchResults: [],
       // 搜索 loading 与请求序号配合使用，避免慢请求覆盖后输入的新结果。
       searchLoading: false,
       searchTimer: null,
       searchSeq: 0,
+      // 收藏列表是当前笔记收藏状态的唯一数据源，接口失败时不提前修改本地状态。
+      favoriteNotes: [],
+      favoriteLoading: false,
+      favoriteLoadError: false,
+      favoriteLoadSeq: 0,
+      favoriteUpdating: false,
       // 后端返回的 Markdown vault 文件树，仅展示笔记和普通目录，图片附件目录在后端已隐藏。
       treeData: [],
       treeProps: {
@@ -215,6 +255,8 @@ export default {
   },
   created() {
     this.loadTree()
+    // 初始化即加载收藏，用于推导默认打开笔记后的收藏按钮状态。
+    this.loadFavorites()
   },
   computed: {
     folderTreeData() {
@@ -239,6 +281,9 @@ export default {
       }
       const selectedNode = this.findNodeByPath(this.treeData, this.selectedFolderPath)
       return selectedNode ? selectedNode.name : '全部笔记'
+    },
+    currentFavorite() {
+      return this.currentNodeType === 'file' && this.favoriteNotes.some(item => item.path === this.currentPath)
     }
   },
   mounted() {
@@ -261,6 +306,32 @@ export default {
       getNoteTree().then(res => {
         this.treeData = res.data || []
         this.ensureSelectedFolderExists()
+      })
+    },
+    loadFavorites() {
+      // 仅允许最后发起的请求落地，避免旧响应覆盖收藏操作、重命名或删除后的新状态。
+      const seq = ++this.favoriteLoadSeq
+      this.favoriteLoading = true
+      this.favoriteLoadError = false
+      return getFavoriteNotes().then(res => {
+        if (seq !== this.favoriteLoadSeq) {
+          // 旧请求已被更新请求接管，不再参与当前页面状态和失败提示。
+          return true
+        }
+        this.favoriteNotes = res.data || []
+        return true
+      }).catch(() => {
+        // 加载失败时保留已有列表；错误状态只由最新请求维护，旧请求失败不干扰当前视图。
+        if (seq !== this.favoriteLoadSeq) {
+          return true
+        }
+        this.favoriteLoadError = true
+        // 收藏加载已转换为页面错误态，返回明确标记避免 fire-and-forget 调用产生未处理拒绝。
+        return false
+      }).finally(() => {
+        if (seq === this.favoriteLoadSeq) {
+          this.favoriteLoading = false
+        }
       })
     },
     buildFolderTree(nodes) {
@@ -328,7 +399,10 @@ export default {
       if (panel === 'files') {
         // 切回文件树时清空搜索状态，避免下次进入搜索面板看到旧结果。
         this.clearSearch()
-      } else {
+      } else if (panel === 'favorites') {
+        // 每次进入收藏面板都从服务端刷新，覆盖重命名等场景下可能变化的路径。
+        this.loadFavorites()
+      } else if (panel === 'search') {
         // 搜索面板打开后自动聚焦，让用户可以直接输入。
         this.$nextTick(() => {
           if (this.$refs.searchInput) {
@@ -417,6 +491,27 @@ export default {
         this.loadingNote = false
       })
     },
+    handleFavorite() {
+      if (!this.currentPath || this.currentNodeType !== 'file' || this.favoriteUpdating) {
+        return
+      }
+      const favorite = !this.currentFavorite
+      this.favoriteUpdating = true
+      updateNoteFavorite({ path: this.currentPath, favorite }).then(res => {
+        // 更新成功后重新读取收藏列表，按钮状态和收藏面板始终以服务端最终数据为准。
+        return this.loadFavorites().then(refreshSucceeded => {
+          if (refreshSucceeded) {
+            this.$modal.msgSuccess(res.data === true ? '收藏成功' : '已取消收藏')
+            return
+          }
+          this.$modal.msgWarning(res.data === true
+            ? '收藏已成功，但列表刷新失败，请重新加载'
+            : '收藏已取消，但列表刷新失败，请重新加载')
+        })
+      }).finally(() => {
+        this.favoriteUpdating = false
+      })
+    },
     markDirty() {
       // 只有用户真实编辑正文时才置 dirty；加载笔记期间的同步事件会被忽略。
       if (!this.loadingNote) {
@@ -470,6 +565,7 @@ export default {
           this.$modal.msgSuccess('删除成功')
           this.clearCurrentSelection()
           this.loadTree()
+          this.loadFavorites()
         })
       }).catch(() => {})
     },
@@ -505,6 +601,7 @@ export default {
         this.title = res.data.type === 'file' ? this.fileTitle(this.currentPath) : this.basename(this.currentPath)
         this.$modal.msgSuccess('标题已更新')
         this.loadTree()
+        this.loadFavorites()
       }).catch(() => {
         this.title = oldName
       }).finally(() => {
@@ -648,7 +745,8 @@ export default {
 }
 
 .note-tree,
-.search-results {
+.search-results,
+.favorite-results {
   flex: 1;
   height: 100%;
   overflow: auto;
@@ -692,23 +790,27 @@ export default {
   font-size: 14px;
 }
 
-.search-item {
+.search-item,
+.favorite-item {
   padding: 9px 10px;
   border-radius: 6px;
   cursor: pointer;
 }
 
-.search-item:hover {
+.search-item:hover,
+.favorite-item:hover {
   background: #ededed;
 }
 
-.search-title {
+.search-title,
+.favorite-title {
   font-weight: 600;
   color: #303133;
 }
 
 .search-path,
-.search-snippet {
+.search-snippet,
+.favorite-path {
   margin-top: 4px;
   font-size: 12px;
   color: #909399;
@@ -717,7 +819,14 @@ export default {
   white-space: nowrap;
 }
 
-.search-empty {
+.favorite-path {
+  // 收藏面板需要展示完整路径，长路径允许换行而不是省略。
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.search-empty,
+.favorite-empty {
   color: #a8a8a8;
   font-size: 12px;
   font-weight: 600;
@@ -776,6 +885,11 @@ export default {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+// 已收藏时仅突出星标图标，未收藏状态继续沿用 Element UI 默认颜色。
+.favorite-button.is-favorite {
+  color: #E6A23C;
 }
 
 .note-toolbar {
