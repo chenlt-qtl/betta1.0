@@ -55,6 +55,38 @@ public class NoteFileController extends BaseController
     }
 
     /**
+     * 获取当前登录用户的有效收藏笔记。
+     *
+     * <p>服务层会过滤并清理已删除、非 Markdown 或非法路径，仅返回仍真实存在的笔记节点。</p>
+     *
+     * @return 包含收藏笔记节点列表的统一响应
+     */
+    @PreAuthorize("@ss.hasPermi('system:note:list')")
+    @GetMapping("/favorites")
+    public AjaxResult favorites()
+    {
+        List<NoteTreeNode> favorites = noteFileService.favorites(getUsername());
+        return success(favorites);
+    }
+
+    /**
+     * 设置指定笔记的收藏状态。
+     *
+     * <p>请求中的 path 表示当前用户 vault 内的笔记路径，favorite 表示期望状态；业务校验和幂等持久化由服务层完成。</p>
+     *
+     * @param request 包含笔记相对路径和期望收藏状态的请求对象
+     * @return 包含持久化后最终 boolean 收藏状态的统一响应
+     */
+    @PreAuthorize("@ss.hasPermi('system:note:edit')")
+    @Log(title = "笔记收藏", businessType = BusinessType.UPDATE)
+    @PutMapping("/favorite")
+    public AjaxResult favorite(@RequestBody NoteFileRequest request)
+    {
+        boolean favorite = noteFileService.favorite(getUsername(), request.getPath(), request.getFavorite());
+        return success(favorite);
+    }
+
+    /**
      * 读取单篇笔记正文。
      *
      * <p>返回内容、文件 hash 和图片资源前缀。前端保存时会带回 hash，用于检测是否被同步脚本或其他端修改。</p>
@@ -108,9 +140,26 @@ public class NoteFileController extends BaseController
     }
 
     /**
+     * 将多个文件或单个目录移动到指定目录。
+     *
+     * <p>Controller 只传递当前用户、待移动路径和目标目录；类型、冲突、越界及回滚校验统一由服务层处理。</p>
+     *
+     * @param request 包含待移动 paths 和目标 targetDirectory 的请求对象
+     * @return 包含与请求 paths 顺序一致的新相对路径列表的统一响应
+     */
+    @PreAuthorize("@ss.hasPermi('system:note:edit')")
+    @Log(title = "笔记文件移动", businessType = BusinessType.UPDATE)
+    @PutMapping("/file/move")
+    public AjaxResult move(@RequestBody NoteFileRequest request)
+    {
+        List<String> movedPaths = noteFileService.move(getUsername(), request.getPaths(), request.getTargetDirectory());
+        return success(movedPaths);
+    }
+
+    /**
      * 删除笔记文件或目录。
      *
-     * <p>目录删除会递归删除其子项；具体递归顺序和安全路径校验由服务层完成。</p>
+     * <p>目录仅在递归确认不含文件等非目录项时删除；具体检查、递归顺序和安全路径校验由服务层完成。</p>
      */
     @PreAuthorize("@ss.hasPermi('system:note:remove')")
     @Log(title = "笔记文件", businessType = BusinessType.DELETE)

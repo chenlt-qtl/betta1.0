@@ -39,6 +39,15 @@ export function renameNoteFile(data) {
   })
 }
 
+// 将多个笔记文件或单个文件夹移动到目标目录
+export function moveNoteFiles(data) {
+  return request({
+    url: '/system/note/file/move',
+    method: 'put',
+    data
+  })
+}
+
 export function deleteNoteFile(path) {
   return request({
     url: '/system/note/file',
@@ -52,6 +61,21 @@ export function searchNotes(keyword) {
     url: '/system/note/search',
     method: 'get',
     params: { keyword }
+  })
+}
+
+export function getFavoriteNotes() {
+  return request({
+    url: '/system/note/favorites',
+    method: 'get'
+  })
+}
+
+export function updateNoteFavorite(data) {
+  return request({
+    url: '/system/note/favorite',
+    method: 'put',
+    data
   })
 }
 

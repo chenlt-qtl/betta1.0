@@ -110,8 +110,8 @@ public class ApiDispatchServiceImpl implements IApiDispatchService {
                         continue;
                     }
 
-                    // 执行工具
-                    String result = executeTool(config, paramsJson);
+                    // 正则已完成匹配和参数提取，直接调用工具，避免对参数 JSON 重复执行正则匹配。
+                    String result = callTool(config, paramsJson);
                     return new MessageProcessResult("REGEX", config.getConfigName(), result, null);
                 }
             } catch (Exception e) {
