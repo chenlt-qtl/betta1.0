@@ -1,22 +1,17 @@
 package com.betta.robot.tools;
 
-import com.alibaba.fastjson2.JSON;
-import com.betta.common.utils.StringUtils;
 import com.betta.robot.dto.ActionResult;
-import com.betta.robot.dto.AddCardDTO;
-import com.betta.robot.dto.CommandDTO;
 import com.betta.system.domain.CardAccount;
-import com.betta.system.domain.CardHistory;
 import com.betta.system.service.ICardAccountService;
-import com.betta.system.service.ICardHistoryService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.Map;
 
 /**
- * 查询余额
+ * 查询并汇总全部卡片账户余额的机器人工具。
  */
 @Slf4j
 @Component
@@ -25,8 +20,14 @@ public class GetRestTool implements ITool {
     @Autowired
     private ICardAccountService cardAccountService;
 
+    /**
+     * 查询所有账户余额并生成面向用户的汇总文本。
+     *
+     * @param params 统一工具参数；当前查询余额业务无需使用参数
+     * @return 余额查询结果
+     */
     @Override
-    public ActionResult execute(CommandDTO commandDTO) {
+    public ActionResult execute(Map<String, Object> params) {
         try {
             List<CardAccount> accounts = cardAccountService.selectCardAccountList(new CardAccount());
             if (accounts == null || accounts.isEmpty()) {
