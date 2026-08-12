@@ -55,17 +55,49 @@
           {{ item.text }}
         </div>
       </div>
-      <viewer ref="viewer" class="viewer" height="calc(100vh - 230px)" />
+      <viewer ref="viewer" class="viewer" height="calc(100vh - 230px)" :options="viewerOptions" />
     </div>
   </div>
 </template>
 
 <script>
 import { Editor, Viewer } from '@toast-ui/vue-editor'
+import mermaid from 'mermaid'
 import '@toast-ui/editor/dist/toastui-editor.css'
 import '@toast-ui/editor/dist/toastui-editor-viewer.css'
 import 'codemirror/lib/codemirror.css'
 import { uploadNoteImage } from '@/api/note'
+
+mermaid.initialize({
+  startOnLoad: false,
+  securityLevel: 'strict'
+})
+
+function renderCodeBlock(node) {
+  const info = (node.info || '').trim().split(/\s+/)[0].toLowerCase()
+  if (info !== 'mermaid') {
+    // 普通代码块保持 Toast UI 默认的 pre/code 结构和语言标识。
+    const preClasses = info ? [`lang-${info}`] : []
+    const codeAttributes = info ? { 'data-language': info } : {}
+    return [
+      { type: 'openTag', tagName: 'pre', classNames: preClasses },
+      { type: 'openTag', tagName: 'code', attributes: codeAttributes },
+      { type: 'text', content: node.literal },
+      { type: 'closeTag', tagName: 'code' },
+      { type: 'closeTag', tagName: 'pre' }
+    ]
+  }
+  // 先输出安全的源码占位，挂载后再由 Mermaid 异步替换为 SVG。
+  return [
+    { type: 'openTag', tagName: 'div', classNames: ['mermaid-diagram'] },
+    { type: 'openTag', tagName: 'pre', classNames: ['mermaid-source'] },
+    { type: 'openTag', tagName: 'code', attributes: { 'data-language': 'mermaid' } },
+    { type: 'text', content: node.literal },
+    { type: 'closeTag', tagName: 'code' },
+    { type: 'closeTag', tagName: 'pre' },
+    { type: 'closeTag', tagName: 'div' }
+  ]
+}
 
 export default {
   name: 'NoteMarkdown',
@@ -105,6 +137,8 @@ export default {
       headings: [],
       // setMarkdown 会触发编辑器 change，使用该标记区分“程序同步”和“用户编辑”。
       syncingEditor: false,
+      // 每次预览刷新递增序号，阻止旧笔记的异步流程图覆盖新内容。
+      mermaidRenderSeq: 0,
       emojiPopoverVisible: false,
       // 第一版只放高频表情，作为普通 Unicode 字符写入 Markdown，Obsidian 和网页端都能直接显示。
       emojiList: [
@@ -117,6 +151,11 @@ export default {
       editorOptions: {
         hooks: {
           addImageBlobHook: this.uploadImage
+        }
+      },
+      viewerOptions: {
+        customHTMLRenderer: {
+          codeBlock: renderCodeBlock
         }
       }
     }
@@ -140,6 +179,7 @@ export default {
   },
   methods: {
     refresh() {
+      const renderSeq = ++this.mermaidRenderSeq
       this.$nextTick(() => {
         if (this.$refs.editor) {
           const current = this.$refs.editor.invoke('getMarkdown')
@@ -155,10 +195,47 @@ export default {
         if (this.$refs.viewer) {
           // 预览内容会把 Markdown 中的相对图片路径转换成浏览器可访问的 /file/** 地址。
           this.$refs.viewer.invoke('setMarkdown', this.displayMarkdown(), false)
-          this.$nextTick(this.decorateViewerHeadings)
+          this.$nextTick(() => {
+            this.decorateViewerHeadings()
+            if (this.viewer) {
+              this.renderMermaidDiagrams(renderSeq)
+            }
+          })
         }
         this.parseHeadings()
       })
+    },
+    renderMermaidDiagrams(renderSeq) {
+      const blocks = this.$el.querySelectorAll('.toastui-editor-contents .mermaid-diagram')
+      blocks.forEach((block, index) => {
+        const code = block.querySelector('code')
+        const source = code ? code.textContent.trim() : ''
+        if (!source) {
+          this.showMermaidError(block, '流程图内容为空')
+          return
+        }
+        const diagramId = `note-mermaid-${this._uid}-${renderSeq}-${index}`
+        mermaid.render(diagramId, source).then(result => {
+          // 笔记或模式已切换时放弃迟到结果，避免污染当前预览 DOM。
+          if (renderSeq !== this.mermaidRenderSeq || !this.viewer || !block.isConnected) {
+            return
+          }
+          block.classList.add('is-rendered')
+          block.innerHTML = result.svg
+        }).catch(() => {
+          if (renderSeq === this.mermaidRenderSeq && this.viewer && block.isConnected) {
+            // 单图语法错误只降级当前占位，源码保留供用户修正。
+            this.showMermaidError(block, '流程图语法错误，请检查源码')
+          }
+        })
+      })
+    },
+    showMermaidError(block, message) {
+      block.classList.add('has-error')
+      const error = document.createElement('div')
+      error.className = 'mermaid-error'
+      error.textContent = message
+      block.insertBefore(error, block.firstChild)
     },
     handleChange() {
       this.syncMarkdownFromEditor()
@@ -438,6 +515,31 @@ export default {
 .note-markdown ::v-deep .toastui-editor-contents ul,
 .note-markdown ::v-deep .toastui-editor-contents ol {
   padding-left: 1.6em;
+}
+
+.note-markdown ::v-deep .mermaid-diagram {
+  margin: 20px 0;
+  overflow-x: auto;
+  text-align: center;
+}
+
+.note-markdown ::v-deep .mermaid-diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.note-markdown ::v-deep .mermaid-diagram.has-error {
+  padding: 12px;
+  border: 1px solid #f5c2c7;
+  border-radius: 6px;
+  background: #fff5f5;
+  text-align: left;
+}
+
+.note-markdown ::v-deep .mermaid-error {
+  margin-bottom: 8px;
+  color: #c45656;
+  font-size: 13px;
 }
 
 @media (max-width: 768px) {

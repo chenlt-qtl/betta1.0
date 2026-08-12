@@ -78,10 +78,11 @@ export const constantRoutes = [
   {
     path: '',
     component: Layout,
-    redirect: 'shortcuts',
+    // 首页统一使用 /index，与登录、退出、登录失效及锁屏恢复等现有跳转保持一致。
+    redirect: 'index',
     children: [
       {
-        path: 'shortcuts',
+        path: 'index',
         component: () => import('@/views/shortcuts/index'),
         name: 'Shortcuts',
         meta: { title: '首页', icon: 'dashboard', affix: true }
