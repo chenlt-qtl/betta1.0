@@ -13,9 +13,16 @@
 <!--      <el-tooltip content="日历" placement="right">-->
 <!--        <i class="el-icon-date"></i>-->
 <!--      </el-tooltip>-->
+      <el-tooltip :content="sidebarCollapsed ? '展开侧栏' : '收起侧栏'" placement="right">
+        <i
+          class="sidebar-toggle"
+          :class="sidebarCollapsed ? 'el-icon-s-unfold' : 'el-icon-s-fold'"
+          @click="toggleSidebar"
+        ></i>
+      </el-tooltip>
     </nav>
 
-    <aside class="note-sidebar">
+    <aside v-show="!sidebarCollapsed" class="note-sidebar">
       <div v-if="activePanel === 'search'" class="sidebar-toolbar">
         <el-input
           ref="searchInput"
@@ -272,6 +279,8 @@ export default {
       keyword: '',
       // 左侧工具栏当前激活的面板：files 文件树、search 搜索结果、favorites 收藏列表。
       activePanel: 'files',
+      // 折叠时仅隐藏 360px 侧栏，保留 48px 工具栏和侧栏内的业务状态。
+      sidebarCollapsed: false,
       searchResults: [],
       // 搜索 loading 与请求序号配合使用，避免慢请求覆盖后输入的新结果。
       searchLoading: false,
@@ -501,6 +510,10 @@ export default {
           }
         })
       }
+    },
+    toggleSidebar() {
+      // v-show 只切换可见性，再次展开时不会重建树或触发额外请求。
+      this.sidebarCollapsed = !this.sidebarCollapsed
     },
     clearSearch() {
       window.clearTimeout(this.searchTimer)
@@ -913,6 +926,11 @@ export default {
   background: #e9e9e9;
 }
 
+.note-rail .sidebar-toggle {
+  margin-top: auto;
+  margin-bottom: 14px;
+}
+
 .note-sidebar {
   width: 360px;
   flex: 0 0 360px;
@@ -1236,6 +1254,12 @@ export default {
     padding: 0 12px;
     border-right: none;
     border-bottom: 1px solid #e6e6e6;
+  }
+
+  .note-rail .sidebar-toggle {
+    margin-top: 0;
+    margin-bottom: 0;
+    margin-left: auto;
   }
 
   .note-sidebar {

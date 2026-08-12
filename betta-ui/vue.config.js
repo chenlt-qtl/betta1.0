@@ -27,7 +27,7 @@ module.exports = {
   assetsDir: 'static',
   // 如果你不需要生产环境的 source map，可以将其设置为 false 以加速生产环境构建。
   productionSourceMap: false,
-  transpileDependencies: ['quill'],
+  transpileDependencies: ['quill', 'mermaid'],
   // webpack-dev-server 相关配置
   devServer: {
     host: '0.0.0.0',
@@ -83,6 +83,14 @@ module.exports = {
   chainWebpack(config) {
     config.plugins.delete('preload') // TODO: need test
     config.plugins.delete('prefetch') // TODO: need test
+
+    // Webpack 4 需按自动模块类型解析 Mermaid 的 .mjs，避免浏览器运行时误用 CommonJS exports。
+    config.module
+      .rule('mermaid-mjs')
+      .test(/\.mjs$/)
+      .include.add(resolve('node_modules/mermaid'))
+      .end()
+      .type('javascript/auto')
 
     // set svg-sprite-loader
     config.module
