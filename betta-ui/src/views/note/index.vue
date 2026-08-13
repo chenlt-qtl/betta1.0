@@ -10,9 +10,16 @@
       <el-tooltip content="收藏" placement="right">
         <i class="el-icon-collection-tag" :class="{ active: activePanel === 'favorites' }" @click="switchPanel('favorites')"></i>
       </el-tooltip>
-<!--      <el-tooltip content="日历" placement="right">-->
-<!--        <i class="el-icon-date"></i>-->
-<!--      </el-tooltip>-->
+      <el-tooltip content="打开/创建今天的日记" placement="right">
+        <i
+          :class="journalOpening ? 'el-icon-loading' : 'el-icon-date'"
+          @click="handleOpenJournal"
+          v-hasPermi="['system:note:add']"
+        ></i>
+      </el-tooltip>
+      <el-tooltip content="日记设置" placement="right">
+        <i class="el-icon-setting" @click="openJournalSettings" v-hasPermi="['system:note:list']"></i>
+      </el-tooltip>
       <el-tooltip :content="sidebarCollapsed ? '展开侧栏' : '收起侧栏'" placement="right">
         <i
           class="sidebar-toggle"
@@ -155,6 +162,7 @@
           class="workspace-title-input"
           size="mini"
           :disabled="!currentPath"
+          @input="incrementNoteContextVersion"
           @blur="handleTitleBlur"
         />
         <div class="workspace-actions">
@@ -250,6 +258,43 @@
         <el-button type="primary" :loading="moveSubmitting" @click="submitMove">确定移动</el-button>
       </span>
     </el-dialog>
+
+    <el-dialog
+      title="日记设置"
+      :visible.sync="journalSettingsVisible"
+      width="500px"
+      append-to-body
+      :close-on-click-modal="false"
+    >
+      <div class="journal-settings-label">日记的存放位置</div>
+      <div class="journal-settings-help">选择每天日记笔记的保存目录，默认保存到根目录。</div>
+      <el-tree
+        ref="journalFolderTree"
+        class="journal-folder-tree"
+        node-key="path"
+        :data="journalFolderTreeData"
+        :props="treeProps"
+        :expand-on-click-node="false"
+        :current-node-key="journalDirectory"
+        highlight-current
+        default-expand-all
+        @node-click="handleJournalDirectoryClick"
+      >
+        <span slot-scope="{ node, data }" class="tree-node" :class="{ active: data.path === journalDirectory }">
+          <i :class="data.path ? 'el-icon-folder' : 'el-icon-folder-opened'"></i>
+          <span class="tree-label">{{ node.label }}</span>
+        </span>
+      </el-tree>
+      <span slot="footer" class="dialog-footer">
+        <el-button @click="journalSettingsVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="journalSettingsSaving"
+          @click="saveJournalSettings"
+          v-hasPermi="['system:note:edit']"
+        >保存</el-button>
+      </span>
+    </el-dialog>
   </div>
 </template>
 
@@ -261,12 +306,15 @@ import {
   deleteNoteFile,
   downloadNoteFile,
   getFavoriteNotes,
+  getJournalSettings,
   getNoteContent,
   getNoteTree,
   moveNoteFiles,
+  openTodayJournal,
   renameNoteFile,
   saveNoteContent,
   searchNotes,
+  updateJournalSettings,
   updateNoteFavorite
 } from '@/api/note'
 
@@ -292,6 +340,12 @@ export default {
       favoriteLoadError: false,
       favoriteLoadSeq: 0,
       favoriteUpdating: false,
+      // 日记创建和设置分别加锁，防止连续点击产生重复请求或旧设置覆盖新选择。
+      journalOpening: false,
+      journalSettingsVisible: false,
+      journalSettingsLoading: false,
+      journalSettingsSaving: false,
+      journalDirectory: '',
       // 后端返回的 Markdown vault 文件树，仅展示笔记和普通目录，图片附件目录在后端已隐藏。
       treeData: [],
       treeProps: {
@@ -311,6 +365,8 @@ export default {
       // 当前选中的 vault 相对路径和节点类型；文件夹选中时会清空正文区域。
       currentPath: '',
       currentNodeType: '',
+      // 单调版本用于识别导航、正文和标题发生过 A→B→A，避免迟到的日记响应覆盖新上下文。
+      noteContextVersion: 0,
       // 顶部标题输入框内容。文件失焦时会重命名文件，文件夹失焦时会重命名目录。
       title: '',
       // 当前笔记正文、服务端 hash 和资源访问前缀。hash 用于保存时做冲突检测。
@@ -370,6 +426,15 @@ export default {
         children: this.buildMoveFolderTree(this.treeData)
       }]
     },
+    journalFolderTreeData() {
+      // 日记只能保存到真实目录；空路径作为固定的 vault 根目录入口。
+      return [{
+        name: '根目录',
+        path: '',
+        type: 'directory',
+        children: this.buildFolderTree(this.treeData)
+      }]
+    },
     currentFavorite() {
       return this.currentNodeType === 'file' && this.favoriteNotes.some(item => item.path === this.currentPath)
     }
@@ -391,7 +456,7 @@ export default {
       }
     },
     loadTree() {
-      getNoteTree().then(res => {
+      return getNoteTree().then(res => {
         this.treeData = res.data || []
         this.ensureSelectedFolderExists()
         this.syncMoveSelectionWithTree()
@@ -483,6 +548,7 @@ export default {
     },
     clearCurrentSelection() {
       // 统一清空右侧详情状态，供删除和筛选目录切换复用。
+      this.incrementNoteContextVersion()
       this.currentPath = ''
       this.currentNodeType = ''
       this.title = ''
@@ -555,6 +621,7 @@ export default {
         this.openNote(data.path)
       } else {
         // 文件夹不是可编辑笔记，选中时只显示文件夹占位并清空正文相关状态。
+        this.incrementNoteContextVersion()
         this.currentPath = data.path
         this.currentNodeType = data.type
         this.title = data.name
@@ -624,6 +691,11 @@ export default {
       const sources = this.moveSelection.map(item => item.path)
       const sourceTypes = this.moveSelection.map(item => item.type)
       this.moveSubmitting = true
+      if (sources.some((source, index) => this.currentPath === source
+        || (sourceTypes[index] === 'directory' && this.currentPath.indexOf(source + '/') === 0))) {
+        // 当前对象即将移动时立即推进版本，不等待接口返回，避免并发日记响应先落地。
+        this.incrementNoteContextVersion()
+      }
       // 若编辑器失焦已经触发自动保存，必须等旧路径保存完成后才能移动。
       const pendingSave = this.savePromise || Promise.resolve()
       pendingSave.then(() => moveNoteFiles({
@@ -700,24 +772,111 @@ export default {
       }
       this.loadNote(path)
     },
+    handleOpenJournal() {
+      if (this.journalOpening) {
+        return
+      }
+      const openJournal = () => {
+        // 用户可能连续确认多个弹窗，发请求前再次检查锁，确保始终只有一个日记请求。
+        if (this.journalOpening) {
+          return
+        }
+        // 请求期间仍允许用户继续操作；记录当前正文上下文，防止迟到响应覆盖后续编辑或导航。
+        const context = {
+          version: this.noteContextVersion,
+          content: this.content,
+          dirty: this.dirty
+        }
+        this.journalOpening = true
+        // 接口已经返回完整正文，直接打开可避免创建后再发起一次内容读取。
+        openTodayJournal().then(res => {
+          this.loadTree()
+          const contextUnchanged = this.noteContextVersion === context.version
+            && this.content === context.content
+            && this.dirty === context.dirty
+          if (contextUnchanged) {
+            this.applyNoteContent(res.data || {})
+            return
+          }
+          this.$modal.msgWarning('日记已创建/打开但当前内容已变化，可再次点击日记打开')
+        }).finally(() => {
+          this.journalOpening = false
+        })
+      }
+      if (this.dirty) {
+        this.$confirm('当前笔记尚未保存，是否继续打开今天的日记？', '提示', { type: 'warning' })
+          .then(openJournal)
+          .catch(() => {})
+        return
+      }
+      openJournal()
+    },
+    openJournalSettings() {
+      if (this.journalSettingsLoading) {
+        return
+      }
+      this.journalSettingsLoading = true
+      const showJournalSettings = () => {
+        this.journalSettingsVisible = true
+        this.$nextTick(() => {
+          if (this.$refs.journalFolderTree) {
+            this.$refs.journalFolderTree.setCurrentKey(this.journalDirectory)
+          }
+        })
+      }
+      getJournalSettings().then(res => {
+        const data = res.data || {}
+        this.journalDirectory = data.directory || ''
+        showJournalSettings()
+      }).catch(() => {
+        // 已配置目录失效时仍开放设置入口，让用户可以从根目录重新选择并修复配置。
+        this.journalDirectory = ''
+        showJournalSettings()
+        this.$modal.msgWarning('日记保存位置读取失败，请重新选择并保存目录')
+      }).finally(() => {
+        this.journalSettingsLoading = false
+      })
+    },
+    handleJournalDirectoryClick(data) {
+      this.journalDirectory = data.path || ''
+    },
+    saveJournalSettings() {
+      if (this.journalSettingsSaving) {
+        return
+      }
+      this.journalSettingsSaving = true
+      updateJournalSettings({ directory: this.journalDirectory }).then(res => {
+        const data = res.data || {}
+        this.journalDirectory = data.directory || ''
+        this.journalSettingsVisible = false
+        this.$modal.msgSuccess('日记保存位置已更新')
+      }).finally(() => {
+        this.journalSettingsSaving = false
+      })
+    },
     loadNote(path) {
       // loadingNote 用来屏蔽编辑器初始化时可能抛出的 change 事件，避免刚打开就变成未保存。
+      this.incrementNoteContextVersion()
       this.loadingNote = true
       getNoteContent(path).then(res => {
-        const data = res.data || {}
-        this.currentPath = data.path
-        this.currentNodeType = 'file'
-        this.title = this.fileTitle(data.path)
-        this.content = data.content || ''
-        this.hash = data.hash || ''
-        this.resourceBase = data.resourceBase || ''
-        this.dirty = false
-        this.viewer = true
-        this.$nextTick(() => {
-          this.dirty = false
-          this.loadingNote = false
-        })
+        this.applyNoteContent(res.data || {})
       }).catch(() => {
+        this.loadingNote = false
+      })
+    },
+    applyNoteContent(data) {
+      // 普通打开和日记创建共用同一状态入口，保证 viewer、hash 与资源路径保持一致。
+      this.loadingNote = true
+      this.currentPath = data.path
+      this.currentNodeType = 'file'
+      this.title = this.fileTitle(data.path)
+      this.content = data.content || ''
+      this.hash = data.hash || ''
+      this.resourceBase = data.resourceBase || ''
+      this.dirty = false
+      this.viewer = true
+      this.$nextTick(() => {
+        this.dirty = false
         this.loadingNote = false
       })
     },
@@ -745,8 +904,12 @@ export default {
     markDirty() {
       // 只有用户真实编辑正文时才置 dirty；加载笔记期间的同步事件会被忽略。
       if (!this.loadingNote) {
+        this.incrementNoteContextVersion()
         this.dirty = true
       }
+    },
+    incrementNoteContextVersion() {
+      this.noteContextVersion += 1
     },
     save() {
       if (this.savePromise) {
@@ -763,6 +926,9 @@ export default {
         // 路径已被移动或重命名时，迟到的保存响应不得把页面状态覆盖回旧路径。
         if (this.currentPath !== savingPath) {
           return
+        }
+        if (data.path !== this.currentPath) {
+          this.incrementNoteContextVersion()
         }
         this.currentPath = data.path
         this.hash = data.hash || ''
@@ -807,6 +973,8 @@ export default {
     handleDelete() {
       const path = this.currentPath
       this.$confirm(`确认删除 ${path}？`, '提示', { type: 'warning' }).then(() => {
+        // 删除确认即代表用户要离开当前对象，先失效仍在途的日记响应。
+        this.incrementNoteContextVersion()
         deleteNoteFile(path).then(() => {
           this.$modal.msgSuccess('删除成功')
           this.clearCurrentSelection()
@@ -842,6 +1010,7 @@ export default {
       // 文件标题显示时不带 .md，但落盘仍保持 Markdown 文件后缀；文件夹则直接使用输入名称。
       const nextName = this.currentNodeType === 'file' ? this.ensureMd(name) : name
       renameNoteFile({ path: this.currentPath, newPath: this.joinPath(parent, nextName) }).then(res => {
+        this.incrementNoteContextVersion()
         this.currentPath = res.data.path
         this.currentNodeType = res.data.type
         this.title = res.data.type === 'file' ? this.fileTitle(this.currentPath) : this.basename(this.currentPath)
@@ -991,6 +1160,22 @@ export default {
 }
 
 .move-folder-tree {
+  max-height: 360px;
+  overflow: auto;
+}
+
+.journal-settings-label {
+  color: #303133;
+  font-weight: 600;
+}
+
+.journal-settings-help {
+  margin: 6px 0 12px;
+  color: #909399;
+  font-size: 13px;
+}
+
+.journal-folder-tree {
   max-height: 360px;
   overflow: auto;
 }

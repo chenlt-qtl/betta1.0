@@ -6,6 +6,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.web.multipart.MultipartFile;
 import com.betta.system.domain.note.NoteContent;
 import com.betta.system.domain.note.NoteImageUploadResult;
+import com.betta.system.domain.note.NoteJournalSettings;
 import com.betta.system.domain.note.NoteSearchResult;
 import com.betta.system.domain.note.NoteSyncEntry;
 import com.betta.system.domain.note.NoteTreeNode;
@@ -57,6 +58,31 @@ public interface INoteFileService
      * @return 持久化后的最终收藏状态
      */
     boolean favorite(String userName, String path, Boolean favorite);
+
+    /**
+     * 查询当前用户的日记保存目录设置。
+     *
+     * @param userName 当前登录用户名，用于定位独立的用户 vault
+     * @return 日记设置；其中空目录表示日记保存在 vault 根目录
+     */
+    NoteJournalSettings journalSettings(String userName);
+
+    /**
+     * 更新当前用户的日记保存目录设置。
+     *
+     * @param userName 当前登录用户名，用于定位独立的用户 vault
+     * @param settings 待保存的日记设置；目录必须是 vault 内真实存在的目录，空目录表示根目录
+     * @return 经过规范化并成功持久化的日记设置
+     */
+    NoteJournalSettings updateJournalSettings(String userName, NoteJournalSettings settings);
+
+    /**
+     * 打开或创建当前日期对应的日记笔记。
+     *
+     * @param userName 当前登录用户名，用于定位独立的用户 vault
+     * @return 已存在或新创建的今日日记正文及文件信息
+     */
+    NoteContent openTodayJournal(String userName);
 
     List<NoteSearchResult> search(String userName, String keyword);
 
