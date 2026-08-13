@@ -79,6 +79,28 @@ export function updateNoteFavorite(data) {
   })
 }
 
+export function getJournalSettings() {
+  return request({
+    url: '/system/note/journal/settings',
+    method: 'get'
+  })
+}
+
+export function updateJournalSettings(data) {
+  return request({
+    url: '/system/note/journal/settings',
+    method: 'put',
+    data
+  })
+}
+
+export function openTodayJournal() {
+  return request({
+    url: '/system/note/journal/today',
+    method: 'post'
+  })
+}
+
 export function uploadNoteImage(file, notePath) {
   const data = new FormData()
   data.append('file', file)

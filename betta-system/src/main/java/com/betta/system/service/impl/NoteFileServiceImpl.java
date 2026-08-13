@@ -9,6 +9,7 @@ import java.nio.channels.Channels;
 import java.nio.channels.SeekableByteChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
@@ -16,6 +17,8 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.time.LocalDateTime;
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -37,6 +40,7 @@ import com.betta.common.exception.ServiceException;
 import com.betta.common.utils.StringUtils;
 import com.betta.system.domain.note.NoteContent;
 import com.betta.system.domain.note.NoteImageUploadResult;
+import com.betta.system.domain.note.NoteJournalSettings;
 import com.betta.system.domain.note.NoteSearchResult;
 import com.betta.system.domain.note.NoteSyncEntry;
 import com.betta.system.domain.note.NoteTreeNode;
@@ -58,12 +62,28 @@ public class NoteFileServiceImpl implements INoteFileService
     /** 用户 vault 根目录下的隐藏收藏元数据文件，每行保存一个规范化的 Markdown 相对路径。 */
     private static final String FAVORITES_FILE_NAME = ".favorites";
 
+    /** 用户 vault 根目录下的隐藏日记设置文件，正文仅保存规范化后的日记目录相对路径。 */
+    private static final String JOURNAL_SETTINGS_FILE_NAME = ".journal-directory";
+
+    /** 日记文件名格式，用于创建当天文件并识别同目录下可作为模板的历史日记。 */
+    private static final DateTimeFormatter JOURNAL_DATE_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE;
+
+    /** 严格限定日记文件名为 yyyy-MM-dd.md，避免把普通笔记误判为日记模板。 */
+    private static final Pattern JOURNAL_FILE_PATTERN = Pattern.compile("^(\\d{4}-\\d{2}-\\d{2})\\.md$");
+
     /**
      * 收藏元数据串行锁。
      *
      * <p>服务是 Spring 单例，收藏查询、设置以及重命名和删除联动统一通过该锁串行执行，避免读改写互相覆盖。</p>
      */
     private final Object favoriteMetadataLock = new Object();
+
+    /**
+     * 日记设置与创建串行锁。
+     *
+     * <p>服务是 Spring 单例，同一 JVM 内的设置读写和日记创建统一串行，避免重复点击覆盖当天文件或读到半写入设置。</p>
+     */
+    private final Object journalLock = new Object();
 
     /** 默认附件目录与 Obsidian Custom Attachment Location 保持一致，当配置文件没有配置时使用此配置。 */
     private static final String DEFAULT_ATTACHMENT_LOCATION = "999.图片/${noteFileName}";
@@ -770,6 +790,89 @@ public class NoteFileServiceImpl implements INoteFileService
         }
     }
 
+    /**
+     * 查询当前用户持久化的日记目录设置。
+     *
+     * @param userName 当前登录用户名
+     * @return 已通过 vault 边界和真实目录校验的日记设置
+     */
+    @Override
+    public NoteJournalSettings journalSettings(String userName)
+    {
+        synchronized (journalLock)
+        {
+            String directory = loadJournalDirectory(userName);
+            return buildJournalSettings(directory);
+        }
+    }
+
+    /**
+     * 更新当前用户的日记目录设置。
+     *
+     * @param userName 当前登录用户名
+     * @param settings 前端提交的设置，目录为空时表示 vault 根目录
+     * @return 规范化并成功保存的日记设置
+     */
+    @Override
+    public NoteJournalSettings updateJournalSettings(String userName, NoteJournalSettings settings)
+    {
+        if (settings == null)
+        {
+            throw new ServiceException("日记设置不能为空");
+        }
+        synchronized (journalLock)
+        {
+            // 保存前先完成目录存在性、隐藏路径、符号链接和真实路径边界校验，避免落盘无效配置。
+            String directory = normalizeJournalDirectory(settings.getDirectory());
+            resolveJournalDirectory(userName, directory);
+            writeJournalDirectory(vaultRoot(userName), directory);
+            return buildJournalSettings(directory);
+        }
+    }
+
+    /**
+     * 打开或创建服务器当前日期的日记笔记。
+     *
+     * <p>当天文件已存在时只读取；不存在时从设置目录直接下级选择日期早于今天且日期最大的日记，复制其完整 UTF-8 正文。</p>
+     *
+     * @param userName 当前登录用户名
+     * @return 当天日记的正文、哈希、更新时间和资源前缀
+     */
+    @Override
+    public NoteContent openTodayJournal(String userName)
+    {
+        synchronized (journalLock)
+        {
+            String directory = loadJournalDirectory(userName);
+            Path journalDirectory = resolveJournalDirectory(userName, directory);
+            LocalDate today = LocalDate.now();
+            Path todayFile = journalDirectory.resolve(JOURNAL_DATE_FORMATTER.format(today) + ".md");
+            if (Files.exists(todayFile, LinkOption.NOFOLLOW_LINKS))
+            {
+                assertReadableJournalFile(todayFile, "今日日记文件非法");
+                return readContent(userName, toRelative(vaultRoot(userName), todayFile));
+            }
+
+            String templateContent = readLatestJournalContent(journalDirectory, today);
+            try
+            {
+                // CREATE_NEW 保证即使有同 JVM 外的创建竞争，也不会覆盖已经产生的今日日记。
+                Files.writeString(todayFile, templateContent, StandardCharsets.UTF_8, StandardOpenOption.CREATE_NEW,
+                        StandardOpenOption.WRITE);
+            }
+            catch (FileAlreadyExistsException e)
+            {
+                // 另一执行方已经创建时转为只读打开，并继续拒绝符号链接或非普通文件。
+                assertReadableJournalFile(todayFile, "今日日记文件非法");
+            }
+            catch (IOException | RuntimeException e)
+            {
+                throw serviceException("创建今日日记失败", e);
+            }
+            return readContent(userName, toRelative(vaultRoot(userName), todayFile));
+        }
+    }
+
     @Override
     public List<NoteSearchResult> search(String userName, String keyword)
     {
@@ -974,6 +1077,291 @@ public class NoteFileServiceImpl implements INoteFileService
         node.setSize(Files.isDirectory(path) ? 0L : Files.size(path));
         node.setUpdateTime(Files.getLastModifiedTime(path).toMillis());
         return node;
+    }
+
+    /**
+     * 读取日记目录隐藏设置文件，并再次校验目录当前仍真实存在且位于用户 vault 内。
+     *
+     * @param userName 当前登录用户名
+     * @return 规范化后的 vault 相对目录，空字符串表示根目录
+     */
+    private String loadJournalDirectory(String userName)
+    {
+        Path root = vaultRoot(userName);
+        ensureDirectory(root);
+        Path metadataFile = journalSettingsMetadataPath(root);
+        String directory = "";
+        try
+        {
+            if (Files.exists(metadataFile, LinkOption.NOFOLLOW_LINKS))
+            {
+                assertSafeJournalMetadataTarget(metadataFile);
+                // 通过 NOFOLLOW_LINKS 打开固定元数据文件，避免跟随被预置的符号链接读取 vault 外内容。
+                try (SeekableByteChannel channel = Files.newByteChannel(metadataFile, StandardOpenOption.READ,
+                        LinkOption.NOFOLLOW_LINKS);
+                        BufferedReader reader = new BufferedReader(Channels.newReader(channel, StandardCharsets.UTF_8)))
+                {
+                    String firstLine = reader.readLine();
+                    String extraLine = reader.readLine();
+                    if (extraLine != null)
+                    {
+                        throw new ServiceException("日记设置文件内容非法");
+                    }
+                    directory = normalizeJournalDirectory(StringUtils.nvl(firstLine, ""));
+                }
+            }
+        }
+        catch (ServiceException e)
+        {
+            throw e;
+        }
+        catch (IOException | RuntimeException e)
+        {
+            throw serviceException("读取日记设置失败", e);
+        }
+        // 设置目录可能被外部重命名或删除，读取时重新校验并明确要求用户重新设置。
+        resolveJournalDirectory(userName, directory);
+        return directory;
+    }
+
+    /**
+     * 规范化日记目录输入并拒绝可造成越界或多行元数据的路径格式。
+     *
+     * @param directory 前端提交或隐藏设置文件读取出的目录
+     * @return 使用正斜杠的相对目录；null 和空字符串均表示根目录
+     */
+    private String normalizeJournalDirectory(String directory)
+    {
+        String normalized = StringUtils.nvl(directory, "").replace("\\", "/");
+        if (normalized.contains("\r") || normalized.contains("\n") || normalized.contains("\0")
+                || normalized.startsWith("/") || normalized.matches("^[A-Za-z]:($|/.*)"))
+        {
+            throw new ServiceException("日记目录路径非法");
+        }
+        if (normalized.isEmpty())
+        {
+            return "";
+        }
+        Path normalizedPath;
+        try
+        {
+            normalizedPath = Path.of(normalized).normalize();
+        }
+        catch (RuntimeException e)
+        {
+            throw serviceException("日记目录路径非法", e);
+        }
+        String result = normalizedPath.toString().replace("\\", "/");
+        if (result.isEmpty() || ".".equals(result))
+        {
+            return "";
+        }
+        return result;
+    }
+
+    /**
+     * 将日记目录解析为用户 vault 内真实存在的普通目录。
+     *
+     * @param userName 当前登录用户名
+     * @param directory 已规范化的 vault 相对目录，空字符串表示根目录
+     * @return 通过真实路径边界校验的目录路径
+     */
+    private Path resolveJournalDirectory(String userName, String directory)
+    {
+        Path root = vaultRoot(userName);
+        ensureDirectory(root);
+        Path target = StringUtils.isEmpty(directory) ? root : root.resolve(directory).normalize().toAbsolutePath();
+        if (!target.startsWith(root) || isIgnored(root, target))
+        {
+            throw new ServiceException("日记目录路径越界或不允许访问");
+        }
+        if (!Files.exists(target, LinkOption.NOFOLLOW_LINKS)
+                || !Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS)
+                || Files.isSymbolicLink(target))
+        {
+            throw new ServiceException("日记目录必须是已存在的真实目录");
+        }
+        Path realRoot = toRealPath(root, "校验笔记根目录失败");
+        Path realTarget = toRealPath(target, "校验日记目录失败");
+        if (!realTarget.startsWith(realRoot))
+        {
+            throw new ServiceException("日记目录路径越界");
+        }
+        return target;
+    }
+
+    /**
+     * 将日记目录写入 vault 根目录下的隐藏元数据文件。
+     *
+     * @param root 当前用户 vault 根目录
+     * @param directory 已规范化的 vault 相对目录，空字符串表示根目录
+     */
+    private void writeJournalDirectory(Path root, String directory)
+    {
+        ensureDirectory(root);
+        Path metadataFile = journalSettingsMetadataPath(root);
+        Path temporaryFile = null;
+        try
+        {
+            // 随机临时文件与正式文件位于同一目录，以便支持原子替换并防止固定临时路径被预置。
+            temporaryFile = Files.createTempFile(root, ".journal-directory-", ".tmp");
+            Files.writeString(temporaryFile, directory, StandardCharsets.UTF_8, StandardOpenOption.WRITE,
+                    StandardOpenOption.TRUNCATE_EXISTING, LinkOption.NOFOLLOW_LINKS);
+            assertSafeJournalMetadataTarget(metadataFile);
+            try
+            {
+                Files.move(temporaryFile, metadataFile, StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING);
+            }
+            catch (AtomicMoveNotSupportedException e)
+            {
+                Files.move(temporaryFile, metadataFile, StandardCopyOption.REPLACE_EXISTING);
+            }
+        }
+        catch (ServiceException e)
+        {
+            throw e;
+        }
+        catch (IOException | RuntimeException e)
+        {
+            throw serviceException("保存日记设置失败", e);
+        }
+        finally
+        {
+            if (temporaryFile != null)
+            {
+                try
+                {
+                    Files.deleteIfExists(temporaryFile);
+                }
+                catch (IOException | RuntimeException ignored)
+                {
+                    // 隐藏临时文件不会进入笔记树、搜索或同步清单，清理失败不覆盖主流程结果。
+                }
+            }
+        }
+    }
+
+    /**
+     * 查找并读取设置目录直接下级中日期最近、且早于今天的日记正文。
+     *
+     * @param journalDirectory 已完成安全校验的日记目录
+     * @param today 服务器当前日期
+     * @return 最近历史日记的完整 UTF-8 正文；不存在历史日记时返回空字符串
+     */
+    private String readLatestJournalContent(Path journalDirectory, LocalDate today)
+    {
+        Path latestFile = null;
+        LocalDate latestDate = null;
+        try (Stream<Path> paths = Files.list(journalDirectory))
+        {
+            for (Path path : (Iterable<Path>) paths::iterator)
+            {
+                LocalDate journalDate = parseHistoricalJournalDate(path, today);
+                if (journalDate != null && (latestDate == null || journalDate.isAfter(latestDate)))
+                {
+                    latestDate = journalDate;
+                    latestFile = path;
+                }
+            }
+            if (latestFile == null)
+            {
+                return "";
+            }
+            assertReadableJournalFile(latestFile, "历史日记文件非法");
+            return Files.readString(latestFile, StandardCharsets.UTF_8);
+        }
+        catch (ServiceException e)
+        {
+            throw e;
+        }
+        catch (IOException | RuntimeException e)
+        {
+            throw serviceException("读取历史日记失败", e);
+        }
+    }
+
+    /**
+     * 从普通文件名中解析可作为模板的历史日记日期。
+     *
+     * @param path 设置目录直接下级的候选路径
+     * @param today 服务器当前日期
+     * @return 严格符合 yyyy-MM-dd.md 且早于今天的日期，否则返回 null
+     */
+    private LocalDate parseHistoricalJournalDate(Path path, LocalDate today)
+    {
+        if (Files.isSymbolicLink(path) || !Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS))
+        {
+            return null;
+        }
+        Matcher matcher = JOURNAL_FILE_PATTERN.matcher(path.getFileName().toString());
+        if (!matcher.matches())
+        {
+            return null;
+        }
+        try
+        {
+            LocalDate date = LocalDate.parse(matcher.group(1), JOURNAL_DATE_FORMATTER);
+            return date.isBefore(today) ? date : null;
+        }
+        catch (DateTimeParseException ignored)
+        {
+            // 形如 2026-02-30.md 的非法自然日期不能作为日记模板。
+            return null;
+        }
+    }
+
+    /**
+     * 确认已存在的日记路径是未跟随符号链接的普通 Markdown 文件。
+     *
+     * @param file 待校验的日记文件
+     * @param message 校验失败时返回给调用方的业务提示
+     */
+    private void assertReadableJournalFile(Path file, String message)
+    {
+        if (Files.isSymbolicLink(file) || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS) || !isMarkdown(file))
+        {
+            throw new ServiceException(message);
+        }
+    }
+
+    /**
+     * 构造日记设置返回对象。
+     *
+     * @param directory 规范化后的 vault 相对目录
+     * @return 可直接返回给 Controller 的日记设置对象
+     */
+    private NoteJournalSettings buildJournalSettings(String directory)
+    {
+        NoteJournalSettings settings = new NoteJournalSettings();
+        settings.setDirectory(directory);
+        return settings;
+    }
+
+    /**
+     * 校验日记设置元数据固定路径不存在，或仍是未跟随链接的普通文件。
+     *
+     * @param metadataFile vault 根目录下固定的日记设置文件路径
+     */
+    private void assertSafeJournalMetadataTarget(Path metadataFile)
+    {
+        if (Files.exists(metadataFile, LinkOption.NOFOLLOW_LINKS)
+                && (Files.isSymbolicLink(metadataFile)
+                        || !Files.isRegularFile(metadataFile, LinkOption.NOFOLLOW_LINKS)))
+        {
+            throw new ServiceException("日记设置文件非法，拒绝访问");
+        }
+    }
+
+    /**
+     * 获取当前用户 vault 中固定的日记设置隐藏文件路径。
+     *
+     * @param root 当前用户 vault 根目录
+     * @return vault 根目录下的日记设置文件路径
+     */
+    private Path journalSettingsMetadataPath(Path root)
+    {
+        return root.resolve(JOURNAL_SETTINGS_FILE_NAME);
     }
 
     /**

@@ -20,6 +20,7 @@ import com.betta.common.core.domain.AjaxResult;
 import com.betta.common.enums.BusinessType;
 import com.betta.system.domain.note.NoteContent;
 import com.betta.system.domain.note.NoteFileRequest;
+import com.betta.system.domain.note.NoteJournalSettings;
 import com.betta.system.domain.note.NoteSearchResult;
 import com.betta.system.domain.note.NoteSyncEntry;
 import com.betta.system.domain.note.NoteTreeNode;
@@ -84,6 +85,50 @@ public class NoteFileController extends BaseController
     {
         boolean favorite = noteFileService.favorite(getUsername(), request.getPath(), request.getFavorite());
         return success(favorite);
+    }
+
+    /**
+     * 获取当前登录用户的日记保存目录设置。
+     *
+     * @return 包含日记目录设置的统一响应；空目录表示用户 vault 根目录
+     */
+    @PreAuthorize("@ss.hasPermi('system:note:list')")
+    @GetMapping("/journal/settings")
+    public AjaxResult journalSettings()
+    {
+        NoteJournalSettings settings = noteFileService.journalSettings(getUsername());
+        return success(settings);
+    }
+
+    /**
+     * 更新当前登录用户的日记保存目录设置。
+     *
+     * @param settings 前端提交的 vault 相对目录设置，空目录表示根目录
+     * @return 包含规范化后日记目录设置的统一响应
+     */
+    @PreAuthorize("@ss.hasPermi('system:note:edit')")
+    @Log(title = "日记设置", businessType = BusinessType.UPDATE)
+    @PutMapping("/journal/settings")
+    public AjaxResult updateJournalSettings(@RequestBody NoteJournalSettings settings)
+    {
+        NoteJournalSettings savedSettings = noteFileService.updateJournalSettings(getUsername(), settings);
+        return success(savedSettings);
+    }
+
+    /**
+     * 打开或创建当前登录用户的今日日记。
+     *
+     * <p>Controller 只传递当前用户，日期、模板选择、文件创建和并发保护均由服务层处理。</p>
+     *
+     * @return 包含今日日记正文及文件信息的统一响应
+     */
+    @PreAuthorize("@ss.hasPermi('system:note:add')")
+    @Log(title = "今日日记", businessType = BusinessType.INSERT)
+    @PostMapping("/journal/today")
+    public AjaxResult openTodayJournal()
+    {
+        NoteContent content = noteFileService.openTodayJournal(getUsername());
+        return success(content);
     }
 
     /**
