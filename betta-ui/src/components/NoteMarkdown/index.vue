@@ -223,11 +223,22 @@ export default {
           block.classList.add('is-rendered')
           block.innerHTML = result.svg
         }).catch(() => {
+          // Mermaid 渲染失败时可能在 body 中遗留错误提示容器，需按本次图表 ID 精确清理。
+          this.cleanupMermaidArtifacts(diagramId)
           if (renderSeq === this.mermaidRenderSeq && this.viewer && block.isConnected) {
             // 单图语法错误只降级当前占位，源码保留供用户修正。
             this.showMermaidError(block, '流程图语法错误，请检查源码')
           }
         })
+      })
+    },
+    cleanupMermaidArtifacts(diagramId) {
+      [`d${diagramId}`, `i${diagramId}`, diagramId].forEach(elementId => {
+        const element = document.getElementById(elementId)
+        // 父容器可能已先被删除，逐个判断可保证重复清理也不会报错。
+        if (element && element.parentNode) {
+          element.parentNode.removeChild(element)
+        }
       })
     },
     showMermaidError(block, message) {
