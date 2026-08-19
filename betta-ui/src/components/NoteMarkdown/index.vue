@@ -180,6 +180,8 @@ export default {
   methods: {
     refresh() {
       const renderSeq = ++this.mermaidRenderSeq
+      // 编辑状态只同步编辑器；进入预览后再用当前内容快照重建 Viewer，避免反复刷新隐藏 DOM。
+      const viewerMarkdown = this.viewer ? this.displayMarkdown() : ''
       this.$nextTick(() => {
         if (this.$refs.editor) {
           const current = this.$refs.editor.invoke('getMarkdown')
@@ -192,43 +194,66 @@ export default {
             }, 0)
           }
         }
-        if (this.$refs.viewer) {
+        if (this.viewer && this.$refs.viewer && renderSeq === this.mermaidRenderSeq) {
           // 预览内容会把 Markdown 中的相对图片路径转换成浏览器可访问的 /file/** 地址。
-          this.$refs.viewer.invoke('setMarkdown', this.displayMarkdown(), false)
+          this.$refs.viewer.invoke('setMarkdown', viewerMarkdown, false)
           this.$nextTick(() => {
-            this.decorateViewerHeadings()
-            if (this.viewer) {
-              this.renderMermaidDiagrams(renderSeq)
+            if (renderSeq !== this.mermaidRenderSeq || !this.viewer) {
+              return
             }
+            this.decorateViewerHeadings()
+            this.renderMermaidDiagrams(renderSeq)
           })
         }
         this.parseHeadings()
       })
     },
-    renderMermaidDiagrams(renderSeq) {
-      const blocks = this.$el.querySelectorAll('.toastui-editor-contents .mermaid-diagram')
-      blocks.forEach((block, index) => {
+    async renderMermaidDiagrams(renderSeq) {
+      const viewer = this.$refs.viewer && this.$refs.viewer.$el
+      if (!viewer || renderSeq !== this.mermaidRenderSeq || !this.viewer) {
+        return
+      }
+      const blocks = Array.from(viewer.querySelectorAll('.toastui-editor-contents .mermaid-diagram'))
+      // Mermaid 内部渲染会操作临时 DOM，按顺序处理可避免多图并发时互相影响。
+      for (let index = 0; index < blocks.length; index++) {
+        const block = blocks[index]
+        if (renderSeq !== this.mermaidRenderSeq || !this.viewer || !viewer.isConnected || !block.isConnected) {
+          return
+        }
         const code = block.querySelector('code')
         const source = code ? code.textContent.trim() : ''
         if (!source) {
           this.showMermaidError(block, '流程图内容为空')
+          continue
+        }
+        try {
+          await mermaid.parse(source)
+        } catch (error) {
+          if (renderSeq === this.mermaidRenderSeq && this.viewer && viewer.isConnected && block.isConnected) {
+            // 只有解析失败才属于源码语法错误，保留源码供用户修正。
+            this.showMermaidError(block, '流程图语法错误，请检查源码')
+          }
+          continue
+        }
+        if (renderSeq !== this.mermaidRenderSeq || !this.viewer || !viewer.isConnected || !block.isConnected) {
           return
         }
         const diagramId = `note-mermaid-${this._uid}-${renderSeq}-${index}`
-        mermaid.render(diagramId, source).then(result => {
+        try {
+          const result = await mermaid.render(diagramId, source)
           // 笔记或模式已切换时放弃迟到结果，避免污染当前预览 DOM。
-          if (renderSeq !== this.mermaidRenderSeq || !this.viewer || !block.isConnected) {
+          if (renderSeq !== this.mermaidRenderSeq || !this.viewer || !viewer.isConnected || !block.isConnected) {
             return
           }
           block.classList.add('is-rendered')
           block.innerHTML = result.svg
-        }).catch(() => {
-          if (renderSeq === this.mermaidRenderSeq && this.viewer && block.isConnected) {
-            // 单图语法错误只降级当前占位，源码保留供用户修正。
-            this.showMermaidError(block, '流程图语法错误，请检查源码')
+        } catch (error) {
+          if (renderSeq === this.mermaidRenderSeq && this.viewer && viewer.isConnected && block.isConnected) {
+            // 已通过语法解析的图仅提示运行期渲染失败，避免误导用户修改正确源码。
+            this.showMermaidError(block, '流程图渲染失败，请重试')
           }
-        })
-      })
+        }
+      }
     },
     showMermaidError(block, message) {
       block.classList.add('has-error')
