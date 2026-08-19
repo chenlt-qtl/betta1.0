@@ -143,6 +143,7 @@ import { listSentence, getSentence, delSentence, addSentence, updateSentence } f
 
 export default {
   name: "Sentence",
+  dicts: ['sys_user_sex'],
   data() {
     return {
       // 遮罩层

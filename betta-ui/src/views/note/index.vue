@@ -1,6 +1,11 @@
 <template>
-  <div class="app-container note-page">
-    <nav class="note-rail">
+  <div
+    ref="notePage"
+    class="app-container note-page"
+    :class="{ 'is-sidebar-resizing': sidebarResizing }"
+    :style="{ '--note-sidebar-width': sidebarWidth + 'px' }"
+  >
+    <nav ref="noteRail" class="note-rail">
       <el-tooltip content="文件" placement="right">
         <i class="el-icon-folder-opened" :class="{ active: activePanel === 'files' }" @click="switchPanel('files')"></i>
       </el-tooltip>
@@ -87,7 +92,7 @@
               :disabled="!moveSelection.length || moveSubmitting"
               @click="openMoveDialog"
               v-hasPermi="['system:note:edit']"
-            >移动</el-button>
+            ></el-button>
           </span>
         </el-tooltip>
       </div>
@@ -150,6 +155,14 @@
         </div>
       </div>
     </aside>
+
+    <div
+      v-show="!sidebarCollapsed"
+      class="sidebar-resizer"
+      role="separator"
+      aria-orientation="vertical"
+      @mousedown.prevent="startSidebarResize"
+    ></div>
 
     <main class="note-workspace">
       <div class="workspace-topbar">
@@ -327,8 +340,15 @@ export default {
       keyword: '',
       // 左侧工具栏当前激活的面板：files 文件树、search 搜索结果、favorites 收藏列表。
       activePanel: 'files',
-      // 折叠时仅隐藏 360px 侧栏，保留 48px 工具栏和侧栏内的业务状态。
+      // 折叠时仅隐藏侧栏，保留 48px 工具栏和侧栏内的业务状态。
       sidebarCollapsed: false,
+      // 侧栏宽度仅在当前页面会话中生效，刷新后恢复默认值。
+      sidebarWidth: 360,
+      sidebarResizing: false,
+      sidebarResizeStartX: 0,
+      sidebarResizeStartWidth: 360,
+      previousBodyCursor: '',
+      previousBodyUserSelect: '',
       searchResults: [],
       // 搜索 loading 与请求序号配合使用，避免慢请求覆盖后输入的新结果。
       searchLoading: false,
@@ -445,15 +465,74 @@ export default {
   beforeDestroy() {
     window.removeEventListener('resize', this.handleResize)
     window.clearTimeout(this.searchTimer)
+    // 页面销毁时兜底移除拖拽监听和全局样式，避免影响其他页面。
+    this.stopSidebarResize()
   },
   methods: {
     isMobileViewport() {
       return window.innerWidth <= 768
     },
+    isCompactViewport() {
+      return window.innerWidth <= 960
+    },
     handleResize() {
       if (this.isMobileViewport()) {
         this.tocCollapsed = true
       }
+      if (this.isCompactViewport()) {
+        // 切换为上下布局时立即停止拖拽，移动端侧栏宽度继续由媒体查询控制。
+        this.stopSidebarResize()
+        return
+      }
+      this.sidebarWidth = this.clampSidebarWidth(this.sidebarWidth)
+    },
+    getSidebarWidthBounds() {
+      const pageWidth = this.$refs.notePage ? this.$refs.notePage.clientWidth : window.innerWidth
+      const railWidth = this.$refs.noteRail ? this.$refs.noteRail.offsetWidth : 48
+      // 最大宽度同时受固定上限和页面可用宽度 55% 限制，确保右侧工作区仍有可用空间。
+      const availableWidth = Math.max(0, pageWidth - railWidth)
+      return {
+        min: 240,
+        max: Math.max(240, Math.min(600, Math.floor(availableWidth * 0.55)))
+      }
+    },
+    clampSidebarWidth(width) {
+      const bounds = this.getSidebarWidthBounds()
+      return Math.min(bounds.max, Math.max(bounds.min, width))
+    },
+    startSidebarResize(event) {
+      if (this.isCompactViewport() || event.button !== 0 || this.sidebarResizing) {
+        return
+      }
+      this.sidebarResizing = true
+      this.sidebarResizeStartX = event.clientX
+      this.sidebarResizeStartWidth = this.sidebarWidth
+      this.previousBodyCursor = document.body.style.cursor
+      this.previousBodyUserSelect = document.body.style.userSelect
+      // 拖动超出页面区域后仍保持调整光标，并避免误选树节点或正文文字。
+      document.body.style.cursor = 'col-resize'
+      document.body.style.userSelect = 'none'
+      window.addEventListener('mousemove', this.handleSidebarResize)
+      window.addEventListener('mouseup', this.stopSidebarResize)
+      window.addEventListener('blur', this.stopSidebarResize)
+    },
+    handleSidebarResize(event) {
+      if (!this.sidebarResizing) {
+        return
+      }
+      const nextWidth = this.sidebarResizeStartWidth + event.clientX - this.sidebarResizeStartX
+      this.sidebarWidth = this.clampSidebarWidth(nextWidth)
+    },
+    stopSidebarResize() {
+      window.removeEventListener('mousemove', this.handleSidebarResize)
+      window.removeEventListener('mouseup', this.stopSidebarResize)
+      window.removeEventListener('blur', this.stopSidebarResize)
+      if (!this.sidebarResizing) {
+        return
+      }
+      this.sidebarResizing = false
+      document.body.style.cursor = this.previousBodyCursor
+      document.body.style.userSelect = this.previousBodyUserSelect
     },
     loadTree() {
       return getNoteTree().then(res => {
@@ -579,6 +658,9 @@ export default {
     },
     toggleSidebar() {
       // v-show 只切换可见性，再次展开时不会重建树或触发额外请求。
+      if (!this.sidebarCollapsed) {
+        this.stopSidebarResize()
+      }
       this.sidebarCollapsed = !this.sidebarCollapsed
     },
     clearSearch() {
@@ -1101,13 +1183,43 @@ export default {
 }
 
 .note-sidebar {
-  width: 360px;
-  flex: 0 0 360px;
+  width: var(--note-sidebar-width);
+  flex: 0 0 var(--note-sidebar-width);
   background: #f7f7f7;
   border-right: 1px solid #dedede;
   overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+
+.sidebar-resizer {
+  position: relative;
+  z-index: 1;
+  width: 6px;
+  flex: 0 0 6px;
+  margin-left: -1px;
+  cursor: col-resize;
+}
+
+.sidebar-resizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 2px;
+  background: transparent;
+}
+
+.sidebar-resizer:hover::after,
+.is-sidebar-resizing .sidebar-resizer::after {
+  background: #409eff;
+}
+
+.is-sidebar-resizing,
+.is-sidebar-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
 }
 
 .sidebar-toolbar {
@@ -1455,6 +1567,10 @@ export default {
     border-bottom: 1px solid #e6e8eb;
     padding-right: 0;
     padding-bottom: 12px;
+  }
+
+  .sidebar-resizer {
+    display: none;
   }
 
   .workspace-topbar {
