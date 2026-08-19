@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.betta.eng.mapper.EngWrongWordMapper">
+    <resultMap id="WrongMap" type="EngWrongWord">
+        <id property="id" column="id"/>
+        <result property="userId" column="user_id"/>
+        <result property="articleId" column="article_id"/>
+        <result property="wordId" column="word_id"/>
+        <result property="wrongCount" column="wrong_count"/>
+        <result property="mastered" column="mastered"/>
+        <result property="articleTitle" column="article_title"/>
+        <result property="wordName" column="word_name"/>
+        <result property="acceptation" column="acceptation"/>
+        <result property="createBy" column="create_by"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updateBy" column="update_by"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+    <select id="selectEngWrongWordList" parameterType="EngWrongWord" resultMap="WrongMap">
+        select x.*,a.title article_title,w.word_name,w.acceptation
+        from eng_wrong_word x
+        join eng_article a on a.id=x.article_id
+        join eng_word w on w.id=x.word_id
+        where x.user_id=#{userId}
+        <if test="mastered!=null">
+            and x.mastered=#{mastered}
+        </if>
+        <if test="wordName!=null and wordName!=''">
+            and w.word_name like concat('%',#{wordName},'%')
+        </if>
+        order by x.update_time desc,x.id desc
+    </select>
+    <select id="selectByUserArticleWord" parameterType="EngWrongWord" resultMap="WrongMap">
+        select * from eng_wrong_word
+        where user_id=#{userId} and article_id=#{articleId} and word_id=#{wordId}
+    </select>
+    <insert id="upsertWrongWord" parameterType="EngWrongWord">
+        insert into eng_wrong_word(user_id,article_id,word_id,wrong_count,mastered,create_by,create_time,update_by,update_time)
+        values(#{userId},#{articleId},#{wordId},1,0,#{createBy},now(),#{updateBy},now())
+        on duplicate key update wrong_count=wrong_count+1,mastered=0,update_by=values(update_by),update_time=now()
+    </insert>
+    <update id="updateEngWrongWord" parameterType="EngWrongWord">
+        update eng_wrong_word
+        set wrong_count=#{wrongCount},mastered=#{mastered},update_by=#{updateBy},update_time=now()
+        where id=#{id} and user_id=#{userId}
+    </update>
+    <update id="markMasteredByUserArticleWord">
+        update eng_wrong_word
+        set mastered=1,update_by=#{updateBy},update_time=now()
+        where user_id=#{userId} and article_id=#{articleId} and word_id=#{wordId}
+    </update>
+    <select id="countByUserAndMastered" resultType="long">
+        select count(*) from eng_wrong_word where user_id=#{userId} and mastered=#{mastered}
+    </select>
+    <update id="markMastered">
+        update eng_wrong_word
+        set mastered=1,update_by=#{updateBy},update_time=now()
+        where id=#{id} and user_id=#{userId}
+    </update>
+</mapper>

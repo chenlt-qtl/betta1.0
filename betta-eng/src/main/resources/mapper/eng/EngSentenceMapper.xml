@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.betta.eng.mapper.EngSentenceMapper">
+    <resultMap id="SentenceMap" type="SentenceVo">
+        <id property="id" column="id"/>
+        <result property="articleId" column="article_id"/>
+        <result property="articleName" column="article_name"/>
+        <result property="groupName" column="group_name"/>
+        <result property="groupId" column="group_id"/>
+        <result property="content" column="content"/>
+        <result property="acceptation" column="acceptation"/>
+        <result property="idx" column="idx"/>
+        <result property="picture" column="picture"/>
+        <result property="mp3" column="mp3"/>
+        <result property="mp3Time" column="mp3_time"/>
+        <result property="status" column="status"/>
+        <result property="createBy" column="create_by"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updateBy" column="update_by"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+    <sql id="columns">
+        s.id,s.article_id,s.content,s.acceptation,s.idx,s.picture,s.mp3,s.mp3_time,s.status,
+        s.create_by,s.create_time,s.update_by,s.update_time
+    </sql>
+    <select id="selectEngSentenceById" resultMap="SentenceMap">
+        select <include refid="columns"/> from eng_sentence s
+        where s.id=#{id} and s.create_by=#{username}
+    </select>
+    <select id="selectEngSentenceList" parameterType="EngSentence" resultMap="SentenceMap">
+        select <include refid="columns"/> from eng_sentence s
+        <where>
+            <if test="articleId!=null">
+                and s.article_id=#{articleId}
+            </if>
+            <if test="content!=null and content!=''">
+                and s.content like concat('%',#{content},'%')
+            </if>
+            <if test="acceptation!=null and acceptation!=''">
+                and s.acceptation like concat('%',#{acceptation},'%')
+            </if>
+            <if test="createBy!=null and createBy!=''">
+                and s.create_by=#{createBy}
+            </if>
+        </where>
+        order by s.idx,s.id
+    </select>
+    <insert id="insertEngSentence" parameterType="EngSentence" useGeneratedKeys="true" keyProperty="id">
+        insert into eng_sentence(article_id,content,acceptation,idx,picture,mp3,mp3_time,status,create_by,create_time)
+        values(#{articleId},#{content},#{acceptation},#{idx},#{picture},#{mp3},#{mp3Time},#{status},#{createBy},now())
+    </insert>
+    <update id="updateEngSentence" parameterType="EngSentence">
+        update eng_sentence
+        set article_id=#{articleId},content=#{content},acceptation=#{acceptation},idx=#{idx},picture=#{picture},
+            mp3=#{mp3},mp3_time=#{mp3Time},status=#{status},update_by=#{updateBy},update_time=now()
+        where id=#{id} and create_by=#{createBy}
+    </update>
+    <delete id="deleteEngSentenceByIds">
+        delete from eng_sentence where create_by=#{username} and id in
+        <foreach item="id" collection="ids" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </delete>
+    <delete id="deleteByArticleId">
+        delete from eng_sentence where article_id=#{articleId} and create_by=#{username}
+    </delete>
+    <select id="countByArticleId" resultType="long">
+        select count(*) from eng_sentence where article_id=#{articleId}
+    </select>
+    <select id="selectPlayList" resultMap="SentenceMap">
+        select <include refid="columns"/>,a.title article_name,g.name group_name,g.id group_id
+        from eng_sentence s
+        join eng_article a on a.id=s.article_id
+        join eng_article_group g on g.id=a.group_id
+        <where>
+            and s.create_by=#{username} and s.mp3 is not null
+            <if test="sentence.content!=null and sentence.content!=''">
+                and s.content like concat('%',#{sentence.content},'%')
+            </if>
+            <if test="idList!=null and idList.size()>0 and include">
+                and s.id in
+                <foreach item="id" collection="idList" open="(" separator="," close=")">
+                    #{id}
+                </foreach>
+            </if>
+            <if test="idList!=null and idList.size()>0 and !include">
+                and s.id not in
+                <foreach item="id" collection="idList" open="(" separator="," close=")">
+                    #{id}
+                </foreach>
+            </if>
+            <if test="include and (idList==null or idList.size()==0)">
+                and 1=0
+            </if>
+        </where>
+        order by g.name,a.title,s.idx
+    </select>
+    <select id="selectByWordTop10" resultMap="SentenceMap">
+        select <include refid="columns"/>,a.title article_name
+        from eng_sentence s join eng_article a on a.id=s.article_id
+        where s.create_by=#{username}
+        and (s.content like concat('%',#{wordName},'%')
+        <if test="prototype!=null and prototype!=''">
+            or s.content like concat('%',#{prototype},'%')
+        </if>
+        )
+        order by s.idx limit 10
+    </select>
+</mapper>

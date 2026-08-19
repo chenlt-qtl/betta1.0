@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.betta.eng.mapper.EngArticleMapper">
+    <resultMap id="ArticleMap" type="EngArticle">
+        <id property="id" column="id"/>
+        <result property="groupId" column="group_id"/>
+        <result property="groupName" column="group_name"/>
+        <result property="picture" column="picture"/>
+        <result property="mp3" column="mp3"/>
+        <result property="title" column="title"/>
+        <result property="comment" column="comment"/>
+        <result property="status" column="status"/>
+        <result property="createBy" column="create_by"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updateBy" column="update_by"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+    <sql id="columns">
+        a.id,a.group_id,g.name group_name,a.picture,a.mp3,a.title,a.comment,a.status,
+        a.create_by,a.create_time,a.update_by,a.update_time
+    </sql>
+    <select id="selectEngArticleById" resultMap="ArticleMap">
+        select <include refid="columns"/>
+        from eng_article a left join eng_article_group g on g.id=a.group_id
+        where a.id=#{id} and a.create_by=#{username}
+    </select>
+    <select id="selectEngArticleList" parameterType="EngArticle" resultMap="ArticleMap">
+        select <include refid="columns"/> from eng_article a left join eng_article_group g on g.id=a.group_id
+        <where>
+            <if test="groupId!=null">
+                and a.group_id=#{groupId}
+            </if>
+            <if test="title!=null and title!=''">
+                and a.title like concat('%',#{title},'%')
+            </if>
+            <if test="createBy!=null and createBy!=''">
+                and a.create_by=#{createBy}
+            </if>
+        </where>
+        order by g.name,a.title
+    </select>
+    <insert id="insertEngArticle" parameterType="EngArticle" useGeneratedKeys="true" keyProperty="id">
+        insert into eng_article(group_id,picture,mp3,title,comment,status,create_by,create_time)
+        values(#{groupId},#{picture},#{mp3},#{title},#{comment},#{status},#{createBy},now())
+    </insert>
+    <update id="updateEngArticle" parameterType="EngArticle">
+        update eng_article
+        set group_id=#{groupId},picture=#{picture},mp3=#{mp3},title=#{title},comment=#{comment},
+            status=#{status},update_by=#{updateBy},update_time=now()
+        where id=#{id} and create_by=#{createBy}
+    </update>
+    <delete id="deleteEngArticleById">
+        delete from eng_article where id=#{id} and create_by=#{username}
+    </delete>
+    <select id="selectPlayList" resultMap="ArticleMap">
+        select <include refid="columns"/> from eng_article a left join eng_article_group g on g.id=a.group_id
+        <where>
+            and a.create_by=#{username}
+            <if test="article.groupId!=null">
+                and a.group_id=#{article.groupId}
+            </if>
+            <if test="article.title!=null and article.title!=''">
+                and a.title like concat('%',#{article.title},'%')
+            </if>
+            <if test="idList!=null and idList.size()>0 and include">
+                and a.id in
+                <foreach item="id" collection="idList" open="(" separator="," close=")">
+                    #{id}
+                </foreach>
+            </if>
+            <if test="idList!=null and idList.size()>0 and !include">
+                and a.id not in
+                <foreach item="id" collection="idList" open="(" separator="," close=")">
+                    #{id}
+                </foreach>
+            </if>
+            <if test="include and (idList==null or idList.size()==0)">
+                and 1=0
+            </if>
+        </where>
+        order by g.name,a.title
+    </select>
+    <select id="getCurrentArticle" resultMap="ArticleMap">
+        select <include refid="columns"/>
+        from eng_article a left join eng_article_group g on g.id=a.group_id
+        where exists(select 1 from sys_data d where d.data_type=#{dataType} and d.data_key=#{username} and a.id=d.data_value)
+    </select>
+</mapper>

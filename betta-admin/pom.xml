@@ -66,6 +66,12 @@
             <artifactId>betta-other</artifactId>
         </dependency>
 
+        <!-- 英语学习模块 -->
+        <dependency>
+            <groupId>com.betta</groupId>
+            <artifactId>betta-eng</artifactId>
+        </dependency>
+
     </dependencies>
 
     <build>
