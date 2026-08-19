@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.betta.eng.mapper.EngArticleProgressMapper">
+    <resultMap id="ProgressMap" type="EngArticleProgress">
+        <id property="id" column="id"/>
+        <result property="userId" column="user_id"/>
+        <result property="articleId" column="article_id"/>
+        <result property="bestScore" column="best_score"/>
+        <result property="bestCorrectCount" column="best_correct_count"/>
+        <result property="bestTotalCount" column="best_total_count"/>
+        <result property="completed" column="completed"/>
+        <result property="createBy" column="create_by"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updateBy" column="update_by"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+    <select id="selectByUserAndArticle" parameterType="EngArticleProgress" resultMap="ProgressMap">
+        select * from eng_article_progress where user_id=#{userId} and article_id=#{articleId}
+    </select>
+    <insert id="upsertBestProgress" parameterType="EngArticleProgress">
+        insert into eng_article_progress(user_id,article_id,best_score,best_correct_count,best_total_count,completed,create_by,create_time,update_by,update_time)
+        values(#{userId},#{articleId},#{bestScore},#{bestCorrectCount},#{bestTotalCount},#{completed},#{createBy},now(),#{updateBy},now())
+        on duplicate key update
+        best_correct_count=if(values(best_score)&gt;best_score,values(best_correct_count),best_correct_count),
+        best_total_count=if(values(best_score)&gt;best_score,values(best_total_count),best_total_count),
+        completed=greatest(completed,values(completed)),
+        update_by=if(values(best_score)&gt;best_score,values(update_by),update_by),
+        update_time=if(values(best_score)&gt;best_score,now(),update_time),
+        best_score=greatest(best_score,values(best_score))
+    </insert>
+    <select id="countCompletedByUserId" resultType="long">
+        select count(*) from eng_article_progress where user_id=#{userId} and completed=1
+    </select>
+</mapper>

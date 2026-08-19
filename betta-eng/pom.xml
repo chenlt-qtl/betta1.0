@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.betta</groupId>
+        <artifactId>betta</artifactId>
+        <version>3.9.2</version>
+    </parent>
+    <artifactId>betta-eng</artifactId>
+    <packaging>jar</packaging>
+    <description>英语学习与游戏化闯关模块</description>
+    <dependencies>
+        <!-- 仅复用项目已有公共能力，不引入新的第三方依赖。 -->
+        <dependency>
+            <groupId>com.betta</groupId>
+            <artifactId>betta-common</artifactId>
+        </dependency>
+    </dependencies>
+</project>

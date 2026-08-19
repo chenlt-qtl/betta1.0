@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.betta.eng.mapper.EngWordMapper">
+    <resultMap id="WordMap" type="EngWordVo">
+        <id property="id" column="id"/>
+        <result property="relId" column="rel_id"/>
+        <result property="wordName" column="word_name"/>
+        <result property="prototype" column="prototype"/>
+        <result property="phMp3" column="ph_mp3"/>
+        <result property="phonetics" column="phonetics"/>
+        <result property="acceptation" column="acceptation"/>
+        <result property="exchange" column="exchange"/>
+        <result property="parts" column="parts"/>
+        <result property="status" column="status"/>
+        <result property="createBy" column="create_by"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updateBy" column="update_by"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+    <sql id="columns">
+        id,word_name,prototype,ph_mp3,phonetics,acceptation,exchange,parts,status,
+        create_by,create_time,update_by,update_time
+    </sql>
+    <select id="selectEngWordById" resultMap="WordMap">
+        select <include refid="columns"/> from eng_word where id=#{id}
+    </select>
+    <select id="selectEngWordList" parameterType="EngWord" resultMap="WordMap">
+        select <include refid="columns"/> from eng_word
+        <where>
+            <if test="wordName!=null and wordName!=''">
+                and (word_name like concat('%',#{wordName},'%') or prototype like concat('%',#{wordName},'%'))
+            </if>
+            <if test="acceptation!=null and acceptation!=''">
+                and acceptation like concat('%',#{acceptation},'%')
+            </if>
+        </where>
+        order by word_name
+    </select>
+    <select id="selectEngWordByWordName" resultMap="WordMap">
+        select <include refid="columns"/> from eng_word where word_name=#{wordName}
+    </select>
+    <select id="selectWordListByArticleId" resultMap="WordMap">
+        select w.*,r.id rel_id
+        from eng_word w join eng_article_word_rel r on r.word_name=w.word_name
+        where r.article_id=#{articleId}
+        order by w.word_name
+    </select>
+    <insert id="insertEngWord" parameterType="EngWord" useGeneratedKeys="true" keyProperty="id">
+        insert into eng_word(word_name,prototype,ph_mp3,phonetics,acceptation,exchange,parts,status,create_by,create_time)
+        values(#{wordName},#{prototype},#{phMp3},#{phonetics},#{acceptation},#{exchange},#{parts},#{status},#{createBy},now())
+    </insert>
+    <update id="updateEngWord" parameterType="EngWord">
+        update eng_word
+        set word_name=#{wordName},prototype=#{prototype},ph_mp3=#{phMp3},phonetics=#{phonetics},
+            acceptation=#{acceptation},exchange=#{exchange},parts=#{parts},status=#{status},
+            update_by=#{updateBy},update_time=now()
+        where id=#{id}
+    </update>
+    <delete id="deleteEngWordById">
+        delete from eng_word where id=#{id}
+    </delete>
+    <select id="selectRelList" resultMap="WordMap">
+        select w.* from eng_word w
+        where exists(select 1 from eng_article_word_rel r where r.create_by=#{username} and r.word_name=w.word_name)
+        <if test="word.wordName!=null and word.wordName!=''">
+            and w.word_name like concat('%',#{word.wordName},'%')
+        </if>
+        order by w.word_name
+    </select>
+</mapper>

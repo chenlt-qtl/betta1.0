@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.betta.eng.mapper.EngArticleWordRelMapper">
+    <resultMap id="RelMap" type="EngArticleWordRel">
+        <id property="id" column="id"/>
+        <result property="articleId" column="article_id"/>
+        <result property="wordName" column="word_name"/>
+        <result property="status" column="status"/>
+        <result property="createBy" column="create_by"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updateBy" column="update_by"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+    <sql id="columns">
+        id,article_id,word_name,status,create_by,create_time,update_by,update_time
+    </sql>
+    <select id="selectEngArticleWordRelById" resultMap="RelMap">
+        select <include refid="columns"/> from eng_article_word_rel
+        where id=#{id} and create_by=#{username}
+    </select>
+    <select id="selectEngArticleWordRelList" parameterType="EngArticleWordRel" resultMap="RelMap">
+        select <include refid="columns"/> from eng_article_word_rel
+        <where>
+            <if test="articleId!=null">
+                and article_id=#{articleId}
+            </if>
+            <if test="wordName!=null and wordName!=''">
+                and word_name=#{wordName}
+            </if>
+            <if test="createBy!=null and createBy!=''">
+                and create_by=#{createBy}
+            </if>
+        </where>
+    </select>
+    <insert id="insertEngArticleWordRel" parameterType="EngArticleWordRel" useGeneratedKeys="true" keyProperty="id">
+        insert into eng_article_word_rel(article_id,word_name,status,create_by,create_time)
+        values(#{articleId},#{wordName},#{status},#{createBy},now())
+    </insert>
+    <delete id="deleteEngArticleWordRelByIds">
+        delete from eng_article_word_rel where create_by=#{username} and id in
+        <foreach item="id" collection="ids" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </delete>
+    <delete id="deleteByArticleId">
+        delete from eng_article_word_rel where article_id=#{articleId} and create_by=#{username}
+    </delete>
+</mapper>

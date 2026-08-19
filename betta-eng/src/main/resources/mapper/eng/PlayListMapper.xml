@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.betta.eng.mapper.PlayListMapper">
+    <resultMap id="PlayMap" type="PlayList">
+        <id property="id" column="id"/>
+        <result property="userName" column="user_name"/>
+        <result property="sentenceIds" column="sentence_ids"/>
+        <result property="createBy" column="create_by"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updateBy" column="update_by"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+    <select id="selectPlayListById" resultMap="PlayMap">
+        select * from eng_play_list where id=#{id} and user_name=#{username}
+    </select>
+    <select id="selectPlayListList" parameterType="PlayList" resultMap="PlayMap">
+        select * from eng_play_list
+        <where>
+            <if test="userName!=null and userName!=''">
+                and user_name=#{userName}
+            </if>
+            <if test="sentenceIds!=null and sentenceIds!=''">
+                and sentence_ids like concat('%',#{sentenceIds},'%')
+            </if>
+        </where>
+    </select>
+    <insert id="insertPlayList" parameterType="PlayList" useGeneratedKeys="true" keyProperty="id">
+        insert into eng_play_list(user_name,sentence_ids,create_by,create_time)
+        values(#{userName},#{sentenceIds},#{createBy},now())
+    </insert>
+    <update id="updatePlayList" parameterType="PlayList">
+        update eng_play_list
+        set sentence_ids=#{sentenceIds},update_by=#{updateBy},update_time=now()
+        where id=#{id} and user_name=#{userName}
+    </update>
+    <delete id="deletePlayListByIds">
+        delete from eng_play_list where user_name=#{username} and id in
+        <foreach item="id" collection="ids" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </delete>
+</mapper>

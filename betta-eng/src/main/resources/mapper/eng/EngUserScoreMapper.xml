@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.betta.eng.mapper.EngUserScoreMapper">
+    <resultMap id="ScoreMap" type="EngUserScore">
+        <id property="id" column="id"/>
+        <result property="user" column="user"/>
+        <result property="wordName" column="word_name"/>
+        <result property="familiarity" column="familiarity"/>
+        <result property="status" column="status"/>
+        <result property="createBy" column="create_by"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updateBy" column="update_by"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+    <resultMap id="ScoreVoMap" type="EngUserScoreVo" extends="ScoreMap">
+        <result property="relId" column="rel_id"/>
+        <result property="wordId" column="word_id"/>
+        <result property="articleId" column="article_id"/>
+        <result property="prototype" column="prototype"/>
+        <result property="phMp3" column="ph_mp3"/>
+        <result property="phonetics" column="phonetics"/>
+        <result property="acceptation" column="acceptation"/>
+        <result property="exchange" column="exchange"/>
+        <result property="parts" column="parts"/>
+    </resultMap>
+    <select id="selectEngUserScoreList" parameterType="EngUserScore" resultMap="ScoreMap">
+        select * from eng_user_score
+        <where>
+            <if test="user!=null and user!=''">
+                and user=#{user}
+            </if>
+            <if test="wordName!=null and wordName!=''">
+                and word_name like concat('%',#{wordName},'%')
+            </if>
+            <if test="familiarity!=null">
+                and familiarity&gt;=#{familiarity}
+            </if>
+        </where>
+    </select>
+    <select id="selectEngUserScoreVo" resultMap="ScoreVoMap">
+        select r.id rel_id,r.article_id,w.id word_id,w.word_name,w.prototype,w.ph_mp3,w.phonetics,
+               w.acceptation,w.exchange,w.parts,s.id,s.user,s.familiarity,s.status,s.create_by,
+               s.create_time,s.update_by,s.update_time
+        from eng_article_word_rel r
+        join eng_word w on w.word_name=r.word_name
+        left join eng_user_score s on s.word_name=w.word_name and s.user=#{username}
+        where r.create_by=#{username}
+        <if test="score.articleId!=null">
+            and r.article_id=#{score.articleId}
+        </if>
+    </select>
+    <select id="getByWordName" resultMap="ScoreMap">
+        select * from eng_user_score where word_name=#{wordName} and user=#{user} limit 1
+    </select>
+    <insert id="insertEngUserScore" parameterType="EngUserScore" useGeneratedKeys="true" keyProperty="id">
+        insert into eng_user_score(user,word_name,familiarity,status,create_by,create_time)
+        values(#{user},#{wordName},#{familiarity},#{status},#{createBy},now())
+    </insert>
+    <update id="updateEngUserScore" parameterType="EngUserScore">
+        update eng_user_score
+        set familiarity=#{familiarity},status=#{status},update_by=#{updateBy},update_time=now()
+        where id=#{id} and user=#{user}
+    </update>
+    <delete id="deleteEngUserScoreByIds">
+        delete from eng_user_score where user=#{user} and id in
+        <foreach item="id" collection="ids" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </delete>
+</mapper>

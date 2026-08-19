@@ -180,6 +180,13 @@
                 <artifactId>betta-other</artifactId>
                 <version>${betta.version}</version>
             </dependency>
+
+            <!-- 英语学习模块 -->
+            <dependency>
+                <groupId>com.betta</groupId>
+                <artifactId>betta-eng</artifactId>
+                <version>${betta.version}</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 
@@ -192,6 +199,7 @@
         <module>betta-common</module>
         <module>betta-robot</module>
         <module>betta-other</module>
+        <module>betta-eng</module>
     </modules>
     <packaging>pom</packaging>
 

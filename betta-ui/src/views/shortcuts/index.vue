@@ -57,7 +57,7 @@
           <img src="@/assets/shortcuts/档案.svg" />
           笔记
         </a>
-        <a href="eng/word" class="item">
+        <a href="/eng/manage/word-query" class="item">
           <img src="@/assets/shortcuts/查看搜索.svg" />
           查单词
         </a>
