@@ -1106,14 +1106,11 @@ export default {
       })
     },
     selectedDirectory() {
-      // 下拉筛选目录代表当前文件管理上下文，新建笔记/文件夹时优先使用它作为目标目录。
-      if (this.selectedFolderPath) {
-        return this.selectedFolderPath
+      // 当前选中节点优先于下拉筛选目录：目录内新建，文件旁新建；未选中节点时才回退到筛选目录。
+      if (this.currentPath) {
+        return this.currentNodeType === 'directory' ? this.currentPath : this.dirname(this.currentPath)
       }
-      if (!this.currentPath) {
-        return ''
-      }
-      return this.currentNodeType === 'directory' ? this.currentPath : this.dirname(this.currentPath)
+      return this.selectedFolderPath || ''
     },
     ensureMd(name) {
       return name.endsWith('.md') ? name : name + '.md'
