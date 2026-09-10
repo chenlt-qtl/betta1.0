@@ -29,6 +29,12 @@
             <artifactId>betta-common</artifactId>
         </dependency>
 
+        <!-- 笔记图片定时清理服务 -->
+        <dependency>
+            <groupId>com.betta</groupId>
+            <artifactId>betta-system</artifactId>
+        </dependency>
+
     </dependencies>
 
 </project>
