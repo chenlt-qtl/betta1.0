@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.io.UncheckedIOException;
 import java.net.URLEncoder;
+import java.net.URLDecoder;
 import java.nio.channels.Channels;
 import java.nio.channels.SeekableByteChannel;
 import java.nio.charset.StandardCharsets;
@@ -16,22 +17,28 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Stream;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import jakarta.servlet.http.HttpServletResponse;
 import org.apache.commons.io.FilenameUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 import com.betta.common.config.RuoYiConfig;
@@ -55,6 +62,8 @@ import com.betta.system.service.INoteFileService;
 @Service
 public class NoteFileServiceImpl implements INoteFileService
 {
+    private static final Logger log = LoggerFactory.getLogger(NoteFileServiceImpl.class);
+
     private static final String TYPE_FILE = "file";
 
     private static final String TYPE_DIRECTORY = "directory";
@@ -93,15 +102,34 @@ public class NoteFileServiceImpl implements INoteFileService
 
     private static final DateTimeFormatter CONFLICT_NAME_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMddHHmmssSSS");
 
+    private static final String SYSTEM_IMAGE_TRASH_PATH = ".trash/note-images";
+
+    private static final long ATTACHMENT_GRACE_SECONDS = 24L * 60L * 60L;
+
     private static final Pattern DATE_TOKEN_PATTERN = Pattern.compile("\\$\\{date:\\{momentJsFormat:'([^']+)'}}");
 
     private static final Pattern SIMPLE_DATE_TOKEN_PATTERN = Pattern.compile("\\{date:([^}]+)}");
+
+    /** 标准 Markdown 图片，路径允许使用尖括号包裹以容纳空格。 */
+    private static final Pattern MARKDOWN_IMAGE_PATTERN = Pattern.compile(
+            "!\\[[^\\]\\r\\n]*]\\(\\s*(?:<([^>\\r\\n]+)>|([^\\s)]+))"
+                    + "(?:\\s+(?:\"[^\"\\r\\n]*\"|'[^'\\r\\n]*'|\\([^\\r\\n)]*\\)))?\\s*\\)");
+
+    /** Obsidian 图片嵌入，别名和标题锚点不属于附件路径。 */
+    private static final Pattern OBSIDIAN_IMAGE_PATTERN = Pattern.compile("!\\[\\[([^\\]]+)\\]\\]");
+
+    /** HTML 图片标签，仅识别 src 属性，不处理 srcset 等派生资源。 */
+    private static final Pattern HTML_IMAGE_PATTERN = Pattern.compile(
+            "(?is)<img\\b[^>]*?\\bsrc\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+?)(?=\\s|/?>))[^>]*>");
 
     private static final Set<String> IMAGE_EXTENSIONS = new HashSet<>(
             List.of("jpg", "jpeg", "png", "gif", "webp", "svg"));
 
     private static final Set<String> SYNC_EXTENSIONS = new HashSet<>(
             List.of("md", "jpg", "jpeg", "png", "gif", "webp", "svg"));
+
+    /** 同一用户的 Markdown 写入、引用扫描和图片移动串行执行，避免应用内写入穿插到回收判断中。 */
+    private final ConcurrentHashMap<String, Object> noteImageRecycleLocks = new ConcurrentHashMap<>();
 
     @Override
     public List<NoteTreeNode> tree(String userName)
@@ -142,6 +170,14 @@ public class NoteFileServiceImpl implements INoteFileService
     @Override
     public NoteContent saveContent(String userName, String path, String content, String lastKnownHash)
     {
+        synchronized (noteImageRecycleLock(userName))
+        {
+            return saveContentLocked(userName, path, content, lastKnownHash);
+        }
+    }
+
+    private NoteContent saveContentLocked(String userName, String path, String content, String lastKnownHash)
+    {
         Path file = resolveNoteFile(userName, path, false);
         ensureDirectory(file.getParent());
         // Web 端保存前带上上次读取的 hash；如果服务端文件已被同步脚本或其他端改动，则拒绝覆盖。
@@ -159,6 +195,14 @@ public class NoteFileServiceImpl implements INoteFileService
 
     @Override
     public NoteTreeNode create(String userName, String path, String type, String content)
+    {
+        synchronized (noteImageRecycleLock(userName))
+        {
+            return createLocked(userName, path, type, content);
+        }
+    }
+
+    private NoteTreeNode createLocked(String userName, String path, String type, String content)
     {
         Path target = TYPE_DIRECTORY.equals(type) ? resolvePath(userName, path) : resolveNoteFile(userName, path, false);
         if (Files.exists(target))
@@ -187,10 +231,13 @@ public class NoteFileServiceImpl implements INoteFileService
     @Override
     public NoteTreeNode rename(String userName, String path, String newPath)
     {
-        // 重命名和收藏路径映射必须处于同一串行区间，避免并发收藏请求重新写回旧路径。
-        synchronized (favoriteMetadataLock)
+        synchronized (noteImageRecycleLock(userName))
         {
-            return renameAndUpdateFavorites(userName, path, newPath);
+            // 固定先获取用户笔记锁，再获取收藏锁，避免重命名穿插引用扫描或产生反向锁顺序。
+            synchronized (favoriteMetadataLock)
+            {
+                return renameAndUpdateFavorites(userName, path, newPath);
+            }
         }
     }
 
@@ -304,10 +351,13 @@ public class NoteFileServiceImpl implements INoteFileService
     @Override
     public List<String> move(String userName, List<String> paths, String targetDirectory)
     {
-        // 移动文件和收藏路径映射必须串行，避免并发收藏请求在移动期间重新写回旧路径。
-        synchronized (favoriteMetadataLock)
+        synchronized (noteImageRecycleLock(userName))
         {
-            return moveAndUpdateFavorites(userName, paths, targetDirectory);
+            // 移动会改变相对引用语义，必须与扫描串行，并保持收藏锁始终位于用户笔记锁内层。
+            synchronized (favoriteMetadataLock)
+            {
+                return moveAndUpdateFavorites(userName, paths, targetDirectory);
+            }
         }
     }
 
@@ -529,10 +579,13 @@ public class NoteFileServiceImpl implements INoteFileService
     @Override
     public void delete(String userName, String path)
     {
-        // 删除与收藏清理串行执行，保证已删除路径不会被并发请求重新写回收藏元数据。
-        synchronized (favoriteMetadataLock)
+        synchronized (noteImageRecycleLock(userName))
         {
-            deleteAndCleanFavorites(userName, path);
+            // 删除与收藏清理串行执行，且不得穿插正在进行的引用扫描和图片移动。
+            synchronized (favoriteMetadataLock)
+            {
+                deleteAndCleanFavorites(userName, path);
+            }
         }
     }
 
@@ -841,35 +894,39 @@ public class NoteFileServiceImpl implements INoteFileService
     @Override
     public NoteContent openTodayJournal(String userName)
     {
-        synchronized (journalLock)
+        synchronized (noteImageRecycleLock(userName))
         {
-            String directory = loadJournalDirectory(userName);
-            Path journalDirectory = resolveJournalDirectory(userName, directory);
-            LocalDate today = LocalDate.now();
-            Path todayFile = journalDirectory.resolve(JOURNAL_DATE_FORMATTER.format(today) + ".md");
-            if (Files.exists(todayFile, LinkOption.NOFOLLOW_LINKS))
+            // 今日日记可能新建 Markdown，固定用户笔记锁在最外层，日记锁只负责日记内部串行。
+            synchronized (journalLock)
             {
-                assertReadableJournalFile(todayFile, "今日日记文件非法");
+                String directory = loadJournalDirectory(userName);
+                Path journalDirectory = resolveJournalDirectory(userName, directory);
+                LocalDate today = LocalDate.now();
+                Path todayFile = journalDirectory.resolve(JOURNAL_DATE_FORMATTER.format(today) + ".md");
+                if (Files.exists(todayFile, LinkOption.NOFOLLOW_LINKS))
+                {
+                    assertReadableJournalFile(todayFile, "今日日记文件非法");
+                    return readContent(userName, toRelative(vaultRoot(userName), todayFile));
+                }
+
+                String templateContent = readLatestJournalContent(journalDirectory, today);
+                try
+                {
+                    // CREATE_NEW 保证即使有同 JVM 外的创建竞争，也不会覆盖已经产生的今日日记。
+                    Files.writeString(todayFile, templateContent, StandardCharsets.UTF_8,
+                            StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+                }
+                catch (FileAlreadyExistsException e)
+                {
+                    // 另一执行方已经创建时转为只读打开，并继续拒绝符号链接或非普通文件。
+                    assertReadableJournalFile(todayFile, "今日日记文件非法");
+                }
+                catch (IOException | RuntimeException e)
+                {
+                    throw serviceException("创建今日日记失败", e);
+                }
                 return readContent(userName, toRelative(vaultRoot(userName), todayFile));
             }
-
-            String templateContent = readLatestJournalContent(journalDirectory, today);
-            try
-            {
-                // CREATE_NEW 保证即使有同 JVM 外的创建竞争，也不会覆盖已经产生的今日日记。
-                Files.writeString(todayFile, templateContent, StandardCharsets.UTF_8, StandardOpenOption.CREATE_NEW,
-                        StandardOpenOption.WRITE);
-            }
-            catch (FileAlreadyExistsException e)
-            {
-                // 另一执行方已经创建时转为只读打开，并继续拒绝符号链接或非普通文件。
-                assertReadableJournalFile(todayFile, "今日日记文件非法");
-            }
-            catch (IOException | RuntimeException e)
-            {
-                throw serviceException("创建今日日记失败", e);
-            }
-            return readContent(userName, toRelative(vaultRoot(userName), todayFile));
         }
     }
 
@@ -917,6 +974,14 @@ public class NoteFileServiceImpl implements INoteFileService
 
     @Override
     public NoteImageUploadResult uploadImage(String userName, String notePath, MultipartFile file)
+    {
+        synchronized (noteImageRecycleLock(userName))
+        {
+            return uploadImageLocked(userName, notePath, file);
+        }
+    }
+
+    private NoteImageUploadResult uploadImageLocked(String userName, String notePath, MultipartFile file)
     {
         Path noteFile = resolveNoteFile(userName, notePath, false);
         String noteFileName = FilenameUtils.getBaseName(noteFile.getFileName().toString());
@@ -986,6 +1051,15 @@ public class NoteFileServiceImpl implements INoteFileService
     @Override
     public NoteUploadResult syncUpload(String userName, String path, MultipartFile file, String lastKnownHash)
     {
+        synchronized (noteImageRecycleLock(userName))
+        {
+            // 同步入口可覆盖 Markdown 或附件图片，两类文件都必须与引用扫描和回收移动串行。
+            return syncUploadLocked(userName, path, file, lastKnownHash);
+        }
+    }
+
+    private NoteUploadResult syncUploadLocked(String userName, String path, MultipartFile file, String lastKnownHash)
+    {
         Path target = resolveSyncFile(userName, path);
         ensureDirectory(target.getParent());
         String finalPath = toRelative(vaultRoot(userName), target);
@@ -1018,6 +1092,55 @@ public class NoteFileServiceImpl implements INoteFileService
         catch (IOException e)
         {
             throw new ServiceException("上传同步文件失败");
+        }
+    }
+
+    /**
+     * 执行全部用户的图片定时标记清理；单个用户异常只跳过该用户，不阻断其他 vault。
+     */
+    @Override
+    public void cleanupExpiredNoteImages(int retentionDays)
+    {
+        if (retentionDays <= 0)
+        {
+            throw new ServiceException("图片回收站保留天数必须大于0");
+        }
+        Path notesRoot = Path.of(RuoYiConfig.getProfile(), "notes").normalize().toAbsolutePath();
+        if (!Files.exists(notesRoot, LinkOption.NOFOLLOW_LINKS))
+        {
+            return;
+        }
+        if (Files.isSymbolicLink(notesRoot) || !Files.isDirectory(notesRoot, LinkOption.NOFOLLOW_LINKS))
+        {
+            log.warn("笔记根目录状态非法，跳过图片定时清理: {}", notesRoot);
+            return;
+        }
+        try (Stream<Path> users = Files.list(notesRoot))
+        {
+            for (Path userRoot : (Iterable<Path>) users::iterator)
+            {
+                if (Files.isSymbolicLink(userRoot) || !Files.isDirectory(userRoot, LinkOption.NOFOLLOW_LINKS)
+                        || userRoot.getFileName().toString().startsWith("."))
+                {
+                    continue;
+                }
+                String userName = userRoot.getFileName().toString();
+                synchronized (noteImageRecycleLock(userName))
+                {
+                    try
+                    {
+                        cleanupUserNoteImages(userRoot.normalize().toAbsolutePath(), retentionDays);
+                    }
+                    catch (IOException | RuntimeException e)
+                    {
+                        log.warn("笔记图片定时清理失败，已保守跳过用户: {}", userName, e);
+                    }
+                }
+            }
+        }
+        catch (IOException | RuntimeException e)
+        {
+            log.warn("遍历用户笔记目录失败，本轮图片定时清理结束", e);
         }
     }
 
@@ -1639,6 +1762,475 @@ public class NoteFileServiceImpl implements INoteFileService
             exception.initCause(cause);
         }
         return exception;
+    }
+
+    /**
+     * 按“恢复引用图片、确认引用、回收活跃期外孤图、清理过期回收版本”的顺序整理单个用户。
+     */
+    private void cleanupUserNoteImages(Path root, int retentionDays) throws IOException
+    {
+        Path attachmentRoot = configuredAttachmentRoot(root);
+        if (attachmentRoot == null)
+        {
+            return;
+        }
+        List<Path> attachments = listManagedAttachmentImages(root, attachmentRoot);
+        List<RecycledImage> recycledImages = listRecycledImages(root);
+        Set<Path> knownOriginals = new LinkedHashSet<>(attachments);
+        for (RecycledImage recycledImage : recycledImages)
+        {
+            knownOriginals.add(recycledImage.originalPath);
+        }
+
+        ReferenceScanResult initialScan = scanReferencedImages(root, attachmentRoot, knownOriginals);
+        if (initialScan.ambiguous)
+        {
+            return;
+        }
+        restoreReferencedImages(root, attachmentRoot, initialScan.images, recycledImages);
+
+        attachments = listManagedAttachmentImages(root, attachmentRoot);
+        recycledImages = listRecycledImages(root);
+        knownOriginals = new LinkedHashSet<>(attachments);
+        for (RecycledImage recycledImage : recycledImages)
+        {
+            knownOriginals.add(recycledImage.originalPath);
+        }
+        // 恢复后再次读取全部真实 Markdown；失败或歧义时不执行移动和永久删除。
+        ReferenceScanResult finalScan = scanReferencedImages(root, attachmentRoot, knownOriginals);
+        if (finalScan.ambiguous)
+        {
+            return;
+        }
+
+        Instant now = Instant.now();
+        recycleExpiredOrphanImages(root, attachmentRoot, attachments, finalScan.images, now);
+        deleteExpiredRecycledImages(root, recycledImages, finalScan.images, now, retentionDays);
+        cleanEmptySystemTrashDirectories(root);
+    }
+
+    private List<Path> listManagedAttachmentImages(Path root, Path attachmentRoot) throws IOException
+    {
+        List<Path> images = new ArrayList<>();
+        if (!Files.exists(attachmentRoot, LinkOption.NOFOLLOW_LINKS))
+        {
+            return images;
+        }
+        if (Files.isSymbolicLink(attachmentRoot) || !Files.isDirectory(attachmentRoot, LinkOption.NOFOLLOW_LINKS))
+        {
+            throw new IOException("附件根目录非法");
+        }
+        try (Stream<Path> paths = Files.walk(attachmentRoot))
+        {
+            for (Path path : (Iterable<Path>) paths::iterator)
+            {
+                if (Files.isSymbolicLink(path))
+                {
+                    throw new IOException("附件目录包含符号链接");
+                }
+                if (Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)
+                        && IMAGE_EXTENSIONS.contains(extension(path.getFileName().toString())))
+                {
+                    if (!isSafeAttachmentImage(root, attachmentRoot, path))
+                    {
+                        throw new IOException("附件图片路径非法");
+                    }
+                    images.add(path.normalize().toAbsolutePath());
+                }
+            }
+        }
+        return images;
+    }
+
+    private List<RecycledImage> listRecycledImages(Path root) throws IOException
+    {
+        List<RecycledImage> images = new ArrayList<>();
+        Path systemTrash = root.resolve(SYSTEM_IMAGE_TRASH_PATH);
+        if (!Files.exists(systemTrash, LinkOption.NOFOLLOW_LINKS))
+        {
+            return images;
+        }
+        if (Files.isSymbolicLink(systemTrash) || !Files.isDirectory(systemTrash, LinkOption.NOFOLLOW_LINKS)
+                || containsSymbolicLink(root, systemTrash))
+        {
+            throw new IOException("系统图片回收区非法");
+        }
+        try (Stream<Path> batches = Files.list(systemTrash))
+        {
+            for (Path batch : (Iterable<Path>) batches::iterator)
+            {
+                if (Files.isSymbolicLink(batch) || !Files.isDirectory(batch, LinkOption.NOFOLLOW_LINKS))
+                {
+                    throw new IOException("系统图片回收批次非法");
+                }
+                LocalDateTime recycledAt;
+                try
+                {
+                    recycledAt = LocalDateTime.parse(batch.getFileName().toString(), CONFLICT_NAME_FORMATTER);
+                }
+                catch (DateTimeParseException e)
+                {
+                    throw new IOException("系统图片回收批次名称非法", e);
+                }
+                try (Stream<Path> paths = Files.walk(batch))
+                {
+                    for (Path path : (Iterable<Path>) paths::iterator)
+                    {
+                        if (Files.isSymbolicLink(path))
+                        {
+                            throw new IOException("系统图片回收区包含符号链接");
+                        }
+                        if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS))
+                        {
+                            continue;
+                        }
+                        Path relativeOriginal = batch.relativize(path);
+                        Path original = root.resolve(relativeOriginal).normalize().toAbsolutePath();
+                        Path attachmentRoot = configuredAttachmentRoot(root);
+                        if (attachmentRoot == null || !original.startsWith(attachmentRoot)
+                                || !IMAGE_EXTENSIONS.contains(extension(original.getFileName().toString())))
+                        {
+                            throw new IOException("系统回收图片原路径非法");
+                        }
+                        images.add(new RecycledImage(path.normalize().toAbsolutePath(), original, recycledAt));
+                    }
+                }
+            }
+        }
+        return images;
+    }
+
+    private ReferenceScanResult scanReferencedImages(Path root, Path attachmentRoot, Set<Path> knownOriginals)
+            throws IOException
+    {
+        ReferenceScanResult result = new ReferenceScanResult();
+        try (Stream<Path> paths = Files.walk(root))
+        {
+            for (Path note : (Iterable<Path>) paths::iterator)
+            {
+                if (isIgnored(root, note) || Files.isSymbolicLink(note)
+                        || !Files.isRegularFile(note, LinkOption.NOFOLLOW_LINKS) || !isMarkdown(note))
+                {
+                    continue;
+                }
+                String content = Files.readString(note, StandardCharsets.UTF_8);
+                for (String reference : extractImageReferences(content))
+                {
+                    Set<Path> candidates = resolveLogicalReferenceCandidates(root, attachmentRoot,
+                            note.getParent(), reference, knownOriginals);
+                    if (candidates.size() > 1)
+                    {
+                        result.ambiguous = true;
+                    }
+                    result.images.addAll(candidates);
+                }
+            }
+        }
+        return result;
+    }
+
+    private Set<Path> resolveLogicalReferenceCandidates(Path root, Path attachmentRoot, Path noteParent,
+            String reference, Set<Path> knownOriginals)
+    {
+        Set<Path> candidates = new LinkedHashSet<>();
+        String normalizedReference = normalizeImageReference(reference);
+        if (normalizedReference == null || !IMAGE_EXTENSIONS.contains(extension(normalizedReference)))
+        {
+            return candidates;
+        }
+        if (!normalizedReference.contains("/"))
+        {
+            for (Path original : knownOriginals)
+            {
+                if (original.getFileName().toString().equals(normalizedReference))
+                {
+                    candidates.add(original);
+                }
+            }
+            return candidates;
+        }
+        addLogicalCandidate(candidates, root, attachmentRoot, noteParent.resolve(normalizedReference));
+        addLogicalCandidate(candidates, root, attachmentRoot, root.resolve(normalizedReference));
+        return candidates;
+    }
+
+    private void addLogicalCandidate(Set<Path> candidates, Path root, Path attachmentRoot, Path candidate)
+    {
+        Path normalized = candidate.normalize().toAbsolutePath();
+        if (normalized.startsWith(root) && normalized.startsWith(attachmentRoot)
+                && IMAGE_EXTENSIONS.contains(extension(normalized.getFileName().toString())))
+        {
+            candidates.add(normalized);
+        }
+    }
+
+    private void restoreReferencedImages(Path root, Path attachmentRoot, Set<Path> references,
+            List<RecycledImage> recycledImages) throws IOException
+    {
+        Map<Path, RecycledImage> latestByOriginal = new HashMap<>();
+        for (RecycledImage image : recycledImages)
+        {
+            RecycledImage current = latestByOriginal.get(image.originalPath);
+            if (current == null || image.recycledAt.isAfter(current.recycledAt))
+            {
+                latestByOriginal.put(image.originalPath, image);
+            }
+        }
+        for (Path reference : references)
+        {
+            if (Files.exists(reference, LinkOption.NOFOLLOW_LINKS))
+            {
+                if (!isSafeAttachmentImage(root, attachmentRoot, reference))
+                {
+                    throw new IOException("被引用附件路径非法");
+                }
+                continue;
+            }
+            RecycledImage latest = latestByOriginal.get(reference);
+            if (latest == null)
+            {
+                continue;
+            }
+            createSafeDirectories(root, reference.getParent());
+            Files.move(latest.path, reference);
+        }
+    }
+
+    private void recycleExpiredOrphanImages(Path root, Path attachmentRoot, List<Path> attachments,
+            Set<Path> references, Instant now) throws IOException
+    {
+        Instant graceCutoff = now.minusSeconds(ATTACHMENT_GRACE_SECONDS);
+        String batchName = LocalDateTime.now().format(CONFLICT_NAME_FORMATTER);
+        for (Path image : attachments)
+        {
+            if (references.contains(image) || !Files.getLastModifiedTime(image).toInstant().isBefore(graceCutoff))
+            {
+                continue;
+            }
+            if (!isSafeAttachmentImage(root, attachmentRoot, image))
+            {
+                throw new IOException("待回收附件状态非法");
+            }
+            Path target = root.resolve(SYSTEM_IMAGE_TRASH_PATH).resolve(batchName).resolve(root.relativize(image));
+            createSafeDirectories(root, target.getParent());
+            Files.move(image, target);
+        }
+    }
+
+    private void deleteExpiredRecycledImages(Path root, List<RecycledImage> recycledImages,
+            Set<Path> references, Instant now, int retentionDays) throws IOException
+    {
+        Instant retentionCutoff = now.minusSeconds(retentionDays * 24L * 60L * 60L);
+        for (RecycledImage image : recycledImages)
+        {
+            if (!image.recycledAt.atZone(java.time.ZoneId.systemDefault()).toInstant().isBefore(retentionCutoff))
+            {
+                continue;
+            }
+            // 原位置仍缺失且正文继续引用时必须保留回收版本，等待后续任务恢复。
+            if (references.contains(image.originalPath)
+                    && !Files.exists(image.originalPath, LinkOption.NOFOLLOW_LINKS))
+            {
+                continue;
+            }
+            if (Files.isSymbolicLink(image.path) || containsSymbolicLink(root, image.path))
+            {
+                throw new IOException("永久删除目标路径非法");
+            }
+            Files.delete(image.path);
+        }
+    }
+
+    private void cleanEmptySystemTrashDirectories(Path root) throws IOException
+    {
+        Path systemTrash = root.resolve(SYSTEM_IMAGE_TRASH_PATH);
+        if (!Files.exists(systemTrash, LinkOption.NOFOLLOW_LINKS))
+        {
+            return;
+        }
+        try (Stream<Path> paths = Files.walk(systemTrash))
+        {
+            for (Path directory : paths.filter(path -> Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS))
+                    .sorted(Comparator.reverseOrder()).toList())
+            {
+                if (directory.equals(systemTrash))
+                {
+                    continue;
+                }
+                try (Stream<Path> children = Files.list(directory))
+                {
+                    if (!children.findAny().isPresent())
+                    {
+                        Files.delete(directory);
+                    }
+                }
+            }
+        }
+    }
+
+    private static class ReferenceScanResult
+    {
+        private final Set<Path> images = new LinkedHashSet<>();
+
+        private boolean ambiguous;
+    }
+
+    private static class RecycledImage
+    {
+        private final Path path;
+
+        private final Path originalPath;
+
+        private final LocalDateTime recycledAt;
+
+        RecycledImage(Path path, Path originalPath, LocalDateTime recycledAt)
+        {
+            this.path = path;
+            this.originalPath = originalPath;
+            this.recycledAt = recycledAt;
+        }
+    }
+
+    private List<String> extractImageReferences(String content)
+    {
+        List<String> references = new ArrayList<>();
+        collectPatternReferences(MARKDOWN_IMAGE_PATTERN, content, references);
+        collectPatternReferences(OBSIDIAN_IMAGE_PATTERN, content, references);
+        collectPatternReferences(HTML_IMAGE_PATTERN, content, references);
+        return references;
+    }
+    private void collectPatternReferences(Pattern pattern, String content, List<String> references)
+    {
+        Matcher matcher = pattern.matcher(content);
+        while (matcher.find())
+        {
+            for (int group = 1; group <= matcher.groupCount(); group++)
+            {
+                if (matcher.group(group) != null)
+                {
+                    references.add(matcher.group(group));
+                    break;
+                }
+            }
+        }
+    }
+    private String normalizeImageReference(String reference)
+    {
+        String value = StringUtils.nvl(reference, "").trim().replace("\\", "/");
+        int aliasIndex = value.indexOf('|');
+        if (aliasIndex >= 0)
+        {
+            value = value.substring(0, aliasIndex);
+        }
+        int queryIndex = value.indexOf('?');
+        int fragmentIndex = value.indexOf('#');
+        int suffixIndex = queryIndex < 0 ? fragmentIndex
+                : fragmentIndex < 0 ? queryIndex : Math.min(queryIndex, fragmentIndex);
+        if (suffixIndex >= 0)
+        {
+            value = value.substring(0, suffixIndex);
+        }
+        try
+        {
+            // URLDecoder 会把加号解释为空格，先转义以保留合法文件名中的加号。
+            value = URLDecoder.decode(value.replace("+", "%2B"), StandardCharsets.UTF_8).replace("\\", "/");
+        }
+        catch (IllegalArgumentException e)
+        {
+            return null;
+        }
+        if (StringUtils.isBlank(value) || value.startsWith("/") || value.startsWith("//")
+                || value.contains("\0") || value.contains("\r") || value.contains("\n")
+                || value.matches("^[A-Za-z][A-Za-z0-9+.-]*:.*"))
+        {
+            return null;
+        }
+        return value;
+    }
+
+
+    /**
+     * 校验图片真实存在于当前 vault 的附件根目录中，且路径全程未经过符号链接。
+     */
+    private boolean isSafeAttachmentImage(Path root, Path attachmentRoot, Path image) throws IOException
+    {
+        Path normalizedRoot = root.normalize().toAbsolutePath();
+        Path normalizedAttachmentRoot = attachmentRoot.normalize().toAbsolutePath();
+        Path normalizedImage = image.normalize().toAbsolutePath();
+        if (!normalizedImage.startsWith(normalizedRoot) || !normalizedImage.startsWith(normalizedAttachmentRoot)
+                || !IMAGE_EXTENSIONS.contains(extension(normalizedImage.getFileName().toString()))
+                || Files.isSymbolicLink(normalizedImage)
+                || !Files.isRegularFile(normalizedImage, LinkOption.NOFOLLOW_LINKS)
+                || containsSymbolicLink(normalizedRoot, normalizedImage))
+        {
+            return false;
+        }
+        return normalizedImage.toRealPath().startsWith(normalizedRoot.toRealPath())
+                && normalizedImage.toRealPath().startsWith(normalizedAttachmentRoot.toRealPath());
+    }
+
+    private boolean containsSymbolicLink(Path root, Path target)
+    {
+        Path current = root;
+        for (Path part : root.relativize(target))
+        {
+            current = current.resolve(part);
+            if (Files.isSymbolicLink(current))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+
+    private Path configuredAttachmentRoot(Path root)
+    {
+        String relativeAttachmentRoot = attachmentRootPath();
+        if (StringUtils.isBlank(relativeAttachmentRoot))
+        {
+            return null;
+        }
+        Path attachmentRoot = root.resolve(relativeAttachmentRoot).normalize().toAbsolutePath();
+        return attachmentRoot.startsWith(root) ? attachmentRoot : null;
+    }
+    /** 创建回收站目录前逐级拒绝已有符号链接，并在每级创建后立即复核真实路径边界。 */
+    private void createSafeDirectories(Path root, Path directory) throws IOException
+    {
+        Path normalizedRoot = root.normalize().toAbsolutePath();
+        Path normalizedDirectory = directory.normalize().toAbsolutePath();
+        if (!normalizedDirectory.startsWith(normalizedRoot) || Files.isSymbolicLink(normalizedRoot)
+                || !Files.isDirectory(normalizedRoot, LinkOption.NOFOLLOW_LINKS))
+        {
+            throw new IOException("回收站目录路径非法");
+        }
+        Path realRoot = normalizedRoot.toRealPath();
+        Path current = normalizedRoot;
+        for (Path part : normalizedRoot.relativize(normalizedDirectory))
+        {
+            current = current.resolve(part);
+            if (Files.exists(current, LinkOption.NOFOLLOW_LINKS))
+            {
+                if (Files.isSymbolicLink(current) || !Files.isDirectory(current, LinkOption.NOFOLLOW_LINKS))
+                {
+                    throw new IOException("回收站目录包含符号链接或非目录节点");
+                }
+            }
+            else
+            {
+                Files.createDirectory(current);
+            }
+            if (Files.isSymbolicLink(current) || !current.toRealPath().startsWith(realRoot))
+            {
+                throw new IOException("回收站目录越界");
+            }
+        }
+    }
+
+
+    private Object noteImageRecycleLock(String userName)
+    {
+        return noteImageRecycleLocks.computeIfAbsent(String.valueOf(userName), key -> new Object());
     }
 
     private Path vaultRoot(String userName)

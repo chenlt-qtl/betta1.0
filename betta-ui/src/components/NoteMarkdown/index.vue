@@ -4,7 +4,7 @@
       v-if="!viewer"
       v-model="emojiPopoverVisible"
       placement="bottom-end"
-      width="260"
+      width="566"
       trigger="click"
       popper-class="note-emoji-popover"
     >
@@ -29,7 +29,7 @@
       </el-button>
     </el-popover>
     <editor
-      v-show="!viewer"
+      v-if="!viewer"
       ref="editor"
       :initial-value="value || ''"
       :options="editorOptions"
@@ -39,7 +39,12 @@
       @change="handleChange"
       @blur="handleBlur"
     />
-    <div v-show="viewer" class="viewer-shell" :class="{ 'toc-collapsed': tocCollapsed }">
+    <div
+      v-else
+      class="viewer-shell"
+      :class="{ 'toc-collapsed': tocCollapsed }"
+      @click="handleViewerClick"
+    >
       <div class="toc">
         <div class="toc-header">
           <span v-show="!tocCollapsed" class="toc-title">目录</span>
@@ -57,11 +62,18 @@
       </div>
       <viewer ref="viewer" class="viewer" height="calc(100vh - 230px)" :options="viewerOptions" />
     </div>
+    <image-viewer
+      v-if="mediaPreviewVisible"
+      ref="mediaViewer"
+      :url-list="mediaPreviewUrls"
+      :on-close="handleMediaViewerClose"
+    />
   </div>
 </template>
 
 <script>
 import { Editor, Viewer } from '@toast-ui/vue-editor'
+import ImageViewer from 'element-ui/packages/image/src/image-viewer'
 import mermaid from 'mermaid'
 import '@toast-ui/editor/dist/toastui-editor.css'
 import '@toast-ui/editor/dist/toastui-editor-viewer.css'
@@ -103,7 +115,8 @@ export default {
   name: 'NoteMarkdown',
   components: {
     editor: Editor,
-    viewer: Viewer
+    viewer: Viewer,
+    ImageViewer
   },
   props: {
     // v-model 传入的 Markdown 原文，服务端直接按该内容写入 .md 文件。
@@ -139,14 +152,38 @@ export default {
       syncingEditor: false,
       // 每次预览刷新递增序号，阻止旧笔记的异步流程图覆盖新内容。
       mermaidRenderSeq: 0,
+      mediaPreviewVisible: false,
+      mediaPreviewUrls: [],
+      // Mermaid 预览使用临时 Blob URL，关闭或切换笔记时必须主动释放。
+      mermaidPreviewUrl: '',
       emojiPopoverVisible: false,
       // 第一版只放高频表情，作为普通 Unicode 字符写入 Markdown，Obsidian 和网页端都能直接显示。
       emojiList: [
-        '😄', '😂', '😊', '😍', '😘', '👍', '👎', '👏',
-        '🙏', '🔥', '✨', '🎉', '🎀', '🎊', '🎁', '💡',
-        '✅', '❌', '⭐', '📌', '📎', '📅', '⏰', '🚀',
-        '❤️', '💔', '☕', '🍀', '🌈', '⚠️', '📊', '📈',
-        '✏️', '🍔', '☀️'
+            '😄', '😂', '😊', '😍', '😘', '👍', '👎', '👏',
+            '🙏', '🔥', '✨', '🎉', '🎀', '🎊', '🎁', '💡',
+            '✅', '❌', '⭐', '📌', '📎', '📅', '⏰', '🚀',
+            '❤️', '💔', '☕', '🍀', '🌈', '⚠️', '📊', '📈',
+            '✏️', '🍔', '☀️', '📝', '📖', '💻', '👨‍💻', '🧑‍💻',
+            '🛠️', '⚙️', '🧩', '🏗️', '🎨', '🗄️', '🔌', '🧪',
+            '🐛', '🔧', '♻️', '⚡', '🔒', '📦', '🔍', '📄',
+            '📃', '📑', '📜', '📋', '✍️', '🖊️', '📰', '🗞️',
+            '📕', '📗', '📘', '📙', '📓', '📔', '📒', '🔖',
+            '🏷️', '💬', '🗨️', '🧠', '🎯', '🌟', '🔨', '⛏️',
+            '🪛', '🔩', '🧰', '🖥️', '⌨️', '🖱️', '💾', '💿',
+            '📱', '🌐', '☁️', '📡', '🛰️', '🤖', '👾', '📐',
+            '📏', '🧮', '🔢', '🔣', '🔤', '🆕', '🆙', '🔄',
+            '🔁', '⏳', '⏱️', '🕒', '📉', '🧱', '🪜', '🗂️',
+            '📁', '📂', '🗃️', '🗳️', '🔐', '🔑', '🛡️', '🚨',
+            '❗', '❓', 'ℹ️', '✔️', '☑️', '⛔', '🚧', '🟢',
+            '🟡', '🔴', '🔵', '🟣', '➡️', '⬅️', '⬆️', '⬇️',
+            '🔀', '🔃', '⏩', '⏪', '▶️', '⏸️', '⏹️', '🏆',
+            '🥇', '🙌', '🤝', '🌱', '🌿', '🧹', '🧯', '🧨',
+            '🧲', '🔬', '🔭', '🧬', '📣', '🔔', '📢', '📤',
+            '📥', '✉️', '📨', '🧵', '🕸️', '🌍', '🗺️', '🛤️',
+            '🚦', '🚚', '🛫', '🎛️', '🎚️', '💎', '🪄', '❤️‍🔥',
+            '🤔', '🧐', '😎', '🤩', '😵‍💫', '😅', '💥', '🧷',
+            '🔗', '✂️', '➕', '➖', '✖️', '➗', '♾️', '©️',
+            '™️', '®️', '📚', '🧭', '🏁'
       ],
       editorOptions: {
         hooks: {
@@ -177,32 +214,42 @@ export default {
   mounted() {
     this.refresh()
   },
+  beforeDestroy() {
+    this.closeMediaPreview()
+  },
   methods: {
     refresh() {
+      // 切换笔记或刷新预览时立即清理旧媒体，避免弹窗残留上一份内容。
+      this.closeMediaPreview()
       const renderSeq = ++this.mermaidRenderSeq
       this.$nextTick(() => {
-        if (this.$refs.editor) {
-          const current = this.$refs.editor.invoke('getMarkdown')
+        if (!this.viewer) {
+          const editor = this.$refs.editor
+          if (!editor) {
+            return
+          }
+          const current = editor.invoke('getMarkdown')
           if (current !== (this.value || '')) {
             // 父组件切换笔记或加载内容时同步编辑器内容，但不能因此标记为未保存。
             this.syncingEditor = true
-            this.$refs.editor.invoke('setMarkdown', this.value || '', false)
+            editor.invoke('setMarkdown', this.value || '', false)
             window.setTimeout(() => {
               this.syncingEditor = false
             }, 0)
           }
+          return
         }
-        if (this.$refs.viewer) {
-          // 预览内容会把 Markdown 中的相对图片路径转换成浏览器可访问的 /file/** 地址。
-          this.$refs.viewer.invoke('setMarkdown', this.displayMarkdown(), false)
-          this.$nextTick(() => {
-            this.decorateViewerHeadings()
-            if (this.viewer) {
-              this.renderMermaidDiagrams(renderSeq)
-            }
-          })
+        const markdownViewer = this.$refs.viewer
+        if (!markdownViewer) {
+          return
         }
+        // 编辑和预览实例互斥；仅在预览模式构建完整 DOM，避免输入时重复渲染隐藏内容。
+        markdownViewer.invoke('setMarkdown', this.displayMarkdown(), false)
         this.parseHeadings()
+        this.$nextTick(() => {
+          this.decorateViewerHeadings()
+          this.renderMermaidDiagrams(renderSeq)
+        })
       })
     },
     renderMermaidDiagrams(renderSeq) {
@@ -247,6 +294,65 @@ export default {
       error.className = 'mermaid-error'
       error.textContent = message
       block.insertBefore(error, block.firstChild)
+    },
+    handleViewerClick(event) {
+      if (!this.viewer || !event.target || !event.target.closest) {
+        return
+      }
+      const content = event.target.closest('.toastui-editor-contents')
+      if (!content || !this.$el.contains(content)) {
+        return
+      }
+
+      const image = event.target.closest('img')
+      if (image && content.contains(image)) {
+        const imageUrl = image.currentSrc || image.src
+        if (imageUrl) {
+          event.preventDefault()
+          this.openMediaPreview(imageUrl)
+        }
+        return
+      }
+
+      const diagram = event.target.closest('.mermaid-diagram.is-rendered')
+      if (!diagram || diagram.classList.contains('has-error') || !content.contains(diagram)) {
+        return
+      }
+      const svg = diagram.querySelector('svg')
+      if (!svg) {
+        return
+      }
+
+      // 将当前已渲染 SVG 序列化，确保弹窗展示内容与正文中的流程图一致。
+      const svgContent = new XMLSerializer().serializeToString(svg)
+      const blob = new Blob([svgContent], { type: 'image/svg+xml;charset=utf-8' })
+      event.preventDefault()
+      this.openMediaPreview(URL.createObjectURL(blob), true)
+    },
+    openMediaPreview(url, isMermaid = false) {
+      this.closeMediaPreview()
+      if (isMermaid) {
+        this.mermaidPreviewUrl = url
+      }
+      this.mediaPreviewUrls = [url]
+      this.mediaPreviewVisible = true
+    },
+    closeMediaPreview() {
+      const mediaViewer = this.$refs.mediaViewer
+      // 程序化关闭也走组件原生 hide，确保卸载全局键盘和滚轮监听。
+      if (mediaViewer && mediaViewer._keyDownHandler) {
+        mediaViewer.hide()
+        return
+      }
+      this.handleMediaViewerClose()
+    },
+    handleMediaViewerClose() {
+      this.mediaPreviewVisible = false
+      this.mediaPreviewUrls = []
+      if (this.mermaidPreviewUrl) {
+        URL.revokeObjectURL(this.mermaidPreviewUrl)
+        this.mermaidPreviewUrl = ''
+      }
     },
     handleChange() {
       this.syncMarkdownFromEditor()
@@ -397,7 +503,7 @@ export default {
 
 .emoji-panel {
   display: grid;
-  grid-template-columns: repeat(7, 28px);
+  grid-template-columns: repeat(18, 28px);
   gap: 6px;
   box-sizing: border-box;
   max-width: 100%;
@@ -509,6 +615,11 @@ export default {
   color: #2f2f2f;
   font-size: 16px;
   line-height: 1.75;
+}
+
+.note-markdown ::v-deep .toastui-editor-contents img,
+.note-markdown ::v-deep .mermaid-diagram.is-rendered svg {
+  cursor: zoom-in;
 }
 
 .note-markdown ::v-deep .toastui-editor-contents h1 {

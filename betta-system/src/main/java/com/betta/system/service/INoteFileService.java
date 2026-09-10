@@ -92,5 +92,12 @@ public interface INoteFileService
 
     NoteUploadResult syncUpload(String userName, String path, MultipartFile file, String lastKnownHash);
 
+    /**
+     * 扫描全部用户 vault，恢复仍被引用的回收图片，并回收或永久清理过期的孤立图片。
+     *
+     * @param retentionDays 系统图片回收区保留天数
+     */
+    void cleanupExpiredNoteImages(int retentionDays);
+
     void download(String userName, String path, HttpServletResponse response) throws IOException;
 }
