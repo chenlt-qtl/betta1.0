@@ -165,6 +165,21 @@
     ></div>
 
     <main class="note-workspace">
+      <div v-if="openNotes.length" class="note-tabs">
+        <div
+          v-for="note in openNotes"
+          :key="note.id"
+          class="note-tab"
+          :class="{ active: note.id === activeNoteId }"
+          :title="note.path"
+          @click="activateNoteTab(note.id)"
+        >
+          <i class="el-icon-document"></i>
+          <span class="note-tab-title">{{ note.title }}</span>
+          <span v-if="note.dirty" class="note-tab-dirty"></span>
+          <i class="el-icon-close note-tab-close" @click.stop="requestCloseNoteTab(note.id)"></i>
+        </div>
+      </div>
       <div class="workspace-topbar">
         <div class="workspace-nav">
           <el-button type="text" icon="el-icon-back" />
@@ -220,6 +235,7 @@
       <div class="note-canvas">
         <div v-if="currentPath && currentNodeType === 'file'" class="editor-wrap">
           <note-markdown
+            :key="activeNoteId"
             v-model="content"
             :viewer="viewer"
             :note-path="currentPath"
@@ -382,6 +398,12 @@ export default {
       moveTargetDirectory: '',
       moveTargetSelected: false,
       moveSubmitting: false,
+      // 每个已打开页签独立保存正文、版本和显示状态，切换时不会覆盖其他笔记的编辑上下文。
+      openNotes: [],
+      activeNoteId: '',
+      nextNoteTabId: 1,
+      noteOpenSeq: 0,
+      openingNotePaths: {},
       // 当前选中的 vault 相对路径和节点类型；文件夹选中时会清空正文区域。
       currentPath: '',
       currentNodeType: '',
@@ -396,8 +418,6 @@ export default {
       // dirty 只代表正文是否有真实用户改动；初始化/切换笔记不会置为未保存。
       dirty: false,
       loadingNote: false,
-      // 保存 Promise 用于串行化移动，避免旧路径保存与文件移动并发后重新创建源文件。
-      savePromise: null,
       renamingTitle: false,
       // 目录状态由页面持有，按钮放在顶部工具栏；手机端默认收起以节省横向空间。
       tocCollapsed: this.isMobileViewport(),
@@ -601,33 +621,16 @@ export default {
     },
     handleFolderFilterClick(data) {
       const nextPath = data.path || ''
-      const applyFolderFilter = () => {
-        // 主树数据范围即将变化，清空移动选择，避免隐藏项目仍保留在待移动列表中。
-        this.clearMoveSelection()
-        this.selectedFolderPath = nextPath
-        this.folderDropdownVisible = false
-        // 切换筛选目录后，如果右侧仍停留在目录外的旧笔记，清空详情避免保存/删除对象和左树上下文不一致。
-        if (!this.isPathInDirectory(this.currentPath, nextPath)) {
-          this.clearCurrentSelection()
-        }
-      }
-      if (this.dirty && !this.isPathInDirectory(this.currentPath, nextPath)) {
-        this.$confirm('当前笔记尚未保存，切换文件夹会清空当前详情，是否继续？', '提示', { type: 'warning' })
-          .then(applyFolderFilter)
-          .catch(() => {})
-        return
-      }
-      applyFolderFilter()
-    },
-    isPathInDirectory(path, directory) {
-      if (!path || !directory) {
-        return true
-      }
-      return path === directory || path.indexOf(directory + '/') === 0
+      // 筛选仅改变左侧文件树范围，已打开页签及当前编辑上下文继续保留。
+      this.clearMoveSelection()
+      this.selectedFolderPath = nextPath
+      this.folderDropdownVisible = false
     },
     clearCurrentSelection() {
-      // 统一清空右侧详情状态，供删除和筛选目录切换复用。
+      // 仅清空工作区当前对象；已打开页签由关闭、删除等各自流程维护。
       this.incrementNoteContextVersion()
+      this.noteOpenSeq += 1
+      this.activeNoteId = ''
       this.currentPath = ''
       this.currentNodeType = ''
       this.title = ''
@@ -703,7 +706,10 @@ export default {
         this.openNote(data.path)
       } else {
         // 文件夹不是可编辑笔记，选中时只显示文件夹占位并清空正文相关状态。
+        this.syncCurrentNoteToActiveTab()
         this.incrementNoteContextVersion()
+        this.noteOpenSeq += 1
+        this.activeNoteId = ''
         this.currentPath = data.path
         this.currentNodeType = data.type
         this.title = data.name
@@ -772,15 +778,18 @@ export default {
       }
       const sources = this.moveSelection.map(item => item.path)
       const sourceTypes = this.moveSelection.map(item => item.type)
+      this.syncCurrentNoteToActiveTab()
       this.moveSubmitting = true
-      if (sources.some((source, index) => this.currentPath === source
-        || (sourceTypes[index] === 'directory' && this.currentPath.indexOf(source + '/') === 0))) {
+      if (sources.some((source, index) => this.isSameOrDescendantPath(this.currentPath, source, sourceTypes[index]))) {
         // 当前对象即将移动时立即推进版本，不等待接口返回，避免并发日记响应先落地。
         this.incrementNoteContextVersion()
       }
-      // 若编辑器失焦已经触发自动保存，必须等旧路径保存完成后才能移动。
-      const pendingSave = this.savePromise || Promise.resolve()
-      pendingSave.then(() => moveNoteFiles({
+      // 受影响页签若正在保存，必须等旧路径保存完成后才能移动。
+      const pendingSaves = this.openNotes
+        .filter(note => sources.some((source, index) => this.isSameOrDescendantPath(note.path, source, sourceTypes[index])))
+        .map(note => note.savePromise)
+        .filter(Boolean)
+      Promise.all(pendingSaves).then(() => moveNoteFiles({
         paths: sources,
         targetDirectory: this.moveTargetDirectory
       })).then(res => {
@@ -802,17 +811,28 @@ export default {
         if (!movedPath) {
           return
         }
-        if (this.currentPath === source) {
-          this.currentPath = movedPath
-        } else if (sourceTypes[index] === 'directory' && this.currentPath.indexOf(source + '/') === 0) {
-          this.currentPath = movedPath + this.currentPath.substring(source.length)
-        }
+        this.openNotes.forEach(note => {
+          note.path = this.replaceMovedPath(note.path, source, sourceTypes[index], movedPath)
+        })
+        this.currentPath = this.replaceMovedPath(this.currentPath, source, sourceTypes[index], movedPath)
         if (this.selectedFolderPath === source) {
           this.selectedFolderPath = movedPath
         } else if (sourceTypes[index] === 'directory' && this.selectedFolderPath.indexOf(source + '/') === 0) {
           this.selectedFolderPath = movedPath + this.selectedFolderPath.substring(source.length)
         }
       })
+    },
+    isSameOrDescendantPath(path, source, sourceType) {
+      return path === source || (sourceType === 'directory' && path.indexOf(source + '/') === 0)
+    },
+    replaceMovedPath(path, source, sourceType, movedPath) {
+      if (path === source) {
+        return movedPath
+      }
+      if (sourceType === 'directory' && path.indexOf(source + '/') === 0) {
+        return movedPath + path.substring(source.length)
+      }
+      return path
     },
     clearMoveSelection() {
       this.moveSelection = []
@@ -845,13 +865,6 @@ export default {
       this.moveTargetSelected = false
     },
     openNote(path) {
-      if (this.dirty) {
-        // 防止用户切换笔记时丢失未保存正文。
-        this.$confirm('当前笔记尚未保存，是否继续打开其他笔记？', '提示', { type: 'warning' })
-          .then(() => this.loadNote(path))
-          .catch(() => {})
-        return
-      }
       this.loadNote(path)
     },
     handleOpenJournal() {
@@ -869,6 +882,7 @@ export default {
           content: this.content,
           dirty: this.dirty
         }
+        const openSeq = ++this.noteOpenSeq
         this.journalOpening = true
         // 接口已经返回完整正文，直接打开可避免创建后再发起一次内容读取。
         openTodayJournal().then(res => {
@@ -876,20 +890,12 @@ export default {
           const contextUnchanged = this.noteContextVersion === context.version
             && this.content === context.content
             && this.dirty === context.dirty
-          if (contextUnchanged) {
-            this.applyNoteContent(res.data || {})
-            return
-          }
-          this.$modal.msgWarning('日记已创建/打开但当前内容已变化，可再次点击日记打开')
+            && this.noteOpenSeq === openSeq
+          // 当前上下文已变化时仍创建日记页签，但不抢占用户正在操作的页签。
+          this.applyNoteContent(res.data || {}, contextUnchanged)
         }).finally(() => {
           this.journalOpening = false
         })
-      }
-      if (this.dirty) {
-        this.$confirm('当前笔记尚未保存，是否继续打开今天的日记？', '提示', { type: 'warning' })
-          .then(openJournal)
-          .catch(() => {})
-        return
       }
       openJournal()
     },
@@ -937,30 +943,131 @@ export default {
       })
     },
     loadNote(path) {
-      // loadingNote 用来屏蔽编辑器初始化时可能抛出的 change 事件，避免刚打开就变成未保存。
+      const openedNote = this.findOpenNoteByPath(path)
+      const seq = ++this.noteOpenSeq
+      if (openedNote) {
+        this.activateNoteTab(openedNote.id)
+        return
+      }
+      let request = this.openingNotePaths[path]
+      if (!request) {
+        request = getNoteContent(path).then(res => res.data || {})
+        this.$set(this.openingNotePaths, path, request)
+      }
+      request.then(data => {
+        // 并发打开多个笔记时全部生成页签，仅最后一次点击的笔记获得焦点。
+        this.applyNoteContent(data, seq === this.noteOpenSeq)
+      }).finally(() => {
+        if (this.openingNotePaths[path] === request) {
+          this.$delete(this.openingNotePaths, path)
+        }
+      })
+    },
+    applyNoteContent(data, activate = true) {
+      const openedNote = this.findOpenNoteByPath(data.path)
+      if (openedNote) {
+        if (activate) {
+          this.activateNoteTab(openedNote.id)
+        }
+        return openedNote
+      }
+      const note = {
+        id: 'note-tab-' + this.nextNoteTabId++,
+        path: data.path,
+        title: this.fileTitle(data.path),
+        content: data.content || '',
+        hash: data.hash || '',
+        resourceBase: data.resourceBase || '',
+        dirty: false,
+        viewer: true,
+        tocCollapsed: this.isMobileViewport(),
+        savePromise: null
+      }
+      this.openNotes.push(note)
+      if (activate) {
+        this.activateNoteTab(note.id)
+      }
+      return note
+    },
+    findOpenNoteByPath(path) {
+      return this.openNotes.find(note => note.path === path)
+    },
+    findOpenNoteById(id) {
+      return this.openNotes.find(note => note.id === id)
+    },
+    syncCurrentNoteToActiveTab() {
+      const note = this.findOpenNoteById(this.activeNoteId)
+      if (!note) {
+        return
+      }
+      note.path = this.currentPath
+      note.title = this.title
+      note.content = this.content
+      note.hash = this.hash
+      note.resourceBase = this.resourceBase
+      note.dirty = this.dirty
+      note.viewer = this.viewer
+      note.tocCollapsed = this.tocCollapsed
+    },
+    activateNoteTab(id) {
+      if (id === this.activeNoteId) {
+        return
+      }
+      const note = this.findOpenNoteById(id)
+      if (!note) {
+        return
+      }
+      this.syncCurrentNoteToActiveTab()
       this.incrementNoteContextVersion()
+      this.noteOpenSeq += 1
+      this.activeNoteId = note.id
+      // loadingNote 屏蔽编辑器因页签切换同步内容时触发的 change 事件。
       this.loadingNote = true
-      getNoteContent(path).then(res => {
-        this.applyNoteContent(res.data || {})
-      }).catch(() => {
+      this.currentPath = note.path
+      this.currentNodeType = 'file'
+      this.title = note.title
+      this.content = note.content
+      this.hash = note.hash
+      this.resourceBase = note.resourceBase
+      this.dirty = note.dirty
+      this.viewer = note.viewer
+      this.tocCollapsed = note.tocCollapsed
+      this.$nextTick(() => {
         this.loadingNote = false
       })
     },
-    applyNoteContent(data) {
-      // 普通打开和日记创建共用同一状态入口，保证 viewer、hash 与资源路径保持一致。
-      this.loadingNote = true
-      this.currentPath = data.path
-      this.currentNodeType = 'file'
-      this.title = this.fileTitle(data.path)
-      this.content = data.content || ''
-      this.hash = data.hash || ''
-      this.resourceBase = data.resourceBase || ''
-      this.dirty = false
-      this.viewer = true
-      this.$nextTick(() => {
-        this.dirty = false
-        this.loadingNote = false
-      })
+    requestCloseNoteTab(id) {
+      const note = this.findOpenNoteById(id)
+      if (!note) {
+        return
+      }
+      if (id === this.activeNoteId) {
+        this.syncCurrentNoteToActiveTab()
+      }
+      const close = () => this.closeNoteTab(id)
+      if (note.dirty) {
+        this.$confirm(`笔记“${note.title}”尚未保存，确认关闭？`, '提示', { type: 'warning' })
+          .then(close)
+          .catch(() => {})
+        return
+      }
+      close()
+    },
+    closeNoteTab(id) {
+      const index = this.openNotes.findIndex(note => note.id === id)
+      if (index < 0) {
+        return
+      }
+      const wasActive = this.activeNoteId === id
+      this.openNotes.splice(index, 1)
+      if (!wasActive) {
+        return
+      }
+      const nextNote = this.openNotes[index] || this.openNotes[index - 1]
+      this.clearCurrentSelection()
+      if (nextNote) {
+        this.activateNoteTab(nextNote.id)
+      }
     },
     handleFavorite() {
       if (!this.currentPath || this.currentNodeType !== 'file' || this.favoriteUpdating) {
@@ -988,43 +1095,55 @@ export default {
       if (!this.loadingNote) {
         this.incrementNoteContextVersion()
         this.dirty = true
+        this.syncCurrentNoteToActiveTab()
       }
     },
     incrementNoteContextVersion() {
       this.noteContextVersion += 1
     },
     save() {
-      if (this.savePromise) {
-        return this.savePromise
+      this.syncCurrentNoteToActiveTab()
+      const note = this.findOpenNoteById(this.activeNoteId)
+      if (!note) {
+        return Promise.resolve()
       }
-      const savingPath = this.currentPath
-      const savingContent = this.content
+      if (note.savePromise) {
+        return note.savePromise
+      }
+      const savingPath = note.path
+      const savingContent = note.content
       const request = saveNoteContent({
         path: savingPath,
         content: savingContent,
-        lastKnownHash: this.hash
+        lastKnownHash: note.hash
       }).then(res => {
         const data = res.data || {}
-        // 路径已被移动或重命名时，迟到的保存响应不得把页面状态覆盖回旧路径。
-        if (this.currentPath !== savingPath) {
+        // 路径已被移动或重命名时，迟到的保存响应不得覆盖页签的新路径状态。
+        if (note.path !== savingPath) {
           return
         }
-        if (data.path !== this.currentPath) {
+        if (data.path !== note.path && note.id === this.activeNoteId) {
           this.incrementNoteContextVersion()
         }
-        this.currentPath = data.path
-        this.hash = data.hash || ''
-        this.resourceBase = data.resourceBase || this.resourceBase
+        note.path = data.path
+        note.hash = data.hash || ''
+        note.resourceBase = data.resourceBase || note.resourceBase
         // 保存期间继续编辑时仅更新服务端 hash，保留未保存标记等待下一次保存。
-        this.dirty = this.content !== savingContent
+        note.dirty = note.content !== savingContent
+        if (note.id === this.activeNoteId) {
+          this.currentPath = note.path
+          this.hash = note.hash
+          this.resourceBase = note.resourceBase
+          this.dirty = note.dirty
+        }
         this.$modal.msgSuccess('保存成功')
         this.loadTree()
       }).finally(() => {
-        if (this.savePromise === request) {
-          this.savePromise = null
+        if (note.savePromise === request) {
+          note.savePromise = null
         }
       })
-      this.savePromise = request
+      note.savePromise = request
       return request
     },
     handleEditorBlur() {
@@ -1054,20 +1173,22 @@ export default {
     },
     handleDelete() {
       const path = this.currentPath
+      const type = this.currentNodeType
       this.$confirm(`确认删除 ${path}？`, '提示', { type: 'warning' }).then(() => {
         // 删除确认即代表用户要离开当前对象，先失效仍在途的日记响应。
         this.incrementNoteContextVersion()
         deleteNoteFile(path).then(() => {
           this.$modal.msgSuccess('删除成功')
-          this.clearCurrentSelection()
+          this.closeDeletedNoteTabs(path, type)
           this.loadTree()
           this.loadFavorites()
         })
       }).catch(() => {})
     },
     handleDownload() {
-      downloadNoteFile(this.currentPath).then(blob => {
-        saveAs(blob, this.basename(this.currentPath))
+      const path = this.currentPath
+      downloadNoteFile(path).then(blob => {
+        saveAs(blob, this.basename(path))
       })
     },
     handleTitleBlur() {
@@ -1088,22 +1209,56 @@ export default {
         return
       }
       this.renamingTitle = true
-      const parent = this.dirname(this.currentPath)
+      const oldPath = this.currentPath
+      const type = this.currentNodeType
+      const activeNoteId = this.activeNoteId
+      const targetNote = this.findOpenNoteById(activeNoteId)
+      const parent = this.dirname(oldPath)
       // 文件标题显示时不带 .md，但落盘仍保持 Markdown 文件后缀；文件夹则直接使用输入名称。
       const nextName = this.currentNodeType === 'file' ? this.ensureMd(name) : name
-      renameNoteFile({ path: this.currentPath, newPath: this.joinPath(parent, nextName) }).then(res => {
+      renameNoteFile({ path: oldPath, newPath: this.joinPath(parent, nextName) }).then(res => {
+        const data = res.data || {}
         this.incrementNoteContextVersion()
-        this.currentPath = res.data.path
-        this.currentNodeType = res.data.type
-        this.title = res.data.type === 'file' ? this.fileTitle(this.currentPath) : this.basename(this.currentPath)
+        this.updatePathsAfterRename(oldPath, data.path, type)
+        if (this.activeNoteId === activeNoteId || (!activeNoteId && this.currentPath === data.path)) {
+          this.currentPath = data.path
+          this.currentNodeType = data.type
+          this.title = data.type === 'file' ? this.fileTitle(data.path) : this.basename(data.path)
+          this.syncCurrentNoteToActiveTab()
+        }
         this.$modal.msgSuccess('标题已更新')
         this.loadTree()
         this.loadFavorites()
       }).catch(() => {
-        this.title = oldName
+        if (targetNote) {
+          targetNote.title = oldName
+        }
+        if (this.activeNoteId === activeNoteId) {
+          this.title = oldName
+        }
       }).finally(() => {
         this.renamingTitle = false
       })
+    },
+    updatePathsAfterRename(oldPath, newPath, type) {
+      this.openNotes.forEach(note => {
+        note.path = this.replaceMovedPath(note.path, oldPath, type, newPath)
+        note.title = this.fileTitle(note.path)
+      })
+      this.currentPath = this.replaceMovedPath(this.currentPath, oldPath, type, newPath)
+      this.selectedFolderPath = this.replaceMovedPath(this.selectedFolderPath, oldPath, type, newPath)
+    },
+    closeDeletedNoteTabs(path, type) {
+      const activeIndex = this.openNotes.findIndex(note => note.id === this.activeNoteId)
+      this.openNotes = this.openNotes.filter(note => !this.isSameOrDescendantPath(note.path, path, type))
+      if (this.activeNoteId && this.findOpenNoteById(this.activeNoteId)) {
+        return
+      }
+      const nextNote = this.openNotes[activeIndex] || this.openNotes[activeIndex - 1]
+      this.clearCurrentSelection()
+      if (nextNote) {
+        this.activateNoteTab(nextNote.id)
+      }
     },
     selectedDirectory() {
       // 当前选中节点优先于下拉筛选目录：目录内新建，文件旁新建；未选中节点时才回退到筛选目录。
@@ -1403,6 +1558,68 @@ export default {
   display: flex;
   flex-direction: column;
   background: #fff;
+}
+
+.note-tabs {
+  display: flex;
+  flex: 0 0 36px;
+  min-width: 0;
+  height: 36px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: 1px solid #e4e7ed;
+  background: #f7f7f7;
+}
+
+.note-tab {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 120px;
+  max-width: 220px;
+  padding: 0 10px;
+  border-right: 1px solid #e4e7ed;
+  color: #606266;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.note-tab:hover {
+  background: #fff;
+}
+
+.note-tab.active {
+  color: #303133;
+  background: #fff;
+  box-shadow: inset 0 2px 0 #409eff;
+}
+
+.note-tab-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-tab-dirty {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: #e6a23c;
+}
+
+.note-tab-close {
+  flex: 0 0 auto;
+  padding: 2px;
+  border-radius: 50%;
+}
+
+.note-tab-close:hover {
+  color: #fff;
+  background: #909399;
 }
 
 .workspace-topbar {
