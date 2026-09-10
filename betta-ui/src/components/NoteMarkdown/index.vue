@@ -29,7 +29,7 @@
       </el-button>
     </el-popover>
     <editor
-      v-show="!viewer"
+      v-if="!viewer"
       ref="editor"
       :initial-value="value || ''"
       :options="editorOptions"
@@ -40,7 +40,7 @@
       @blur="handleBlur"
     />
     <div
-      v-show="viewer"
+      v-else
       class="viewer-shell"
       :class="{ 'toc-collapsed': tocCollapsed }"
       @click="handleViewerClick"
@@ -203,28 +203,33 @@ export default {
       this.closeMediaPreview()
       const renderSeq = ++this.mermaidRenderSeq
       this.$nextTick(() => {
-        if (this.$refs.editor) {
-          const current = this.$refs.editor.invoke('getMarkdown')
+        if (!this.viewer) {
+          const editor = this.$refs.editor
+          if (!editor) {
+            return
+          }
+          const current = editor.invoke('getMarkdown')
           if (current !== (this.value || '')) {
             // 父组件切换笔记或加载内容时同步编辑器内容，但不能因此标记为未保存。
             this.syncingEditor = true
-            this.$refs.editor.invoke('setMarkdown', this.value || '', false)
+            editor.invoke('setMarkdown', this.value || '', false)
             window.setTimeout(() => {
               this.syncingEditor = false
             }, 0)
           }
+          return
         }
-        if (this.$refs.viewer) {
-          // 预览内容会把 Markdown 中的相对图片路径转换成浏览器可访问的 /file/** 地址。
-          this.$refs.viewer.invoke('setMarkdown', this.displayMarkdown(), false)
-          this.$nextTick(() => {
-            this.decorateViewerHeadings()
-            if (this.viewer) {
-              this.renderMermaidDiagrams(renderSeq)
-            }
-          })
+        const markdownViewer = this.$refs.viewer
+        if (!markdownViewer) {
+          return
         }
+        // 编辑和预览实例互斥；仅在预览模式构建完整 DOM，避免输入时重复渲染隐藏内容。
+        markdownViewer.invoke('setMarkdown', this.displayMarkdown(), false)
         this.parseHeadings()
+        this.$nextTick(() => {
+          this.decorateViewerHeadings()
+          this.renderMermaidDiagrams(renderSeq)
+        })
       })
     },
     renderMermaidDiagrams(renderSeq) {
