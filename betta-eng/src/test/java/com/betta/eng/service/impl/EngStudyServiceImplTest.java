@@ -125,7 +125,10 @@ public class EngStudyServiceImplTest {
         assertEquals("CN_TO_WORD", definitionValue(cnToWord, "type"), "看中文选英文题型错误");
         assertEquals("https://audio.example/apple.mp3", definitionValue(cnToWord, "audioUrl"),
                 "看中文选英文题应携带目标单词音频");
-        assertEquals(null, definitionValue(wordToCn, "audioUrl"), "看词选中文题不应携带音频");
+        assertEquals("https://audio.example/apple.mp3", definitionValue(wordToCn, "audioUrl"),
+                "看词选中文题应携带目标单词音频");
+        assertEquals(null, definitionValue(findDefinition(definitions, "WORD_TO_CN:2"), "audioUrl"),
+                "目标单词没有音频时看词选中文题的发音地址应为空");
         assertEquals("https://audio.example/apple.mp3", definitionValue(appleFill, "audioUrl"),
                 "句子填词题应携带目标单词音频");
         assertEquals(5, definitionValue(appleFill, "answerLength"), "apple 填词题答案长度应为五个字母");

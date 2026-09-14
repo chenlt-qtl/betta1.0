@@ -16,7 +16,7 @@ public class EngChallengeQuestionVo {
     private String prompt;
     /** 可选答案集合，两类选择题及句子挖空选词题返回候选项，句子挖空填词题为空。 */
     private List<String> options;
-    /** 单词发音音频地址，看中文选英文题和句子填词题按需返回。 */
+    /** 单词发音音频地址，看词选中文、看中文选英文和句子填词题按需返回。 */
     private String audioUrl;
     /** 填词题正确单词的字母数，其他题型为空。 */
     private Integer answerLength;

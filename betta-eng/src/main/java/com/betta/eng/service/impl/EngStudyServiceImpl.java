@@ -250,13 +250,13 @@ public class EngStudyServiceImpl implements IEngStudyService {
     }
 
     /**
-     * 构建看词选中文题；word 为目标单词，validWords 为文章全部有效单词，返回服务端标准题目定义。
+     * 构建看词选中文题；word 为目标单词，validWords 为文章全部有效单词，返回包含发音地址的标准题目定义。
      */
     private QuestionDefinition buildWordToCnDefinition(EngWordVo word, List<EngWordVo> validWords) {
         List<String> options = buildOptions(word.getAcceptation(), validWords, false);
         return new QuestionDefinition(WORD_TO_CN_PREFIX + word.getId(), WORD_TO_CN_TYPE,
-                "请选择单词 “" + word.getWordName() + "” 的正确释义", word.getAcceptation(), options, null, null,
-                word);
+                "请选择单词 “" + word.getWordName() + "” 的正确释义", word.getAcceptation(), options,
+                word.getPhMp3(), null, word);
     }
 
     /**

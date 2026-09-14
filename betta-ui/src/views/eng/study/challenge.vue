@@ -210,7 +210,7 @@ export default {
     },
     canPlayCurrentAudio() {
       return this.currentQuestion &&
-        this.currentQuestion.type === 'CN_TO_WORD' &&
+        ['WORD_TO_CN', 'CN_TO_WORD'].includes(this.currentQuestion.type) &&
         this.currentQuestion.audioUrl
     },
     hasUnsupportedQuestion() {
@@ -304,7 +304,7 @@ export default {
       return this.isChoiceQuestion(question) || (question && question.type === 'SENTENCE_FILL')
     },
     tryAutoPlay(question) {
-      if (!question || question.type !== 'CN_TO_WORD' || !question.audioUrl) return
+      if (!question || !['WORD_TO_CN', 'CN_TO_WORD'].includes(question.type) || !question.audioUrl) return
       this.$nextTick(() => {
         try {
           // 浏览器可能禁止无用户操作的播放；失败时保留重播入口，不影响继续答题。
