@@ -1,10 +1,30 @@
 let player = new Audio();
 let timer;
 
+/** 将完整 URL、当前资源路径和历史 profile 路径统一为可播放地址。 */
+const resolveAudioUrl = (url) => {
+  const resourcePrefix = process.env.VUE_APP_RESOURCE || "";
+  const normalized = String(url || "").trim();
+  if (!normalized || /^https?:\/\//i.test(normalized)) {
+    return normalized;
+  }
+  if (normalized === resourcePrefix || normalized.startsWith(resourcePrefix + "/")) {
+    return normalized;
+  }
+
+  const legacyProfilePrefix = "/profile";
+  const resourcePath = normalized === legacyProfilePrefix
+    ? ""
+    : normalized.startsWith(legacyProfilePrefix + "/")
+      ? normalized.slice(legacyProfilePrefix.length)
+      : normalized;
+  return resourcePrefix + (resourcePath.startsWith("/") ? resourcePath : "/" + resourcePath);
+}
+
 /**播放MP3 */
 export const play = (url, timeStr, onError = () => {}) => {
 
-  player.src = process.env.VUE_APP_RESOURCE + url;
+  player.src = resolveAudioUrl(url);
   player.load();
 
   //先重置
