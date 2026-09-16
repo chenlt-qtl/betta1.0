@@ -8,9 +8,20 @@
         <result property="prototype" column="prototype"/>
         <result property="phMp3" column="ph_mp3"/>
         <result property="phonetics" column="phonetics"/>
+        <result property="displayName" column="display_name"/>
+        <result property="phoneticsUk" column="phonetics_uk"/>
+        <result property="phoneticsUs" column="phonetics_us"/>
+        <result property="phMp3Uk" column="ph_mp3_uk"/>
+        <result property="phMp3Us" column="ph_mp3_us"/>
         <result property="acceptation" column="acceptation"/>
         <result property="exchange" column="exchange"/>
         <result property="parts" column="parts"/>
+        <result property="wordForms" column="word_forms"/>
+        <result property="usageLabels" column="usage_labels"/>
+        <result property="variants" column="variants"/>
+        <result property="grammar" column="grammar"/>
+        <result property="dictionarySource" column="dictionary_source"/>
+        <result property="dictionaryDetail" column="dictionary_detail"/>
         <result property="status" column="status"/>
         <result property="createBy" column="create_by"/>
         <result property="createTime" column="create_time"/>
@@ -18,7 +29,9 @@
         <result property="updateTime" column="update_time"/>
     </resultMap>
     <sql id="columns">
-        id,word_name,prototype,ph_mp3,phonetics,acceptation,exchange,parts,status,
+        id,word_name,prototype,ph_mp3,phonetics,display_name,phonetics_uk,phonetics_us,
+        ph_mp3_uk,ph_mp3_us,acceptation,exchange,parts,word_forms,usage_labels,variants,
+        grammar,dictionary_source,dictionary_detail,status,
         create_by,create_time,update_by,update_time
     </sql>
     <select id="selectEngWordById" resultMap="WordMap">
@@ -37,7 +50,19 @@
         order by word_name
     </select>
     <select id="selectEngWordByWordName" resultMap="WordMap">
-        select <include refid="columns"/> from eng_word where word_name=#{wordName}
+        select matched.*
+        from (
+            select w.*, 0 match_priority, 0 alias_sort
+            from eng_word w
+            where w.word_name=#{wordName}
+            union all
+            select w.*, 1 match_priority, a.sort_order alias_sort
+            from eng_word_alias a
+            join eng_word w on w.id=a.word_id
+            where a.alias_key=#{wordName}
+              and not exists(select 1 from eng_word exact_word where exact_word.word_name=#{wordName})
+        ) matched
+        order by matched.match_priority,matched.alias_sort,matched.id
     </select>
     <select id="selectWordListByArticleId" resultMap="WordMap">
         select w.*,r.id rel_id
@@ -46,13 +71,21 @@
         order by w.word_name
     </select>
     <insert id="insertEngWord" parameterType="EngWord" useGeneratedKeys="true" keyProperty="id">
-        insert into eng_word(word_name,prototype,ph_mp3,phonetics,acceptation,exchange,parts,status,create_by,create_time)
-        values(#{wordName},#{prototype},#{phMp3},#{phonetics},#{acceptation},#{exchange},#{parts},#{status},#{createBy},now())
+        insert into eng_word(word_name,prototype,ph_mp3,phonetics,display_name,phonetics_uk,phonetics_us,
+            ph_mp3_uk,ph_mp3_us,acceptation,exchange,parts,word_forms,usage_labels,variants,grammar,
+            dictionary_source,dictionary_detail,status,create_by,create_time)
+        values(#{wordName},#{prototype},#{phMp3},#{phonetics},#{displayName},#{phoneticsUk},#{phoneticsUs},
+            #{phMp3Uk},#{phMp3Us},#{acceptation},#{exchange},#{parts},#{wordForms},#{usageLabels},
+            #{variants},#{grammar},#{dictionarySource},#{dictionaryDetail},#{status},#{createBy},now())
     </insert>
     <update id="updateEngWord" parameterType="EngWord">
         update eng_word
         set word_name=#{wordName},prototype=#{prototype},ph_mp3=#{phMp3},phonetics=#{phonetics},
-            acceptation=#{acceptation},exchange=#{exchange},parts=#{parts},status=#{status},
+            display_name=#{displayName},phonetics_uk=#{phoneticsUk},phonetics_us=#{phoneticsUs},
+            ph_mp3_uk=#{phMp3Uk},ph_mp3_us=#{phMp3Us},acceptation=#{acceptation},
+            exchange=#{exchange},parts=#{parts},word_forms=#{wordForms},usage_labels=#{usageLabels},
+            variants=#{variants},grammar=#{grammar},dictionary_source=#{dictionarySource},
+            dictionary_detail=#{dictionaryDetail},status=#{status},
             update_by=#{updateBy},update_time=now()
         where id=#{id}
     </update>

@@ -17,6 +17,14 @@ public class EngIcibaSentence extends BaseEntity {
     private String orig;
     /** 中文释义。 */
     private String trans;
+    /** 例句来源。 */
+    private String source;
+    /** 原始词典义项 ID。 */
+    private String senseId;
+    /** 词条内排序号。 */
+    private Integer sortOrder;
+    /** 例句朗读音频地址。 */
+    private String audioPath;
     /** 例句状态。 */
     private String status;
 }

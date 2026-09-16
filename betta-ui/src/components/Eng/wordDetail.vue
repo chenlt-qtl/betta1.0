@@ -1,5 +1,9 @@
 <template>
-  <div class="content">
+  <div
+    class="content"
+    v-loading="loading"
+    element-loading-text="正在查询词典..."
+  >
     <div v-if="form.id">
       <el-descriptions
         class="margin-top"
@@ -39,7 +43,7 @@
         <template v-for="(item, index) in acceptations">
           <el-descriptions-item
             :labelStyle="{ width: '64px' }"
-            :label="index == 0 ? '词霸释义:' : ''"
+            :label="index == 0 ? '词典释义:' : ''"
             :key="item"
             >{{ item }}</el-descriptions-item
           >
@@ -78,7 +82,7 @@
       </el-card>
       <el-card class="box-card">
         <div slot="header" class="clearfix">
-          <span>爱词霸例句</span>
+          <span>词典例句</span>
         </div>
         <ol>
           <li v-for="item in form.icibaSentenceList" :key="item.id">
@@ -113,6 +117,7 @@
 </template>
 <style lang="scss" scoped>
 .content {
+  min-height: 160px;
   text-align: left;
   .ph {
     font-size: 20px;
@@ -168,7 +173,7 @@ export default {
   data() {
     return {
       // 遮罩层
-      loading: true,
+      loading: false,
       // 表单参数
       form: {},
       open: false,
@@ -192,12 +197,20 @@ export default {
     getWord() {
       if (this.wordName) {
         this.loading = true;
-        getWord({ wordName: this.wordName }).then((response) => {
-          this.form = response.data;
-          this.loading = false;
-        });
+        this.form = {};
+        getWord({ wordName: this.wordName })
+          .then((response) => {
+            this.form = response.data || {};
+          })
+          .catch(() => {
+            this.form = {};
+          })
+          .finally(() => {
+            this.loading = false;
+          });
       } else {
         this.form = {};
+        this.loading = false;
       }
     },
     /**更新单词 */
