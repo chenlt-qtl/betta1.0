@@ -1,5 +1,6 @@
 package com.betta.eng.service.impl;
 
+import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -31,19 +32,19 @@ public class EngWordServiceImpl implements IEngWordService
     private final IEngArticleWordRelService relService;
     private final IEngUserScoreService scoreService;
     private final IEngSentenceService sentenceService;
-    private final IEngIcibaSentenceService icibaService;
+    private final IEngIcibaSentenceService dictionarySentenceService;
     private final DictUtils dictUtils;
 
     /** 创建单词服务；参数依次负责单词、关系、成绩、句子、例句和词典访问。 */
     public EngWordServiceImpl(EngWordMapper mapper, IEngArticleWordRelService relService,
             IEngUserScoreService scoreService, IEngSentenceService sentenceService,
-            IEngIcibaSentenceService icibaService, DictUtils dictUtils)
+            IEngIcibaSentenceService dictionarySentenceService, DictUtils dictUtils)
     {
         this.mapper = mapper;
         this.relService = relService;
         this.scoreService = scoreService;
         this.sentenceService = sentenceService;
-        this.icibaService = icibaService;
+        this.dictionarySentenceService = dictionarySentenceService;
         this.dictUtils = dictUtils;
     }
 
@@ -79,6 +80,7 @@ public class EngWordServiceImpl implements IEngWordService
     }
 
     @Override
+    @Transactional
     public EngWordVo getWordVo(String wordName)
     {
         EngWord word = getOrCreate(normalize(wordName));
@@ -86,7 +88,7 @@ public class EngWordServiceImpl implements IEngWordService
         BeanUtils.copyProperties(word, result);
         EngIcibaSentence sentence = new EngIcibaSentence();
         sentence.setWordId(word.getId());
-        result.setIcibaSentenceList(icibaService.selectEngIcibaSentenceList(sentence));
+        result.setIcibaSentenceList(dictionarySentenceService.selectEngIcibaSentenceList(sentence));
         result.setSentenceList(sentenceService.selectByWordTop10(word));
         EngArticleWordRel rel = new EngArticleWordRel();
         rel.setWordName(word.getWordName());
@@ -122,7 +124,7 @@ public class EngWordServiceImpl implements IEngWordService
     {
         for (Long id : ids)
         {
-            icibaService.deleteByWordId(id);
+            dictionarySentenceService.deleteByWordId(id);
             mapper.deleteEngWordById(id);
         }
     }
@@ -149,13 +151,15 @@ public class EngWordServiceImpl implements IEngWordService
         {
             if (StringUtils.isNotEmpty(value))
             {
-                desired.add(normalize(value));
+                EngWord resolvedWord = getOrCreate(normalize(value));
+                desired.add(normalize(resolvedWord.getWordName()));
             }
         }
         List<Long> removeIds = new ArrayList<>();
         for (EngArticleWordRel rel : old)
         {
-            if (!desired.remove(rel.getWordName().toLowerCase(Locale.ROOT)))
+            String oldWordName = StringUtils.isEmpty(rel.getWordName()) ? null : normalize(rel.getWordName());
+            if (oldWordName == null || !desired.remove(oldWordName))
             {
                 removeIds.add(rel.getId());
             }
@@ -164,30 +168,35 @@ public class EngWordServiceImpl implements IEngWordService
         {
             relService.deleteEngArticleWordRelByIds(removeIds.toArray(new Long[0]));
         }
-        for (String value : desired)
+        for (String canonicalWordName : desired)
         {
-            addArticleWord(articleId, value);
+            EngArticleWordRel rel = new EngArticleWordRel();
+            rel.setArticleId(articleId);
+            rel.setWordName(canonicalWordName);
+            relService.insertEngArticleWordRel(rel);
         }
     }
 
     @Override
+    @Transactional
     public void addArticleWord(Long articleId, String wordName)
     {
         String normalized = normalize(wordName);
-        getOrCreate(normalized);
+        EngWord resolvedWord = getOrCreate(normalized);
+        String canonicalWordName = resolvedWord.getWordName();
         EngArticleWordRel condition = new EngArticleWordRel();
         condition.setArticleId(articleId);
-        condition.setWordName(normalized);
+        condition.setWordName(canonicalWordName);
         if (relService.selectEngArticleWordRelList(condition).isEmpty())
         {
             EngArticleWordRel rel = new EngArticleWordRel();
             rel.setArticleId(articleId);
-            rel.setWordName(normalized);
+            rel.setWordName(canonicalWordName);
             relService.insertEngArticleWordRel(rel);
         }
         else
         {
-            scoreService.updateEngUserScore(normalized, -1);
+            scoreService.updateEngUserScore(canonicalWordName, -1);
         }
     }
 
@@ -198,28 +207,12 @@ public class EngWordServiceImpl implements IEngWordService
         {
             throw new ServiceException("单词不能为空");
         }
-        return value.trim().toLowerCase(Locale.ROOT);
+        return Normalizer.normalize(value, Normalizer.Form.NFKC).trim().toLowerCase(Locale.ROOT);
     }
 
-    /** 查询或通过词典创建 normalized 单词，并持久化词典例句。 */
+    /** 仅从本地数据库查询 normalized 对应的正式词条或别名。 */
     private EngWord getOrCreate(String normalized)
     {
-        List<EngWord> list = mapper.selectEngWordByWordName(normalized);
-        if (!list.isEmpty())
-        {
-            return list.get(0);
-        }
-        EngWordVo word = dictUtils.getWord(normalized);
-        word.setCreateBy(SecurityUtils.getUsername());
-        mapper.insertEngWord(word);
-        if (word.getIcibaSentenceList() != null)
-        {
-            for (EngIcibaSentence sentence : word.getIcibaSentenceList())
-            {
-                sentence.setWordId(word.getId());
-                icibaService.insertEngIcibaSentence(sentence);
-            }
-        }
-        return word;
+        return dictUtils.getWord(normalized);
     }
 }

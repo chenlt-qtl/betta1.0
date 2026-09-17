@@ -53,7 +53,7 @@ export default {
   methods: {
     /** 搜索按钮操作 */
     handleQuery() {
-      this.$router.push("/eng/manage/word?w=" + this.wordName);
+      this.$router.push("/eng/manage/word-query?w=" + this.wordName);
     },
     /** 重置按钮操作 */
     resetQuery() {
