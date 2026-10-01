@@ -19,7 +19,13 @@
       <el-table-column label="原型" align="center" prop="prototype" />
       <el-table-column label="音标" align="center" prop="phonetics" />
       <el-table-column label="解释" align="center" prop="acceptation" :formatter="acceptationFormatter" />
-      <el-table-column v-if="!hideScore" label="熟悉度" align="center" prop="familiarity" />
+      <el-table-column
+        v-if="!hideScore"
+        label="熟悉度"
+        align="center"
+        prop="familiarity"
+        :formatter="familiarityFormatter"
+      />
       <el-table-column label="简明释义" align="center" prop="exchange" />
       <el-table-column label="音频" align="center" prop="phMp3">
         <template v-if="scope.row.phMp3" slot-scope="scope">
@@ -144,6 +150,10 @@ export default {
     },
   },
   methods: {
+    /** 尚无成绩记录时，熟悉度按零展示。 */
+    familiarityFormatter(row) {
+      return row.familiarity == null ? 0 : row.familiarity;
+    },
     acceptationFormatter(row) {
       const acceptation = row.acceptation;
       if (acceptation) {
