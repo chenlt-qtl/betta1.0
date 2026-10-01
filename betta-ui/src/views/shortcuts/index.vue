@@ -6,7 +6,7 @@
         正在学习
       </div>
       <div class="title-btn">
-        <el-button>更换词书</el-button>
+        <el-button @click="changeWordBook">更换词书</el-button>
       </div>
       <div v-if="article.id" class="text article">
         <div class="article-title">
@@ -72,28 +72,84 @@
       </div>
     </div>
 
+    <el-dialog
+      title="更换词书"
+      :visible.sync="wordBookDialogVisible"
+      width="520px"
+      append-to-body
+    >
+      <div v-loading="wordBookLoading" class="word-book-list">
+        <el-empty
+          v-if="!wordBookLoading && wordBookOptions.length === 0"
+          description="暂无可选择的词书"
+        />
+        <div
+          v-for="item in wordBookOptions"
+          v-else
+          :key="item.id"
+          class="word-book-item"
+        >
+          <span class="word-book-title">{{ item.title || '未命名文章' }}</span>
+          <el-button
+            type="primary"
+            size="small"
+            :disabled="wordBookSelectingId !== null || article.id === item.id"
+            :loading="wordBookSelectingId === item.id"
+            @click="selectWordBook(item)"
+          >
+            {{ article.id === item.id ? '当前词书' : '选择' }}
+          </el-button>
+        </div>
+      </div>
+    </el-dialog>
+
   </div>
 </template>
 
 <script>
 
-import { getCurrentArticle } from '@/api/eng/article';
+import {
+  getCurrentArticle,
+  listCurrentArticleOptions,
+  setCurrentArticle
+} from '@/api/eng/article';
 
 export default {
   name: "Shortcuts",
   data() {
     return {
-      article: {}
+      article: {},
+      wordBookDialogVisible: false,
+      wordBookLoading: false,
+      wordBookOptions: [],
+      wordBookSelectingId: null
     };
   },
   created() {
-    // getCurrentArticle().then((res) => {
-    //   if (res.data) {
-    //     this.article = res.data
-    //   }
-    // })
+    getCurrentArticle().then((res) => {
+      this.article = res.data || {};
+    });
   },
   methods: {
+    changeWordBook() {
+      this.wordBookDialogVisible = true;
+      this.wordBookLoading = true;
+      listCurrentArticleOptions().then((res) => {
+        this.wordBookOptions = Array.isArray(res.data) ? res.data : [];
+      }).finally(() => {
+        this.wordBookLoading = false;
+      });
+    },
+    selectWordBook(article) {
+      this.wordBookSelectingId = article.id;
+      setCurrentArticle(article.id).then((res) => {
+        this.article = res.data || article;
+        this.wordBookDialogVisible = false;
+        this.$message.success('词书更换成功');
+      }).finally(() => {
+        this.wordBookSelectingId = null;
+      });
+    }
   }
 };
 </script>
@@ -196,6 +252,31 @@ export default {
         }
       }
     }
+  }
+}
+
+.word-book-list {
+  min-height: 120px;
+
+  .word-book-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 0;
+    border-bottom: 1px solid #ebeef5;
+
+    &:last-child {
+      border-bottom: 0;
+    }
+  }
+
+  .word-book-title {
+    min-width: 0;
+    margin-right: 20px;
+    overflow: hidden;
+    color: #606266;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 }
 </style>

@@ -106,4 +106,18 @@ public class EngArticleController extends BaseController
     {
         return success(articleService.getCurrent());
     }
+
+    /** 查询当前用户可选择的词书。 */
+    @GetMapping("/current/options")
+    public AjaxResult currentOptions()
+    {
+        return success(articleService.selectCurrentOptions());
+    }
+
+    /** 将 articleId 对应的本人文章设为当前词书。 */
+    @PutMapping("/current/{articleId}")
+    public AjaxResult setCurrent(@PathVariable Long articleId)
+    {
+        return success(articleService.setCurrent(articleId));
+    }
 }

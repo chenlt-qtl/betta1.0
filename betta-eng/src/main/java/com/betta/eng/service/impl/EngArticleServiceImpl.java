@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import com.betta.common.exception.ServiceException;
 import com.betta.common.utils.SecurityUtils;
 import com.betta.common.utils.StringUtils;
 import com.betta.eng.domain.EngArticle;
@@ -21,7 +22,6 @@ import com.betta.eng.service.IPlayListService;
 @Service
 public class EngArticleServiceImpl implements IEngArticleService
 {
-    private static final int CURRENT_ARTICLE_DATA_TYPE = 2;
     private final EngArticleMapper mapper;
     private final IEngSentenceService sentenceService;
     private final IEngArticleWordRelService relService;
@@ -88,7 +88,31 @@ public class EngArticleServiceImpl implements IEngArticleService
     @Override
     public EngArticle getCurrent()
     {
-        return mapper.getCurrentArticle(SecurityUtils.getUsername(), CURRENT_ARTICLE_DATA_TYPE);
+        return mapper.getCurrentArticle(SecurityUtils.getUserId(), SecurityUtils.getUsername());
+    }
+
+    @Override
+    public List<EngArticle> selectCurrentOptions()
+    {
+        EngArticle condition = new EngArticle();
+        condition.setCreateBy(SecurityUtils.getUsername());
+        return mapper.selectEngArticleList(condition);
+    }
+
+    @Override
+    @Transactional
+    public EngArticle setCurrent(Long articleId)
+    {
+        Long userId = SecurityUtils.getUserId();
+        String username = SecurityUtils.getUsername();
+        EngArticle article = articleId == null ? null : mapper.selectEngArticleById(articleId, username);
+        if (article == null)
+        {
+            // 统一对外提示，避免泄露其他用户的文章是否存在。
+            throw new ServiceException("词书不存在或无权选择");
+        }
+        mapper.upsertCurrentArticle(userId, articleId, username);
+        return article;
     }
 
     @Override

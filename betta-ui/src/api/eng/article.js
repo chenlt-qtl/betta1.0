@@ -69,3 +69,19 @@ export function getCurrentArticle() {
     method: 'get',
   })
 }
+
+// 查询当前用户可选择的词书
+export function listCurrentArticleOptions() {
+  return request({
+    url: '/eng/article/current/options',
+    method: 'get'
+  })
+}
+
+// 设置当前用户正在学习的词书
+export function setCurrentArticle(articleId) {
+  return request({
+    url: '/eng/article/current/' + articleId,
+    method: 'put'
+  })
+}
