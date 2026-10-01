@@ -192,7 +192,8 @@ export default {
     },
     /** 修改按钮操作 */
     handleUpdate(row) {
-      this.form = { ...row };
+      // 文章单词和生词本返回 wordId，普通单词列表直接返回 id。
+      this.form = { ...row, id: row.wordId || row.id };
       this.openEdit = true;
       this.isEdit = true;
     },
