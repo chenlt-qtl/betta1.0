@@ -46,6 +46,7 @@ public class EngStudyServiceImplTest {
     public static void main(String[] args) throws Exception {
         EngStudyServiceImplTest test = new EngStudyServiceImplTest();
         test.shouldBuildSentenceChoiceAndExistingQuestionTypesWithoutLeakingAnswer();
+        test.shouldUseConciseMeaningAndFallbackToAcceptation();
         test.shouldShuffleChallengeQuestionsWithoutChangingQuestionContent();
         test.shouldCheckSingleAnswerWithoutWritingStudyData();
         test.shouldRejectInvalidSingleAnswerRequest();
@@ -175,6 +176,27 @@ public class EngStudyServiceImplTest {
             exposesCorrectAnswer |= "correctAnswer".equals(field.getName());
         }
         assertTrue(!exposesCorrectAnswer, "挑战题展示对象不得包含正确答案字段");
+    }
+
+    /** 验证单词测试优先使用简明释义，未维护简明释义时回退完整释义。 */
+    private void shouldUseConciseMeaningAndFallbackToAcceptation() throws Exception {
+        EngWordVo apple = word(1L, "apple", "苹果；苹果树；苹果公司相关内容", null);
+        apple.setExchange("苹果");
+        EngWordVo cat = word(2L, "cat", "猫", null);
+        EngStudyServiceImpl service = createService(List.of(apple, cat), List.of());
+        List<?> definitions = buildDefinitions(service);
+
+        Object appleWordToCn = findDefinition(definitions, "WORD_TO_CN:1");
+        Object appleCnToWord = findDefinition(definitions, "CN_TO_WORD:1");
+        Object catWordToCn = findDefinition(definitions, "WORD_TO_CN:2");
+        assertEquals("苹果", definitionValue(appleWordToCn, "correctAnswer"), "看词选中文应以简明释义为答案");
+        assertTrue(((List<?>) definitionValue(appleWordToCn, "options")).contains("苹果"),
+                "中文选项应使用简明释义");
+        assertTrue(((String) definitionValue(appleCnToWord, "prompt")).contains("“苹果”"),
+                "看中文选英文题干应使用简明释义");
+        assertTrue(!((String) definitionValue(appleCnToWord, "prompt")).contains("苹果树"),
+                "看中文选英文题干不应包含完整释义");
+        assertEquals("猫", definitionValue(catWordToCn, "correctAnswer"), "简明释义为空时应回退完整释义");
     }
 
     /**

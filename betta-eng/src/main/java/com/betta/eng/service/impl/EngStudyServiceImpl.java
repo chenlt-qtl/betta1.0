@@ -249,13 +249,19 @@ public class EngStudyServiceImpl implements IEngStudyService {
                 && StringUtils.isNotEmpty(word.getAcceptation());
     }
 
+    /** 单词测试优先使用简明释义，未维护时回退完整释义。 */
+    private String getChallengeMeaning(EngWordVo word) {
+        return StringUtils.isNotEmpty(word.getExchange()) ? word.getExchange() : word.getAcceptation();
+    }
+
     /**
      * 构建看词选中文题；word 为目标单词，validWords 为文章全部有效单词，返回包含发音地址的标准题目定义。
      */
     private QuestionDefinition buildWordToCnDefinition(EngWordVo word, List<EngWordVo> validWords) {
-        List<String> options = buildOptions(word.getAcceptation(), validWords, false);
+        String meaning = getChallengeMeaning(word);
+        List<String> options = buildOptions(meaning, validWords, false);
         return new QuestionDefinition(WORD_TO_CN_PREFIX + word.getId(), WORD_TO_CN_TYPE,
-                "请选择单词 “" + word.getWordName() + "” 的正确释义", word.getAcceptation(), options,
+                "请选择单词 “" + word.getWordName() + "” 的正确释义", meaning, options,
                 word.getPhMp3(), null, word);
     }
 
@@ -265,7 +271,7 @@ public class EngStudyServiceImpl implements IEngStudyService {
     private QuestionDefinition buildCnToWordDefinition(EngWordVo word, List<EngWordVo> validWords) {
         List<String> options = buildOptions(word.getWordName(), validWords, true);
         return new QuestionDefinition(CN_TO_WORD_PREFIX + word.getId(), CN_TO_WORD_TYPE,
-                "请选择释义 “" + word.getAcceptation() + "” 对应的英文单词", word.getWordName(), options,
+                "请选择释义 “" + getChallengeMeaning(word) + "” 对应的英文单词", word.getWordName(), options,
                 word.getPhMp3(), null, word);
     }
 
@@ -280,7 +286,7 @@ public class EngStudyServiceImpl implements IEngStudyService {
             if (options.size() >= 4) {
                 break;
             }
-            String candidate = useWordName ? candidateWord.getWordName() : candidateWord.getAcceptation();
+            String candidate = useWordName ? candidateWord.getWordName() : getChallengeMeaning(candidateWord);
             if (!options.contains(candidate)) {
                 options.add(candidate);
             }
