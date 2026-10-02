@@ -1,5 +1,6 @@
 let player = new Audio();
 let timer;
+let feedbackContext;
 
 /** 将完整 URL、当前资源路径和历史 profile 路径统一为可播放地址。 */
 const resolveAudioUrl = (url) => {
@@ -18,7 +19,11 @@ const resolveAudioUrl = (url) => {
     : normalized.startsWith(legacyProfilePrefix + "/")
       ? normalized.slice(legacyProfilePrefix.length)
       : normalized;
-  return resourcePrefix + (resourcePath.startsWith("/") ? resourcePath : "/" + resourcePath);
+  // 本地文件名中的 URL 保留字符必须编码，否则浏览器会截断实际请求路径。
+  const encodedResourcePath = resourcePath
+    .replace(/\?/g, "%3F")
+    .replace(/#/g, "%23");
+  return resourcePrefix + (encodedResourcePath.startsWith("/") ? encodedResourcePath : "/" + encodedResourcePath);
 }
 
 /**播放MP3 */
@@ -74,4 +79,68 @@ export const play = (url, timeStr, onError = () => {}) => {
 
   return player;
 
+}
+
+const getFeedbackContext = () => {
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) {
+    return null;
+  }
+  feedbackContext = feedbackContext || new AudioContextClass();
+  return feedbackContext;
+}
+
+/** 在用户答题操作中预先启用反馈音轨，兼容浏览器自动播放限制。 */
+export const prepareAnswerFeedback = () => {
+  try {
+    const context = getFeedbackContext();
+    if (context && context.state === "suspended") {
+      context.resume().catch(() => {});
+    }
+  } catch (error) {
+    // 浏览器不支持或禁止启用提示音时，不影响答题流程。
+  }
+}
+
+/** 使用独立音轨播放答题反馈音，避免打断单词发音播放器。 */
+export const playAnswerFeedback = (correct) => {
+  const context = getFeedbackContext();
+  if (!context) {
+    return;
+  }
+
+  try {
+    const playTones = () => {
+      const tones = correct
+        ? [{ frequency: 660, offset: 0 }, { frequency: 880, offset: 0.12 }]
+        : [{ frequency: 330, offset: 0 }, { frequency: 220, offset: 0.16 }];
+      const duration = correct ? 0.14 : 0.18;
+      const now = context.currentTime;
+
+      tones.forEach(({ frequency, offset }) => {
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        const startTime = now + offset;
+        const endTime = startTime + duration;
+
+        oscillator.type = correct ? "sine" : "triangle";
+        oscillator.frequency.setValueAtTime(frequency, startTime);
+        gain.gain.setValueAtTime(0.0001, startTime);
+        gain.gain.exponentialRampToValueAtTime(0.12, startTime + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, endTime);
+        oscillator.connect(gain);
+        gain.connect(context.destination);
+        oscillator.start(startTime);
+        oscillator.stop(endTime);
+      });
+    };
+
+    if (context.state === "suspended") {
+      context.resume().then(playTones).catch(() => {});
+    } else {
+      playTones();
+    }
+  } catch (error) {
+    // 浏览器不支持或禁止播放提示音时，不影响答题流程。
+  }
 }

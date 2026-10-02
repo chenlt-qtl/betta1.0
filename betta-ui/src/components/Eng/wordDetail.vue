@@ -26,12 +26,14 @@
               ><svg-icon icon-class="sound" /><span class="slow">慢</span>
             </el-button>
           </div>
-          <el-button v-if="!form.relId" type="text" @click="updateRel"
-            ><svg-icon icon-class="star1" />
-          </el-button>
-          <el-button v-if="form.relId" type="text" @click="updateRel"
-            ><svg-icon icon-class="star-fill" />
-          </el-button>
+          <el-button
+            type="text"
+            :icon="form.relId ? 'el-icon-star-on' : 'el-icon-star-off'"
+            :title="form.relId ? '移出单词本' : '加入单词本'"
+            :aria-label="form.relId ? '移出单词本' : '加入单词本'"
+            :loading="relLoading"
+            @click="updateRel"
+          ></el-button>
           <el-button
             type="text"
             @click="updateWord"
@@ -87,7 +89,18 @@
         <ol>
           <li v-for="item in form.icibaSentenceList" :key="item.id">
             <div class="sentence">
-              <span>{{ item.orig }}</span>
+              <span>
+                {{ item.orig
+                }}<el-button
+                  v-if="item.audioPath"
+                  style="margin-left: 10px"
+                  type="text"
+                  title="播放例句发音"
+                  aria-label="播放例句发音"
+                  @click="() => play(item.audioPath)"
+                  ><svg-icon icon-class="sound" />
+                </el-button>
+              </span>
               <span>{{ item.trans }}</span>
             </div>
           </li>
@@ -103,7 +116,14 @@
       append-to-body
     >
       <el-form ref="form" :model="form" label-width="80px">
-        <div class="word-acceptation">{{ form.acceptation }}</div>
+        <div class="word-acceptation">
+          <div
+            v-for="(item, index) in acceptations"
+            :key="`${index}-${item}`"
+          >
+            {{ item }}
+          </div>
+        </div>
         <el-form-item label="简明注释" prop="exchange">
           <el-input v-model="form.exchange" placeholder="请输入简明注释" />
         </el-form-item>
@@ -163,9 +183,9 @@
 }
 </style>
 <script>
-import { getWord, updateWord } from "@/api/eng/word";
+import { addWordByArticle, getWord, updateWord } from "@/api/eng/word";
 import { play } from "@/utils/audio";
-import { delArticleWordRel, addArticleWordRel } from "@/api/eng/articleWordRel";
+import { delArticleWordRel } from "@/api/eng/articleWordRel";
 
 export default {
   props: ["wordName"],
@@ -177,6 +197,7 @@ export default {
       // 表单参数
       form: {},
       open: false,
+      relLoading: false,
     };
   },
   created() {
@@ -222,22 +243,36 @@ export default {
     },
     /** 更新关联 */
     updateRel() {
-      const relId = this.form.relId;
-      if (relId) {
-        //删除
-        delArticleWordRel(relId).then(() => {
-          this.$modal.msgSuccess("取消收藏成功");
-          this.getWord();
-        });
-      } else {
-        //增加
-        addArticleWordRel({ wordName: this.form.wordName, articleId: 0 }).then(
-          () => {
-            this.$modal.msgSuccess("收藏成功");
-            this.getWord();
-          }
-        );
+      if (this.relLoading) {
+        return;
       }
+      const relId = this.form.relId;
+      this.relLoading = true;
+      if (relId) {
+        delArticleWordRel(relId)
+          .then(() => {
+            this.$set(this.form, "relId", null);
+            this.$modal.msgSuccess("已移出单词本");
+          })
+          .finally(() => {
+            this.relLoading = false;
+          });
+      } else {
+        addWordByArticle(0, this.form.wordName)
+          .then(() => this.refreshWordBookRel())
+          .then(() => {
+            this.$modal.msgSuccess("已加入单词本");
+          })
+          .finally(() => {
+            this.relLoading = false;
+          });
+      }
+    },
+    /** 静默同步生词关系主键，避免收藏后重新加载详情。 */
+    refreshWordBookRel() {
+      return getWord({ wordName: this.form.wordName }).then((response) => {
+        this.$set(this.form, "relId", response.data && response.data.relId);
+      });
     },
     // 取消按钮
     cancel() {

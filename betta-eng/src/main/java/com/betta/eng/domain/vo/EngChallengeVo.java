@@ -15,6 +15,8 @@ public class EngChallengeVo {
     private String title;
     /** 历史最好进度；没有记录时返回零值对象。 */
     private EngArticleProgress progress;
+    /** 本次挑战选中的最多五个单词，与题目范围一致。 */
+    private List<EngWordVo> words;
     /** 本次挑战题目集合。 */
     private List<EngChallengeQuestionVo> questions;
 }

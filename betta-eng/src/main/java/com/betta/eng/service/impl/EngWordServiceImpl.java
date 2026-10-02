@@ -63,7 +63,19 @@ public class EngWordServiceImpl implements IEngWordService
     @Override
     public List<EngWordVo> selectWordListByArticle(Long articleId)
     {
-        return mapper.selectWordListByArticleId(articleId);
+        return mapper.selectWordListByArticleId(articleId, SecurityUtils.getUsername());
+    }
+
+    @Override
+    public List<EngWordVo> selectLowestFamiliarityWordsByArticle(Long articleId)
+    {
+        return mapper.selectLowestFamiliarityWordsByArticleId(articleId, SecurityUtils.getUsername());
+    }
+
+    @Override
+    public void updateFamiliarity(String wordName, int delta)
+    {
+        scoreService.updateEngUserScore(wordName, delta);
     }
 
     @Override
@@ -91,6 +103,8 @@ public class EngWordServiceImpl implements IEngWordService
         result.setIcibaSentenceList(dictionarySentenceService.selectEngIcibaSentenceList(sentence));
         result.setSentenceList(sentenceService.selectByWordTop10(word));
         EngArticleWordRel rel = new EngArticleWordRel();
+        // articleId=0 专用于当前用户生词收藏，文章关系不能作为收藏状态返回。
+        rel.setArticleId(0L);
         rel.setWordName(word.getWordName());
         List<EngArticleWordRel> rels = relService.selectEngArticleWordRelList(rel);
         if (!rels.isEmpty())
@@ -196,6 +210,11 @@ public class EngWordServiceImpl implements IEngWordService
         }
         else
         {
+            // 重复收藏生词是幂等操作；真实文章重复加词仍沿用原有扣熟悉度规则。
+            if (Long.valueOf(0L).equals(articleId))
+            {
+                return;
+            }
             scoreService.updateEngUserScore(canonicalWordName, -1);
         }
     }

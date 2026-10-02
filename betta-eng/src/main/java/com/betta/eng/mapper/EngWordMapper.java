@@ -13,8 +13,12 @@ public interface EngWordMapper {
     List<EngWordVo> selectEngWordList(EngWord word);
     /** 按规范化文本查询单词；wordName 为单词文本，返回匹配集合。 */
     List<EngWord> selectEngWordByWordName(String wordName);
-    /** 查询文章关联单词；articleId 为文章主键，返回单词集合。 */
-    List<EngWordVo> selectWordListByArticleId(Long articleId);
+    /** 查询文章关联单词及当前用户熟悉度；articleId 为文章主键、username 为登录名，返回单词集合。 */
+    List<EngWordVo> selectWordListByArticleId(@Param("articleId") Long articleId,
+            @Param("username") String username);
+    /** 按熟悉度查询文章挑战单词；缺失熟悉度按 0 处理，最多返回 5 个。 */
+    List<EngWordVo> selectLowestFamiliarityWordsByArticleId(@Param("articleId") Long articleId,
+            @Param("username") String username);
     /** 新增单词；word 为待写入实体，返回影响行数。 */
     int insertEngWord(EngWord word);
     /** 修改单词；word 为待更新实体，返回影响行数。 */

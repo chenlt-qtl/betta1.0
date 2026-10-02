@@ -82,7 +82,15 @@
     </select>
     <select id="getCurrentArticle" resultMap="ArticleMap">
         select <include refid="columns"/>
-        from eng_article a left join eng_article_group g on g.id=a.group_id
-        where exists(select 1 from sys_data d where d.data_type=#{dataType} and d.data_key=#{username} and a.id=d.data_value)
+        from eng_current_article c
+        join eng_article a on a.id=c.article_id and a.create_by=#{username}
+        left join eng_article_group g on g.id=a.group_id
+        where c.user_id=#{userId}
+        limit 1
     </select>
+    <insert id="upsertCurrentArticle">
+        insert into eng_current_article(user_id,article_id,create_by,create_time,update_by,update_time)
+        values(#{userId},#{articleId},#{username},now(),#{username},now())
+        on duplicate key update article_id=values(article_id),update_by=values(update_by),update_time=values(update_time)
+    </insert>
 </mapper>

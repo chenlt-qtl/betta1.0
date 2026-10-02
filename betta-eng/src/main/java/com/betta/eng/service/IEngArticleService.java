@@ -17,6 +17,10 @@ public interface IEngArticleService {
     List<EngArticle> selectPlayList(EngArticle article, boolean inPlayList, String username);
     /** 查询当前用户正在学习的文章并返回。 */
     EngArticle getCurrent();
+    /** 查询当前用户可选择的词书。 */
+    List<EngArticle> selectCurrentOptions();
+    /** 将 articleId 对应的本人文章设为当前词书并返回。 */
+    EngArticle setCurrent(Long articleId);
     /** 聚合 articleId 的句子和单词文本并返回。 */
     List<String> exportArticle(Long articleId);
 }
