@@ -10,6 +10,10 @@ public interface IEngWordService {
     List<EngWordVo> selectEngWordList(EngWord word);
     /** 查询 articleId 关联单词。 */
     List<EngWordVo> selectWordListByArticle(Long articleId);
+    /** 按当前用户熟悉度升序查询 articleId 的最多五个挑战单词。 */
+    List<EngWordVo> selectLowestFamiliarityWordsByArticle(Long articleId);
+    /** 将 wordName 的当前用户熟悉度增加 delta。 */
+    void updateFamiliarity(String wordName, int delta);
     /** 新增 word 并返回影响行数。 */
     int addEngWord(EngWord word);
     /** 查询 wordName 的聚合详情。 */

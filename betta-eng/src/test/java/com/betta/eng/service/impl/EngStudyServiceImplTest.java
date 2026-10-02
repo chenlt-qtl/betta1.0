@@ -8,6 +8,7 @@ import com.betta.eng.domain.EngSentence;
 import com.betta.eng.domain.EngWrongWord;
 import com.betta.eng.domain.dto.EngChallengeAnswerDto;
 import com.betta.eng.domain.dto.EngChallengeCheckDto;
+import com.betta.eng.domain.dto.EngChallengeSubmitDto;
 import com.betta.eng.domain.vo.EngChallengeVo;
 import com.betta.eng.domain.vo.EngChallengeQuestionVo;
 import com.betta.eng.domain.vo.EngChallengeResultVo;
@@ -22,6 +23,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -46,7 +48,9 @@ public class EngStudyServiceImplTest {
     public static void main(String[] args) throws Exception {
         EngStudyServiceImplTest test = new EngStudyServiceImplTest();
         test.shouldBuildSentenceChoiceAndExistingQuestionTypesWithoutLeakingAnswer();
+        test.shouldBuildSentenceFillOnlyAtRequiredFamiliarity();
         test.shouldUseConciseMeaningAndFallbackToAcceptation();
+        test.shouldExposeAtMostFiveChallengeWords();
         test.shouldShuffleChallengeQuestionsWithoutChangingQuestionContent();
         test.shouldCheckSingleAnswerWithoutWritingStudyData();
         test.shouldRejectInvalidSingleAnswerRequest();
@@ -54,6 +58,8 @@ public class EngStudyServiceImplTest {
         test.shouldRejectMissingDuplicateAndUnknownAnswers();
         test.shouldUpdateWrongWordOnceWhenAnyQuestionIsWrong();
         test.shouldMarkExistingWrongWordWhenAllQuestionsAreCorrect();
+        test.shouldSubmitFiveWordsAndUpdateFamiliarityOncePerWord();
+        test.shouldRejectIncompleteAndCrossArticleWordSets();
     }
 
     /**
@@ -97,7 +103,7 @@ public class EngStudyServiceImplTest {
     }
 
     /**
-     * 验证四类题固定顺序、句子选词选项、完整词挖空、首句选择及不泄露答案规则。
+     * 验证四类题固定顺序、句子选词选项、四字母挖空、首句选择及不泄露答案规则。
      *
      * @throws Exception 反射调用失败时抛出异常
      */
@@ -105,14 +111,14 @@ public class EngStudyServiceImplTest {
         EngStudyServiceImpl service = createService(createWords(), createSentences());
         List<?> definitions = buildDefinitions(service);
 
-        // 四个有效单词各生成两道双向选择题，apple、cat、don't 生成句子选词，纯字母前两者再生成填词。
-        assertEquals(13, definitions.size(), "题目总数应包含八道双向选择题、三道句子选词和两道填词题");
+        // 四个有效单词各生成两道双向选择题，apple、cat、don't 生成句子选词，仅超过四字母的 apple 生成填词。
+        assertEquals(12, definitions.size(), "题目总数应包含八道双向选择题、三道句子选词和一道填词题");
         assertEquals("WORD_TO_CN:1", definitionValue(definitions.get(0), "questionId"), "每个单词第一题应看词选中文");
         assertEquals("CN_TO_WORD:1", definitionValue(definitions.get(1), "questionId"), "每个单词第二题应看中文选英文");
         assertEquals("SENTENCE_CHOICE:1", definitionValue(definitions.get(2), "questionId"),
                 "每个有句子的单词第三题应为句子选词");
         assertEquals("SENTENCE_FILL:1", definitionValue(definitions.get(3), "questionId"),
-                "纯字母单词第四题应为逐字填词");
+                "超过四字母的纯字母单词第四题应为四字母填词");
         assertEquals(1, countDefinitions(definitions, "WORD_TO_CN:1"), "重复单词关系只能生成一道看词选中文题");
         assertEquals(1, countDefinitions(definitions, "CN_TO_WORD:1"), "重复单词关系只能生成一道看中文选英文题");
         assertEquals(1, countDefinitions(definitions, "SENTENCE_CHOICE:1"), "重复单词关系只能生成一道句子选词题");
@@ -120,8 +126,8 @@ public class EngStudyServiceImplTest {
         Object wordToCn = findDefinition(definitions, "WORD_TO_CN:1");
         Object cnToWord = findDefinition(definitions, "CN_TO_WORD:1");
         Object appleChoice = findDefinition(definitions, "SENTENCE_CHOICE:1");
+        Object catChoice = findDefinition(definitions, "SENTENCE_CHOICE:2");
         Object appleFill = findDefinition(definitions, "SENTENCE_FILL:1");
-        Object catFill = findDefinition(definitions, "SENTENCE_FILL:2");
         assertEquals("WORD_TO_CN", definitionValue(wordToCn, "type"), "看词选中文题型错误");
         assertEquals("CN_TO_WORD", definitionValue(cnToWord, "type"), "看中文选英文题型错误");
         assertEquals("https://audio.example/apple.mp3", definitionValue(cnToWord, "audioUrl"),
@@ -132,10 +138,14 @@ public class EngStudyServiceImplTest {
                 "目标单词没有音频时看词选中文题的发音地址应为空");
         assertEquals("https://audio.example/apple.mp3", definitionValue(appleFill, "audioUrl"),
                 "句子填词题应携带目标单词音频");
-        assertEquals(5, definitionValue(appleFill, "answerLength"), "apple 填词题答案长度应为五个字母");
-        assertEquals(3, definitionValue(catFill, "answerLength"), "cat 填词题答案长度应为三个字母");
+        assertEquals(4, definitionValue(appleFill, "answerLength"), "apple 填词题应固定填写四个字母");
+        assertEquals("appl", definitionValue(appleFill, "correctAnswer"), "填词题答案应为单词前四个字母");
+        assertEquals(null, findDefinitionOrNull(definitions, "SENTENCE_FILL:2"),
+                "长度不超过四个字母的单词不应生成填词题");
         assertEquals(null, definitionValue(wordToCn, "answerLength"), "选择题不应返回填词答案长度");
-        assertEquals(null, definitionValue(appleChoice, "audioUrl"), "句子选词题不应返回发音地址");
+        assertEquals("https://audio.example/apple.mp3", definitionValue(appleChoice, "audioUrl"),
+                "句子选词题应携带目标单词音频");
+        assertEquals(null, definitionValue(catChoice, "audioUrl"), "目标单词没有音频时句子选词题的发音地址应为空");
         assertEquals(null, definitionValue(appleChoice, "answerLength"), "句子选词题不应返回填词答案长度");
         assertTrue(((List<?>) definitionValue(wordToCn, "options")).contains("苹果"), "中文选项应包含正确释义");
         assertTrue(((List<?>) definitionValue(cnToWord, "options")).contains("apple"), "英文选项应包含正确单词");
@@ -143,6 +153,17 @@ public class EngStudyServiceImplTest {
         assertTrue(sentenceOptions.contains("apple"), "句子选词选项必须包含正确英文单词");
         assertTrue(sentenceOptions.size() <= 4, "句子选词选项不得超过四个");
         assertEquals(sentenceOptions.size(), new HashSet<>(sentenceOptions).size(), "句子选词选项不得重复");
+        List<?> fillOptions = (List<?>) definitionValue(appleFill, "options");
+        assertEquals(10, fillOptions.size(), "句子填词题必须返回十个候选字母");
+        for (Object option : fillOptions) {
+            assertTrue(option instanceof String && ((String) option).length() == 1,
+                    "句子填词候选项必须是单个字母字符串");
+        }
+        assertTrue(Collections.frequency(fillOptions, "a") >= 1, "候选字母必须包含答案中的 a");
+        assertTrue(Collections.frequency(fillOptions, "p") >= 2, "答案中的重复字母必须按出现次数保留");
+        assertTrue(Collections.frequency(fillOptions, "l") >= 1, "候选字母必须包含答案中的 l");
+        Object rebuiltAppleFill = findDefinition(buildDefinitions(service), "SENTENCE_FILL:1");
+        assertEquals(fillOptions, definitionValue(rebuiltAppleFill, "options"), "候选字母顺序必须可稳定重建");
 
         // 两类句子题都应跳过 [NT] 和 Pineapple 子串，并共用随后首个完整匹配句子及中文提示。
         String appleChoicePrompt = (String) definitionValue(appleChoice, "prompt");
@@ -150,11 +171,11 @@ public class EngStudyServiceImplTest {
         assertTrue(appleChoicePrompt.contains("_____ falls from the tree."), "句子选词应挖空首个完整匹配单词");
         assertTrue(appleChoicePrompt.contains("一个苹果从树上掉下来。"), "句子选词应包含中文释义提示");
         assertTrue(!appleChoicePrompt.contains("second"), "句子选词只能采用首个合格句子");
-        assertTrue(applePrompt.contains("_____ falls from the tree."), "应忽略大小写挖空完整的 apple 单词");
+        assertTrue(applePrompt.contains("____E falls from the tree."), "填词题只应挖空目标单词的前四个字母");
         assertTrue(applePrompt.contains("一个苹果从树上掉下来。"), "填空题应包含中文释义提示");
         assertTrue(!applePrompt.contains("second"), "每个单词只能采用首个合格句子");
-        String catPrompt = (String) definitionValue(catFill, "prompt");
-        assertTrue(catPrompt.contains("A ___ sleeps."), "catapult 子串不得命中，且空缺短线数应等于 cat 字母数");
+        String catChoicePrompt = (String) definitionValue(catChoice, "prompt");
+        assertTrue(catChoicePrompt.contains("A ___ sleeps."), "catapult 子串不得命中，句子选词仍应完整挖空 cat");
         assertEquals(null, findDefinitionOrNull(definitions, "SENTENCE_FILL:3"),
                 "只出现在其他单词子串中的 app 不应生成填空题");
         assertEquals(null, findDefinitionOrNull(definitions, "SENTENCE_CHOICE:3"),
@@ -168,7 +189,7 @@ public class EngStudyServiceImplTest {
         assertTrue(((List<?>) definitionValue(apostropheChoice, "options")).contains("don't"),
                 "含撇号单词的句子选词选项应包含正确答案");
         assertEquals(null, findDefinitionOrNull(definitions, "SENTENCE_FILL:4"),
-                "含撇号单词不能由逐字母输入框完整填写，不应生成填词题");
+                "含撇号单词不能由候选字母填写，不应生成填词题");
 
         // 对外题目 VO 不定义正确答案字段，确保获取挑战接口无法序列化服务端答案。
         boolean exposesCorrectAnswer = false;
@@ -176,6 +197,42 @@ public class EngStudyServiceImplTest {
             exposesCorrectAnswer |= "correctAnswer".equals(field.getName());
         }
         assertTrue(!exposesCorrectAnswer, "挑战题展示对象不得包含正确答案字段");
+    }
+
+    /** 验证句子填词题仅在熟悉度达到七时生成，且门槛不影响其他三类题。 */
+    private void shouldBuildSentenceFillOnlyAtRequiredFamiliarity() throws Exception {
+        EngWordVo familiaritySix = word(11L, "below", "低于门槛", null);
+        familiaritySix.setFamiliarity(6);
+        EngWordVo familiaritySeven = word(12L, "seven", "达到门槛", null);
+        familiaritySeven.setFamiliarity(7);
+        EngWordVo familiarityEight = word(13L, "higher", "超过门槛", null);
+        familiarityEight.setFamiliarity(8);
+        EngWordVo missingFamiliarity = word(14L, "missing", "没有熟悉度", null);
+        missingFamiliarity.setFamiliarity(null);
+        List<EngSentence> sentences = List.of(
+                sentence(11L, "Below the threshold.", "低于门槛。"),
+                sentence(12L, "Seven reaches the threshold.", "达到门槛。"),
+                sentence(13L, "Higher exceeds the threshold.", "超过门槛。"),
+                sentence(14L, "Missing familiarity is zero.", "没有熟悉度。"));
+        List<?> definitions = buildDefinitions(createService(
+                List.of(familiaritySix, familiaritySeven, familiarityEight, missingFamiliarity), sentences));
+
+        assertEquals(null, findDefinitionOrNull(definitions, "SENTENCE_FILL:11"),
+                "熟悉度六不能生成句子填词题");
+        assertTrue(findDefinitionOrNull(definitions, "SENTENCE_FILL:12") != null,
+                "熟悉度七应生成句子填词题");
+        assertTrue(findDefinitionOrNull(definitions, "SENTENCE_FILL:13") != null,
+                "熟悉度大于七应生成句子填词题");
+        assertEquals(null, findDefinitionOrNull(definitions, "SENTENCE_FILL:14"),
+                "熟悉度为空时应按零处理且不能生成句子填词题");
+        for (long wordId = 11L; wordId <= 14L; wordId++) {
+            assertTrue(findDefinitionOrNull(definitions, "WORD_TO_CN:" + wordId) != null,
+                    "熟悉度门槛不得影响看词选中文题");
+            assertTrue(findDefinitionOrNull(definitions, "CN_TO_WORD:" + wordId) != null,
+                    "熟悉度门槛不得影响看中文选英文题");
+            assertTrue(findDefinitionOrNull(definitions, "SENTENCE_CHOICE:" + wordId) != null,
+                    "熟悉度门槛不得影响句子选词题");
+        }
     }
 
     /** 验证单词测试优先使用简明释义，未维护简明释义时回退完整释义。 */
@@ -216,6 +273,13 @@ public class EngStudyServiceImplTest {
                 checkRequest(ARTICLE_ID, "SENTENCE_CHOICE:1", "cat"));
         assertEquals(Boolean.FALSE, wrong.getCorrect(), "句子选词错误答案应被即时判定为错误");
         assertEquals("apple", wrong.getCorrectAnswer(), "句子选词回答错误时应返回该题正确答案");
+        EngChallengeResultVo.ResultItem fillCorrect = service.checkChallengeAnswer(
+                checkRequest(ARTICLE_ID, "SENTENCE_FILL:1", " ApPl "));
+        assertEquals(Boolean.TRUE, fillCorrect.getCorrect(), "四字母填词答案应忽略大小写和首尾空格");
+        assertEquals("appl", fillCorrect.getCorrectAnswer(), "即时判题应仅返回被挖空的四个字母");
+        EngChallengeResultVo.ResultItem fillWrong = service.checkChallengeAnswer(
+                checkRequest(ARTICLE_ID, "SENTENCE_FILL:1", "apple"));
+        assertEquals(Boolean.FALSE, fillWrong.getCorrect(), "提交整个单词时不应判定为四字母填词答案正确");
         assertEquals(0, mapperCalls.getOrDefault("insertEngStudyRecord", 0), "即时判题不得写入学习记录");
         assertEquals(0, mapperCalls.getOrDefault("upsertBestProgress", 0), "即时判题不得写入文章进度");
         assertEquals(0, mapperCalls.getOrDefault("upsertWrongWord", 0), "即时判题不得写入错词");
@@ -227,7 +291,7 @@ public class EngStudyServiceImplTest {
     private void shouldRejectInvalidSingleAnswerRequest() {
         EngStudyServiceImpl service = createService(createWords(), createSentences());
 
-        assertCheckServiceException(service, checkRequest(null, "SENTENCE_FILL:1", "apple"),
+        assertCheckServiceException(service, checkRequest(null, "SENTENCE_FILL:1", "appl"),
                 "空文章主键应被即时判题拒绝");
         assertCheckServiceException(service, checkRequest(ARTICLE_ID, "SENTENCE_FILL:1", " "),
                 "空答案应被即时判题拒绝");
@@ -254,7 +318,7 @@ public class EngStudyServiceImplTest {
         answers.put("WORD_TO_CN:1", "  苹果  ");
         answers.put("CN_TO_WORD:1", " APPLE ");
         answers.put("SENTENCE_CHOICE:1", "cat");
-        answers.put("SENTENCE_FILL:1", " Apple ");
+        answers.put("SENTENCE_FILL:1", " ApPl ");
 
         EngChallengeResultVo result = calculateResult(service, definitions, answers);
         assertEquals(3, result.getCorrectCount(), "四类题中应有三题正确");
@@ -298,7 +362,7 @@ public class EngStudyServiceImplTest {
         answers.put("WORD_TO_CN:1", "错误答案");
         answers.put("CN_TO_WORD:1", "apple");
         answers.put("SENTENCE_CHOICE:1", "错误答案");
-        answers.put("SENTENCE_FILL:1", "apple");
+        answers.put("SENTENCE_FILL:1", "appl");
         EngChallengeResultVo result = calculateResult(service, definitions, answers);
 
         updateWrongWords(service, definitions, result);
@@ -323,7 +387,7 @@ public class EngStudyServiceImplTest {
         answers.put("WORD_TO_CN:1", "苹果");
         answers.put("CN_TO_WORD:1", "apple");
         answers.put("SENTENCE_CHOICE:1", "apple");
-        answers.put("SENTENCE_FILL:1", "apple");
+        answers.put("SENTENCE_FILL:1", "appl");
         EngChallengeResultVo result = calculateResult(service, definitions, answers);
 
         updateWrongWords(service, definitions, result);
@@ -331,6 +395,71 @@ public class EngStudyServiceImplTest {
         assertEquals(1, calls.getOrDefault("markMasteredByUserArticleWord", 0),
                 "全部答对时已有未掌握错词只应标记一次");
         assertEquals(0, calls.getOrDefault("upsertWrongWord", 0), "全部答对时不得新增错误次数");
+    }
+
+    /** 验证挑战接口返回题目范围内的最多五个单词。 */
+    private void shouldExposeAtMostFiveChallengeWords() {
+        List<EngWordVo> words = createSixWords();
+        EngStudyServiceImpl service = createService(words, List.of());
+        setTestLoginUser();
+        try {
+            EngChallengeVo challenge = service.getChallenge(ARTICLE_ID);
+            assertEquals(5, challenge.getWords().size(), "每轮挑战最多只能返回五个单词");
+            assertEquals(List.of(1L, 2L, 3L, 4L, 5L), wordIds(challenge.getWords()),
+                    "挑战单词应保留单词服务返回的熟悉度顺序");
+            Set<Long> questionWordIds = new HashSet<>();
+            for (EngChallengeQuestionVo question : challenge.getQuestions()) {
+                questionWordIds.add(Long.valueOf(question.getQuestionId().substring(question.getQuestionId().indexOf(':') + 1)));
+            }
+            assertEquals(new HashSet<>(List.of(1L, 2L, 3L, 4L, 5L)), questionWordIds,
+                    "题目只能围绕本轮返回的五个单词生成");
+        } finally {
+            SecurityContextHolder.clearContext();
+        }
+    }
+
+    /** 验证完整五词提交后每词只更新一次熟悉度，全对加一、任一错减一。 */
+    private void shouldSubmitFiveWordsAndUpdateFamiliarityOncePerWord() throws Exception {
+        List<EngWordVo> words = createSixWords();
+        Map<String, List<Integer>> deltas = new HashMap<>();
+        EngStudyServiceImpl service = createFamiliarityService(words, List.of(), deltas);
+        List<?> definitions = buildDefinitions(service);
+        List<EngChallengeAnswerDto> answers = new ArrayList<>();
+        for (Object definition : definitions) {
+            String questionId = (String) definitionValue(definition, "questionId");
+            String correctAnswer = (String) definitionValue(definition, "correctAnswer");
+            answers.add(answer(questionId, "WORD_TO_CN:2".equals(questionId) ? "错误答案" : correctAnswer));
+        }
+        EngChallengeSubmitDto request = new EngChallengeSubmitDto();
+        request.setArticleId(ARTICLE_ID);
+        request.setAnswers(answers);
+        setTestLoginUser();
+        try {
+            service.submitChallenge(request);
+        } finally {
+            SecurityContextHolder.clearContext();
+        }
+        assertEquals(List.of(1), deltas.get("word1"), "全部题型答对的单词应且只应加一次熟悉度");
+        assertEquals(List.of(-1), deltas.get("word2"), "任一题答错的单词应且只应减一次熟悉度");
+        assertEquals(List.of(1), deltas.get("word3"), "其他全对单词应加一次熟悉度");
+        assertEquals(List.of(1), deltas.get("word4"), "其他全对单词应加一次熟悉度");
+        assertEquals(List.of(1), deltas.get("word5"), "其他全对单词应加一次熟悉度");
+        assertEquals(null, deltas.get("word6"), "本轮未选中单词不得更新熟悉度");
+    }
+
+    /** 验证文章超过五词时拒绝少词提交和跨文章单词。 */
+    private void shouldRejectIncompleteAndCrossArticleWordSets() {
+        List<EngWordVo> words = createSixWords();
+        EngStudyServiceImpl service = createService(words, List.of());
+        EngChallengeSubmitDto incomplete = new EngChallengeSubmitDto();
+        incomplete.setArticleId(ARTICLE_ID);
+        incomplete.setAnswers(List.of(answer("WORD_TO_CN:1", "释义1"), answer("CN_TO_WORD:1", "word1")));
+        assertSubmitServiceException(service, incomplete, "文章超过五词时少词提交应被拒绝");
+
+        EngChallengeSubmitDto crossArticle = new EngChallengeSubmitDto();
+        crossArticle.setArticleId(ARTICLE_ID);
+        crossArticle.setAnswers(List.of(answer("WORD_TO_CN:999", "越界"), answer("CN_TO_WORD:999", "other")));
+        assertSubmitServiceException(service, crossArticle, "跨文章单词题目应被拒绝");
     }
 
     /**
@@ -345,7 +474,8 @@ public class EngStudyServiceImplTest {
      */
     private EngStudyServiceImpl createService(List<EngWordVo> words, List<EngSentence> sentences,
             EngWrongWordMapper wrongWordMapper) {
-        IEngWordService wordService = proxy(IEngWordService.class, Map.of("selectWordListByArticle", words));
+        IEngWordService wordService = proxy(IEngWordService.class, Map.of(
+                "selectWordListByArticle", words, "selectLowestFamiliarityWordsByArticle", words));
         IEngSentenceService sentenceService = proxy(IEngSentenceService.class,
                 Map.of("selectEngSentenceList", sentences));
         EngArticle article = new EngArticle();
@@ -361,7 +491,15 @@ public class EngStudyServiceImplTest {
      */
     private EngStudyServiceImpl createService(List<EngWordVo> words, List<EngSentence> sentences,
             Map<String, Integer> calls) {
-        IEngWordService wordService = proxy(IEngWordService.class, Map.of("selectWordListByArticle", words));
+        IEngWordService wordService = (IEngWordService) Proxy.newProxyInstance(IEngWordService.class.getClassLoader(),
+                new Class<?>[] {IEngWordService.class}, (proxy, method, args) -> {
+                    calls.merge(method.getName(), 1, Integer::sum);
+                    if ("selectWordListByArticle".equals(method.getName())
+                            || "selectLowestFamiliarityWordsByArticle".equals(method.getName())) {
+                        return words;
+                    }
+                    return defaultValue(method.getReturnType());
+                });
         IEngSentenceService sentenceService = proxy(IEngSentenceService.class,
                 Map.of("selectEngSentenceList", sentences));
         EngArticle article = new EngArticle();
@@ -369,6 +507,32 @@ public class EngStudyServiceImplTest {
         return new EngStudyServiceImpl(proxy(IEngArticleService.class, Map.of("selectEngArticleById", article)),
                 sentenceService, wordService, countingProxy(EngStudyRecordMapper.class, calls),
                 countingProxy(EngArticleProgressMapper.class, calls), countingProxy(EngWrongWordMapper.class, calls));
+    }
+
+    /**
+     * 创建可记录每个单词熟悉度增量的学习业务；words 为文章全量单词，deltas 用于保存调用。
+     */
+    private EngStudyServiceImpl createFamiliarityService(List<EngWordVo> words, List<EngSentence> sentences,
+            Map<String, List<Integer>> deltas) {
+        IEngWordService wordService = (IEngWordService) Proxy.newProxyInstance(IEngWordService.class.getClassLoader(),
+                new Class<?>[] {IEngWordService.class}, (proxy, method, args) -> {
+                    if ("selectWordListByArticle".equals(method.getName())) {
+                        return words;
+                    }
+                    if ("selectLowestFamiliarityWordsByArticle".equals(method.getName())) {
+                        return words.subList(0, Math.min(5, words.size()));
+                    }
+                    if ("updateFamiliarity".equals(method.getName())) {
+                        deltas.computeIfAbsent((String) args[0], key -> new ArrayList<>()).add((Integer) args[1]);
+                    }
+                    return defaultValue(method.getReturnType());
+                });
+        EngArticle article = new EngArticle();
+        article.setId(ARTICLE_ID);
+        return new EngStudyServiceImpl(proxy(IEngArticleService.class, Map.of("selectEngArticleById", article)),
+                proxy(IEngSentenceService.class, Map.of("selectEngSentenceList", sentences)), wordService,
+                proxy(EngStudyRecordMapper.class, Map.of()), proxy(EngArticleProgressMapper.class, Map.of()),
+                proxy(EngWrongWordMapper.class, Map.of()));
     }
 
     /**
@@ -434,6 +598,26 @@ public class EngStudyServiceImplTest {
         return words;
     }
 
+    /** 构造已按熟悉度、单词名和主键排序的六个文章单词。 */
+    private List<EngWordVo> createSixWords() {
+        List<EngWordVo> words = new ArrayList<>();
+        for (long id = 1; id <= 6; id++) {
+            EngWordVo word = word(id, "word" + id, "释义" + id, null);
+            word.setFamiliarity((int) id - 3);
+            words.add(word);
+        }
+        return words;
+    }
+
+    /** 按当前顺序提取单词主键。 */
+    private List<Long> wordIds(List<EngWordVo> words) {
+        List<Long> ids = new ArrayList<>();
+        for (EngWordVo word : words) {
+            ids.add(word.getId());
+        }
+        return ids;
+    }
+
     /** 构造文章测试句子并返回，覆盖禁用标记、子串、大小写及首句选择。 */
     private List<EngSentence> createSentences() {
         return List.of(
@@ -453,6 +637,7 @@ public class EngStudyServiceImplTest {
         word.setWordName(name);
         word.setAcceptation(acceptation);
         word.setPhMp3(audioUrl);
+        word.setFamiliarity(7);
         return word;
     }
 
@@ -598,6 +783,17 @@ public class EngStudyServiceImplTest {
             throw new AssertionError(message);
         } catch (ServiceException exception) {
             // 捕获到业务异常即符合非法请求的预期。
+        }
+    }
+
+    /** 断言完整挑战提交抛出业务异常。 */
+    private void assertSubmitServiceException(EngStudyServiceImpl service, EngChallengeSubmitDto request,
+            String message) {
+        try {
+            service.submitChallenge(request);
+            throw new AssertionError(message);
+        } catch (ServiceException exception) {
+            // 捕获到业务异常即符合非法提交的预期。
         }
     }
 

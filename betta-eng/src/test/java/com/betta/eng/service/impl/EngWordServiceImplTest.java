@@ -19,13 +19,17 @@ import java.util.concurrent.atomic.AtomicInteger;
 /** 单词数据库查询和正式词头关系处理的独立回归入口。 */
 public class EngWordServiceImplTest
 {
-    /** 依次验证纯数据库查询、未收录异常和别名关系。 */
+    /** 依次验证纯数据库查询、未收录异常、生词收藏和别名关系。 */
     public static void main(String[] args)
     {
         shouldReturnDatabaseWordWithoutWriting();
         shouldRejectMissingWordWithoutWriting();
         shouldRejectWordWithoutDefinitionWithoutWriting();
+        shouldReturnOnlyWordBookRelationFromWordDetail();
+        shouldNotTreatArticleRelationAsWordBookRelation();
         shouldUseCanonicalWordNameForArticleRelation();
+        shouldKeepExistingWordBookRelationWithoutPenalty();
+        shouldPenalizeDuplicateArticleRelation();
         shouldKeepExistingCanonicalRelationWhenInputUsesAlias();
         shouldDeduplicateCanonicalAndAliasDuringArticleSync();
     }
@@ -66,6 +70,29 @@ public class EngWordServiceImplTest
         assertNoDictionaryWrites(legacy);
     }
 
+    /** 详情同时存在文章关系和生词关系时，只返回生词收藏关系主键。 */
+    private static void shouldReturnOnlyWordBookRelationFromWordDetail()
+    {
+        Harness harness = new Harness(word("watermelon", "noun 西瓜", 10L));
+        harness.relations.add(relation(31L, 5L, "watermelon"));
+        harness.relations.add(relation(32L, 0L, "watermelon"));
+
+        EngWordVo result = harness.service.getWordVo("watermelon");
+
+        assertEquals(32L, result.getRelId(), "详情只能返回生词收藏关系主键");
+    }
+
+    /** 详情只有真实文章关系时，不得把文章关系误判为生词收藏。 */
+    private static void shouldNotTreatArticleRelationAsWordBookRelation()
+    {
+        Harness harness = new Harness(word("watermelon", "noun 西瓜", 11L));
+        harness.relations.add(relation(33L, 5L, "watermelon"));
+
+        EngWordVo result = harness.service.getWordVo("watermelon");
+
+        assertEquals(null, result.getRelId(), "文章关系不能作为生词收藏关系返回");
+    }
+
     /** 通过别名加入文章时保存 Mapper 解析后的正式词头。 */
     private static void shouldUseCanonicalWordNameForArticleRelation()
     {
@@ -76,6 +103,32 @@ public class EngWordServiceImplTest
         assertEquals(1, harness.relations.size(), "应新增一条文章单词关系");
         assertEquals("color", harness.relations.get(0).getWordName(), "文章关系必须使用正式词头");
         assertNoDictionaryWrites(harness);
+    }
+
+    /** 重复添加已有生词收藏应幂等返回，不新增关系也不扣熟悉度。 */
+    private static void shouldKeepExistingWordBookRelationWithoutPenalty()
+    {
+        Harness harness = new Harness(word("color", "noun 颜色", 13L));
+        harness.relations.add(relation(34L, 0L, "color"));
+
+        harness.service.addArticleWord(0L, "colour");
+
+        assertEquals(1, harness.relations.size(), "重复收藏不得新增关系");
+        assertEquals(0, harness.relationInsertCalls.get(), "重复收藏不得调用新增关系");
+        assertEquals(0, harness.scoreUpdateCalls.get(), "重复收藏不得扣熟悉度");
+    }
+
+    /** 真实文章重复添加单词时，保留原有扣熟悉度规则。 */
+    private static void shouldPenalizeDuplicateArticleRelation()
+    {
+        Harness harness = new Harness(word("color", "noun 颜色", 14L));
+        harness.relations.add(relation(35L, 5L, "color"));
+
+        harness.service.addArticleWord(5L, "colour");
+
+        assertEquals(1, harness.relations.size(), "文章重复加词不得新增关系");
+        assertEquals(0, harness.relationInsertCalls.get(), "文章重复加词不得调用新增关系");
+        assertEquals(1, harness.scoreUpdateCalls.get(), "文章重复加词仍应扣熟悉度");
     }
 
     /** 已有正式词关系时，别名输入不得删除重建或触发重复加词扣分。 */

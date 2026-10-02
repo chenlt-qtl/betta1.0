@@ -32,6 +32,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -61,7 +62,17 @@ public class EngStudyServiceImpl implements IEngStudyService {
     private static final String SENTENCE_CHOICE_TYPE = "SENTENCE_CHOICE";
     /** 句子挖空填词题型。 */
     private static final String SENTENCE_FILL_TYPE = "SENTENCE_FILL";
-    /** 填词输入框仅支持逐个 ASCII 字母，因此填词题答案必须是纯英文字母。 */
+    /** 每轮挑战最多选取的单词数。 */
+    private static final int CHALLENGE_WORD_LIMIT = 5;
+    /** 句子填词题固定挖空的字母数。 */
+    private static final int SENTENCE_FILL_ANSWER_LENGTH = 4;
+    /** 句子填词题固定提供的候选字母数。 */
+    private static final int SENTENCE_FILL_OPTION_COUNT = 10;
+    /** 生成句子填词题所需的最低熟悉度。 */
+    private static final int SENTENCE_FILL_MIN_FAMILIARITY = 7;
+    /** 填词候选区用于生成干扰项的字母表。 */
+    private static final String SENTENCE_FILL_ALPHABET = "abcdefghijklmnopqrstuvwxyz";
+    /** 填词候选区仅支持单个 ASCII 字母，因此填词题答案必须是纯英文字母。 */
     private static final Pattern SENTENCE_FILL_WORD_PATTERN = Pattern.compile("[A-Za-z]+");
     private final IEngArticleService articleService;
     private final IEngSentenceService sentenceService;
@@ -119,11 +130,13 @@ public class EngStudyServiceImpl implements IEngStudyService {
     @Override
     public EngChallengeVo getChallenge(Long articleId) {
         EngArticle article = requireArticle(articleId);
-        List<QuestionDefinition> definitions = buildDefinitions(articleId);
+        List<EngWordVo> words = selectChallengeWords(articleId);
+        List<QuestionDefinition> definitions = buildDefinitions(articleId, words);
         EngChallengeVo challenge = new EngChallengeVo();
         challenge.setArticleId(articleId);
         challenge.setTitle(article.getTitle());
         challenge.setProgress(getProgress(articleId));
+        challenge.setWords(words);
         List<EngChallengeQuestionVo> questions = new ArrayList<>();
         for (QuestionDefinition definition : definitions) {
             EngChallengeQuestionVo question = new EngChallengeQuestionVo();
@@ -173,7 +186,8 @@ public class EngStudyServiceImpl implements IEngStudyService {
             throw new ServiceException("文章和答案不能为空");
         }
         requireArticle(request.getArticleId());
-        List<QuestionDefinition> definitions = buildDefinitions(request.getArticleId());
+        List<EngWordVo> submittedWords = resolveSubmittedWords(request.getArticleId(), request.getAnswers());
+        List<QuestionDefinition> definitions = buildDefinitions(request.getArticleId(), submittedWords);
         if (definitions.isEmpty()) {
             throw new ServiceException("当前文章暂无可提交的挑战题");
         }
@@ -184,6 +198,7 @@ public class EngStudyServiceImpl implements IEngStudyService {
         saveStudyRecord(userId, username, request.getArticleId(), result);
         saveBestProgress(userId, username, request.getArticleId(), result);
         updateWrongWords(userId, username, request.getArticleId(), definitions, result);
+        updateFamiliarities(definitions, result);
         return result;
     }
 
@@ -212,10 +227,16 @@ public class EngStudyServiceImpl implements IEngStudyService {
      * 根据文章已有单词和句子重建服务端标准题目；articleId 为文章主键，返回题目定义。
      */
     private List<QuestionDefinition> buildDefinitions(Long articleId) {
+        return buildDefinitions(articleId, selectChallengeWords(articleId));
+    }
+
+    /**
+     * 根据本轮选中单词和文章句子重建服务端标准题目；articleId 为文章主键，words 为本轮单词。
+     */
+    private List<QuestionDefinition> buildDefinitions(Long articleId, List<EngWordVo> words) {
         List<QuestionDefinition> definitions = new ArrayList<>();
-        List<EngWordVo> words = wordService.selectWordListByArticle(articleId);
         Map<Long, EngWordVo> validWordMap = new LinkedHashMap<>();
-        for (EngWordVo word : words) {
+        for (EngWordVo word : words == null ? Collections.<EngWordVo>emptyList() : words) {
             if (isValidChallengeWord(word)) {
                 // 文章关系查询可能返回重复单词，按首次出现顺序去重以保证题目标识唯一且可完整提交。
                 validWordMap.putIfAbsent(word.getId(), word);
@@ -233,12 +254,77 @@ public class EngStudyServiceImpl implements IEngStudyService {
             SentenceQuestionContent sentenceContent = findSentenceQuestionContent(word, sentences);
             if (sentenceContent != null) {
                 definitions.add(buildSentenceChoiceDefinition(word, validWords, sentenceContent));
-                if (isSentenceFillWord(word.getWordName())) {
+                if (canBuildSentenceFill(word)) {
                     definitions.add(buildSentenceFillDefinition(word, sentenceContent));
                 }
             }
         }
         return definitions;
+    }
+
+    /** 查询当前用户熟悉度最低的最多五个有效文章单词。 */
+    private List<EngWordVo> selectChallengeWords(Long articleId) {
+        List<EngWordVo> words = wordService.selectLowestFamiliarityWordsByArticle(articleId);
+        Map<Long, EngWordVo> uniqueWords = new LinkedHashMap<>();
+        for (EngWordVo word : words == null ? Collections.<EngWordVo>emptyList() : words) {
+            if (isValidChallengeWord(word)) {
+                uniqueWords.putIfAbsent(word.getId(), word);
+                if (uniqueWords.size() == CHALLENGE_WORD_LIMIT) {
+                    break;
+                }
+            }
+        }
+        return new ArrayList<>(uniqueWords.values());
+    }
+
+    /**
+     * 从题目标识还原本轮单词，并校验单词归属文章且数量为文章可用数与五的较小值。
+     */
+    private List<EngWordVo> resolveSubmittedWords(Long articleId, List<EngChallengeAnswerDto> submitted) {
+        Set<Long> submittedWordIds = new HashSet<>();
+        for (EngChallengeAnswerDto answer : submitted) {
+            Long wordId = extractWordId(answer == null ? null : answer.getQuestionId());
+            if (wordId == null) {
+                throw new ServiceException("存在不属于当前文章的题目");
+            }
+            submittedWordIds.add(wordId);
+        }
+        Map<Long, EngWordVo> articleWords = new LinkedHashMap<>();
+        List<EngWordVo> words = wordService.selectWordListByArticle(articleId);
+        for (EngWordVo word : words == null ? Collections.<EngWordVo>emptyList() : words) {
+            if (isValidChallengeWord(word)) {
+                articleWords.putIfAbsent(word.getId(), word);
+            }
+        }
+        int expectedWordCount = Math.min(CHALLENGE_WORD_LIMIT, articleWords.size());
+        if (submittedWordIds.size() != expectedWordCount || !articleWords.keySet().containsAll(submittedWordIds)) {
+            throw new ServiceException("存在不属于当前文章的题目或未完成本轮单词");
+        }
+        List<EngWordVo> result = new ArrayList<>();
+        for (EngWordVo word : articleWords.values()) {
+            if (submittedWordIds.contains(word.getId())) {
+                result.add(word);
+            }
+        }
+        return result;
+    }
+
+    /** 从四类题目标识中解析单词主键；标识非法时返回 null。 */
+    private Long extractWordId(String questionId) {
+        if (StringUtils.isEmpty(questionId)) {
+            return null;
+        }
+        String[] prefixes = {WORD_TO_CN_PREFIX, CN_TO_WORD_PREFIX, SENTENCE_CHOICE_PREFIX, SENTENCE_FILL_PREFIX};
+        for (String prefix : prefixes) {
+            if (questionId.startsWith(prefix)) {
+                try {
+                    return Long.valueOf(questionId.substring(prefix.length()));
+                } catch (NumberFormatException exception) {
+                    return null;
+                }
+            }
+        }
+        return null;
     }
 
     /**
@@ -298,24 +384,49 @@ public class EngStudyServiceImpl implements IEngStudyService {
 
     /**
      * 构建句子挖空选词题；word 为目标单词、validWords 为英文选项来源、sentenceContent 为共用句子内容，
-     * 返回音频和答案长度均为空的标准题目定义。
+     * 返回携带目标单词音频且答案长度为空的标准题目定义。
      */
     private QuestionDefinition buildSentenceChoiceDefinition(EngWordVo word, List<EngWordVo> validWords,
             SentenceQuestionContent sentenceContent) {
         List<String> options = buildOptions(word.getWordName(), validWords, true);
-        String prompt = buildSentencePrompt("请选择句子中的空缺单词", sentenceContent);
+        String prompt = buildSentencePrompt("请选择句子中的空缺单词", sentenceContent.choiceBlankSentence(),
+                sentenceContent.acceptation());
         return new QuestionDefinition(SENTENCE_CHOICE_PREFIX + word.getId(), SENTENCE_CHOICE_TYPE, prompt,
-                word.getWordName(), options, null, null, word);
+                word.getWordName(), options, word.getPhMp3(), null, word);
     }
 
     /**
-     * 构建句子挖空逐字填词题；word 为纯 ASCII 字母单词、sentenceContent 为共用句子内容，返回标准题目定义。
+     * 构建句子挖空填词题；仅以前四个字母为答案，并提供十个可稳定重建的候选字母。
      */
     private QuestionDefinition buildSentenceFillDefinition(EngWordVo word,
             SentenceQuestionContent sentenceContent) {
-        String prompt = buildSentencePrompt("请填写句子中的空缺单词", sentenceContent);
+        String answer = word.getWordName().substring(0, SENTENCE_FILL_ANSWER_LENGTH).toLowerCase(Locale.ROOT);
+        String prompt = buildSentencePrompt("请选择句子中的空缺字母", sentenceContent.fillBlankSentence(),
+                sentenceContent.acceptation());
         return new QuestionDefinition(SENTENCE_FILL_PREFIX + word.getId(), SENTENCE_FILL_TYPE, prompt,
-                word.getWordName(), Collections.emptyList(), word.getPhMp3(), word.getWordName().length(), word);
+                answer, buildSentenceFillOptions(word, answer), word.getPhMp3(), SENTENCE_FILL_ANSWER_LENGTH, word);
+    }
+
+    /**
+     * 生成四个答案字母和六个干扰字母，并按单词主键与文本使用固定种子打乱，确保各入口重建结果一致。
+     */
+    private List<String> buildSentenceFillOptions(EngWordVo word, String answer) {
+        List<String> options = new ArrayList<>();
+        for (int index = 0; index < answer.length(); index++) {
+            options.add(String.valueOf(answer.charAt(index)));
+        }
+        String normalizedWord = word.getWordName().toLowerCase(Locale.ROOT);
+        int alphabetStart = Math.floorMod(normalizedWord.hashCode(), SENTENCE_FILL_ALPHABET.length());
+        for (int offset = 0; options.size() < SENTENCE_FILL_OPTION_COUNT; offset++) {
+            char candidate = SENTENCE_FILL_ALPHABET.charAt(
+                    (alphabetStart + offset) % SENTENCE_FILL_ALPHABET.length());
+            if (answer.indexOf(candidate) < 0) {
+                options.add(String.valueOf(candidate));
+            }
+        }
+        long shuffleSeed = 31L * word.getId() + normalizedWord.hashCode();
+        Collections.shuffle(options, new Random(shuffleSeed));
+        return options;
     }
 
     /**
@@ -336,29 +447,43 @@ public class EngStudyServiceImpl implements IEngStudyService {
             if (!matcher.find()) {
                 continue;
             }
-            // 按答案字符数生成挖空短线；纯字母填词题中该数量同时等于逐字母输入框数量。
-            String blankSentence = matcher.replaceFirst(buildSentenceBlank(word.getWordName()));
-            return new SentenceQuestionContent(blankSentence, sentence.getAcceptation());
+            String matchedWord = matcher.group();
+            String choiceBlankSentence = matcher.replaceFirst(Matcher.quoteReplacement(buildSentenceBlank(matchedWord)));
+            String fillBlankSentence = null;
+            if (isSentenceFillWord(word.getWordName())) {
+                String partialBlank = "_".repeat(SENTENCE_FILL_ANSWER_LENGTH)
+                        + matchedWord.substring(SENTENCE_FILL_ANSWER_LENGTH);
+                fillBlankSentence = matcher.replaceFirst(Matcher.quoteReplacement(partialBlank));
+            }
+            return new SentenceQuestionContent(choiceBlankSentence, fillBlankSentence, sentence.getAcceptation());
         }
         return null;
     }
 
     /**
-     * 组装句子题统一提示文本；instruction 为题型操作说明、content 为挖空句子及中文释义，返回完整题干。
+     * 组装句子题统一提示文本；instruction 为题型操作说明、blankSentence 为挖空句子，返回完整题干。
      */
-    private String buildSentencePrompt(String instruction, SentenceQuestionContent content) {
-        String prompt = instruction + "：“" + content.blankSentence() + "”";
-        if (StringUtils.isNotEmpty(content.acceptation())) {
-            prompt += "；中文提示：" + content.acceptation();
+    private String buildSentencePrompt(String instruction, String blankSentence, String acceptation) {
+        String prompt = instruction + "：“" + blankSentence + "”";
+        if (StringUtils.isNotEmpty(acceptation)) {
+            prompt += "；中文提示：" + acceptation;
         }
         return prompt;
     }
 
     /**
-     * 判断单词能否由逐字母输入框完整填写；wordName 为英文答案，返回是否仅包含 ASCII 字母。
+     * 判断单词能否生成只填写四个字母的题目；单词必须超过四个字符且仅包含 ASCII 字母。
      */
     private boolean isSentenceFillWord(String wordName) {
-        return SENTENCE_FILL_WORD_PATTERN.matcher(wordName).matches();
+        return wordName.length() > SENTENCE_FILL_ANSWER_LENGTH
+                && SENTENCE_FILL_WORD_PATTERN.matcher(wordName).matches();
+    }
+
+    /** 判断当前用户对单词的熟悉度和单词格式是否都满足句子填词题生成条件。 */
+    private boolean canBuildSentenceFill(EngWordVo word) {
+        return word.getFamiliarity() != null
+                && word.getFamiliarity() >= SENTENCE_FILL_MIN_FAMILIARITY
+                && isSentenceFillWord(word.getWordName());
     }
 
     /**
@@ -527,6 +652,27 @@ public class EngStudyServiceImpl implements IEngStudyService {
         }
     }
 
+    /**
+     * 按单词汇总本轮结果：所有适用题型全对熟悉度加一，任一题错则减一，每词每轮只更新一次。
+     */
+    private void updateFamiliarities(List<QuestionDefinition> definitions, EngChallengeResultVo result) {
+        Map<String, Boolean> resultMap = new HashMap<>();
+        for (EngChallengeResultVo.ResultItem item : result.getResults()) {
+            resultMap.put(item.getQuestionId(), item.getCorrect());
+        }
+        Map<Long, EngWord> words = new LinkedHashMap<>();
+        Map<Long, Boolean> allCorrect = new HashMap<>();
+        for (QuestionDefinition definition : definitions) {
+            EngWord word = definition.word();
+            words.putIfAbsent(word.getId(), word);
+            boolean correct = Boolean.TRUE.equals(resultMap.get(definition.questionId()));
+            allCorrect.merge(word.getId(), correct, (current, next) -> current && next);
+        }
+        for (EngWord word : words.values()) {
+            wordService.updateFamiliarity(word.getWordName(), Boolean.TRUE.equals(allCorrect.get(word.getId())) ? 1 : -1);
+        }
+    }
+
     /** 查询并校验 articleId 对应文章存在，返回文章。 */
     private EngArticle requireArticle(Long articleId) {
         if (articleId == null) {
@@ -555,8 +701,8 @@ public class EngStudyServiceImpl implements IEngStudyService {
     }
 
     /**
-     * 两类句子题共用的内部内容，包含挖空英文句子和可选中文释义，不对外序列化。
+     * 两类句子题共用的内部内容，分别保存完整词挖空和四字母挖空句子，不对外序列化。
      */
-    private record SentenceQuestionContent(String blankSentence, String acceptation) {
+    private record SentenceQuestionContent(String choiceBlankSentence, String fillBlankSentence, String acceptation) {
     }
 }

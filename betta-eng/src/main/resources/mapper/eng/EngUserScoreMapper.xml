@@ -48,6 +48,10 @@
         <if test="score.articleId!=null">
             and r.article_id=#{score.articleId}
         </if>
+        <if test="score.wordName!=null and score.wordName!=''">
+            and w.word_name like concat('%',#{score.wordName},'%')
+        </if>
+        order by r.id desc
     </select>
     <select id="getByWordName" resultMap="ScoreMap">
         select * from eng_user_score where word_name=#{wordName} and user=#{user} limit 1

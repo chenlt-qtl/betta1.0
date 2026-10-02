@@ -1,148 +1,191 @@
 <template>
   <div class="test-step1">
-    <div v-if="!isStart" class="word-table">
+    <div v-if="!reviewing" class="word-table">
       <el-table :data="wordList" :show-header="false" class="table">
         <el-table-column label="单词" prop="wordName">
-          <template v-if="scope.row.phMp3" slot-scope="scope">
+          <template slot-scope="scope">
             <div class="word-container">
-              <span class="word"> {{ scope.row.wordName }}</span>
-              <span> / {{ scope.row.phonetics}} /</span>
+              <span class="word">{{ scope.row.wordName }}</span>
+              <span v-if="scope.row.phonetics"> / {{ scope.row.phonetics }} /</span>
             </div>
           </template>
         </el-table-column>
       </el-table>
       <div class="toolbar">
-        <button class="block-button" @click="start">开始</button>
+        <button class="block-button" @click="startReview">
+          {{ wordList.length ? '开始预习' : '直接测试' }}
+        </button>
       </div>
     </div>
-    <div v-if="isStart" class="word-detail">
-      <section class="wordName">
-        {{ word.wordName }}
+
+    <div v-else class="word-detail">
+      <div class="review-progress">{{ index + 1 }}/{{ wordList.length }}</div>
+      <section class="word-name">
+        {{ currentWord.wordName }}
         <el-button
-          class="soundBtn"
+          v-if="currentWord.phMp3"
+          class="sound-button"
           type="text"
-          @click="() => play(word.phMp3)"
-          ><svg-icon icon-class="sound" />
+          aria-label="播放单词发音"
+          @click="playWord"
+        >
+          <svg-icon icon-class="sound" />
         </el-button>
       </section>
-      <div class="ph" v-if="word.phonetics">/ {{ word.phonetics }} /</div>
+      <div v-if="currentWord.phonetics" class="phonetics">
+        / {{ currentWord.phonetics }} /
+      </div>
       <ul class="acceptations">
-        <li v-for="text in acceptations" :key="text">
-          {{ text }}
-        </li>
+        <li v-for="text in acceptations" :key="text">{{ text }}</li>
+        <li v-if="acceptations.length === 0" class="empty-acceptation">暂无释义</li>
       </ul>
       <div class="toolbar">
-        <button class="block-button" style="width: 52px" @click="nextStep">
-          <i class="el-icon-right"></i>
+        <button
+          class="block-button icon-button"
+          :disabled="index === 0"
+          aria-label="上一个单词"
+          @click="changeIndex(-1)"
+        >
+          <i class="el-icon-back" />
+        </button>
+        <button class="block-button" @click="next">
+          {{ index < wordList.length - 1 ? '下一个' : '开始测试' }}
         </button>
       </div>
     </div>
   </div>
 </template>
+
 <script>
-import { play } from "@/utils/audio";
+import { play } from '@/utils/audio'
 
 export default {
-  props: ["wordList", "questionList"],
+  name: 'EngArticleTestPreview',
+  props: {
+    wordList: {
+      type: Array,
+      default: () => []
+    }
+  },
   data() {
     return {
       index: 0,
-      word: {},
-      isStart: false,
-    };
+      reviewing: false
+    }
   },
   computed: {
+    currentWord() {
+      return this.wordList[this.index] || {}
+    },
     acceptations() {
-      if (this.word && this.word.wordName) {
-        if (this.word.exchange) {
-          return [this.word.exchange];
-        } else {
-          return (this.word.acceptation || "").split("|").filter(Boolean);
-        }
-      }
-      return [];
-    },
-  },
-  watch: {
-    word() {
-      if (this.word && this.word.phMp3) {
-        play(this.word.phMp3);
-      }
-    },
+      const text = this.currentWord.exchange || this.currentWord.acceptation || ''
+      return text.split('|').map(item => item.trim()).filter(Boolean)
+    }
   },
   methods: {
-    changeIndex(value) {
-      this.index = this.index + value;
-      this.word = this.wordList[this.index];
+    startReview() {
+      if (!this.wordList.length) {
+        this.$emit('next')
+        return
+      }
+      this.reviewing = true
+      this.$nextTick(this.playWord)
     },
-    play(url) {
-      play(url);
+    changeIndex(offset) {
+      const targetIndex = this.index + offset
+      if (targetIndex < 0 || targetIndex >= this.wordList.length) return
+      this.index = targetIndex
+      this.$nextTick(this.playWord)
     },
-    start() {
-      this.isStart = true;
-      this.word = this.wordList[this.index];
-    },
-    nextStep() {
+    next() {
       if (this.index < this.wordList.length - 1) {
-        this.changeIndex(1);
-      } else {
-        this.$emit("next");
+        this.changeIndex(1)
+        return
       }
+      this.$emit('next')
     },
-  },
-};
+    playWord() {
+      if (this.currentWord.phMp3) play(this.currentWord.phMp3)
+    }
+  }
+}
 </script>
-<style lang="scss">
+
+<style scoped lang="scss">
 .test-step1 {
-  height: 100%;
-  .word-table {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    .table {
-      flex: 1;
-    }
-    .word-container {
-      color: #333;
-      .word {
-        font-weight: 600;
-        font-size: 1.2rem;
-      }
-    }
-    .el-table {
-      background-color: transparent;
-      tr {
-        background-color: transparent;
-      }
-      td.el-table__cell {
-        border-color: #fff;
-      }
-    }
-  }
+  height: calc(100% - 40px);
+
+  .word-table,
   .word-detail {
-    height: 100%;
     display: flex;
-    gap: 10px;
     flex-direction: column;
-    .wordName {
-      display: flex;
-      align-items: center;
-      //发音按钮
-      .soundBtn {
-        margin-left: 25px;
-        font-size: 1.5rem;
-        color: #333;
-      }
+    height: 100%;
+  }
+
+  .table,
+  .acceptations {
+    flex: 1;
+  }
+
+  .word-container {
+    color: #333;
+  }
+
+  .word {
+    font-size: 18px;
+    font-weight: 600;
+  }
+
+  .el-table {
+    background-color: transparent;
+
+    tr {
+      background-color: transparent;
     }
-    .acceptations {
-      flex: 1;
-      padding: 0;
-      list-style: none;
+
+    td.el-table__cell {
+      border-color: rgba(255, 255, 255, 0.8);
     }
   }
-  .toolbar {
-    text-align: center;
-    padding: 10px 0;
+
+  .review-progress {
+    color: #909399;
+    text-align: right;
+  }
+
+  .word-name {
+    display: flex;
+    align-items: center;
+    margin-top: 28px;
+    font-size: 32px;
+    font-weight: 600;
+  }
+
+  .sound-button {
+    margin-left: 20px;
+    color: #333;
+    font-size: 24px;
+  }
+
+  .phonetics {
+    margin-top: 12px;
+    font-size: 18px;
+  }
+
+  .acceptations {
+    padding: 0;
+    overflow-y: auto;
+    list-style: none;
+    font-size: 16px;
+    line-height: 1.8;
+  }
+
+  .empty-acceptation {
+    color: #909399;
+  }
+
+  .icon-button {
+    min-width: 52px;
   }
 }
 </style>

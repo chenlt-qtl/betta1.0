@@ -5,7 +5,7 @@
       type="text"
       icon="el-icon-search"
       @click="handlePlayArticle"
-      v-hasPermi="['eng:article:edit']"
+      v-hasPermi="['eng:article:edit', 'eng:score:list']"
     >
       查看
     </el-button>

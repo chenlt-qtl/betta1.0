@@ -4,6 +4,7 @@
     <resultMap id="WordMap" type="EngWordVo">
         <id property="id" column="id"/>
         <result property="relId" column="rel_id"/>
+        <result property="familiarity" column="familiarity"/>
         <result property="wordName" column="word_name"/>
         <result property="prototype" column="prototype"/>
         <result property="phMp3" column="ph_mp3"/>
@@ -65,10 +66,28 @@
         order by matched.match_priority,matched.alias_sort,matched.id
     </select>
     <select id="selectWordListByArticleId" resultMap="WordMap">
-        select w.*,r.id rel_id
+        select w.*,r.id rel_id,
+               coalesce((select min(s.familiarity) from eng_user_score s
+                         where s.word_name=w.word_name and s.user=#{username}),0) familiarity
         from eng_word w join eng_article_word_rel r on r.word_name=w.word_name
         where r.article_id=#{articleId}
         order by w.word_name
+    </select>
+    <select id="selectLowestFamiliarityWordsByArticleId" resultMap="WordMap">
+        select w.*,r.rel_id,
+               coalesce((select min(s.familiarity) from eng_user_score s
+                         where s.word_name=w.word_name and s.user=#{username}),0) familiarity
+        from eng_word w
+        join (
+            select word_name,min(id) rel_id
+            from eng_article_word_rel
+            where article_id=#{articleId}
+            group by word_name
+        ) r on r.word_name=w.word_name
+        where w.word_name is not null and w.word_name!=''
+          and w.acceptation is not null and w.acceptation!=''
+        order by familiarity,w.word_name,w.id
+        limit 5
     </select>
     <insert id="insertEngWord" parameterType="EngWord" useGeneratedKeys="true" keyProperty="id">
         insert into eng_word(word_name,prototype,ph_mp3,phonetics,display_name,phonetics_uk,phonetics_us,

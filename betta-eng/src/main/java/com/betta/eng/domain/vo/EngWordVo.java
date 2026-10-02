@@ -13,6 +13,8 @@ public class EngWordVo extends EngWord {
     private static final long serialVersionUID = 1L;
     /** 当前文章关系主键。 */
     private Long relId;
+    /** 当前用户对该单词的熟悉度；无记录时为 0。 */
+    private Integer familiarity;
     /** 词典例句集合。 */
     private List<EngIcibaSentence> icibaSentenceList;
     /** 用户文章中的自定义例句集合。 */

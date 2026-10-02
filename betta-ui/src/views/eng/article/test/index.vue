@@ -1,172 +1,236 @@
 <template>
-  <div class="test-article" v-loading="loading">
-    <section class="test-container">
+  <div class="test-article" v-loading="loading || submitting">
+    <section :class="['test-container', { 'test-container--questions': step === 2 }]">
+      <div v-if="challenge.title" class="test-title">
+        <span>{{ challenge.title }}</span>
+        <span v-if="progress.bestTotalCount" class="best-score">
+          历史最佳 {{ progress.bestScore || 0 }} 分
+        </span>
+      </div>
+
+      <el-empty
+        v-if="!loading && questionList.length === 0"
+        description="该文章暂时没有可用题目"
+      >
+        <el-button type="primary" @click="backToStudy">选择其他文章</el-button>
+      </el-empty>
+
       <step1
-        v-if="step == 1"
-        :wordList="wordList"
-        :questionList="questionList"
+        v-else-if="step === 1"
+        :word-list="wordList"
         @next="toStep2"
-      ></step1>
+      />
       <step2
-        v-if="step == 2"
-        :wordList="wordList"
-        :questionList="questionList"
-        :result="result"
-        @next="toStep3"
-      ></step2>
+        v-else-if="step === 2"
+        :key="roundKey"
+        :article-id="articleId"
+        :question-list="questionList"
+        @complete="submitAnswers"
+      />
       <step3
-        v-if="step == 3"
-        :wordList="wordList"
+        v-else-if="step === 3"
         :result="result"
-        :questionList="questionList"
-        @next="newLoop"
-      ></step3>
+        @restart="restart"
+        @study="backToStudy"
+        @wrong="openWrongWords"
+      />
     </section>
   </div>
 </template>
+
 <script>
-import { listByArticle, batchUpdate } from "@/api/eng/score";
-import { play } from "@/utils/audio";
-import step1 from "./step1.vue";
-import step2 from "./step2.vue";
-import step3 from "./step3.vue";
-import { getQuestions } from "./utils";
+import { getArticleChallenge, submitArticleChallenge } from '@/api/eng/study'
+import Step1 from './step1.vue'
+import Step2 from './step2.vue'
+import Step3 from './step3.vue'
 
 export default {
-  components: { step1, step2, step3 },
+  name: 'EngArticleTest',
+  components: { Step1, Step2, Step3 },
   data() {
     return {
-      // 遮罩层
       loading: true,
+      submitting: false,
+      challenge: {},
+      progress: {},
       wordList: [],
       questionList: [],
-      result: { right: 0, wrong: 0 },
+      result: null,
       step: 0,
-    };
+      roundKey: 0
+    }
+  },
+  computed: {
+    articleId() {
+      return this.$route.params && this.$route.params.articleId
+    }
   },
   created() {
-    this.getWords();
+    this.loadTest()
   },
   methods: {
-    newLoop() {
-      this.getWords();
-    },
-    /** 查询单词列表 */
-    getWords() {
-      const articleId = this.$route.params && this.$route.params.articleId;
-      if (!articleId) {
-        this.$message.error(`请指定文章ID`);
-        this.loading = false;
-        return;
+    /** 加载服务端本轮选中的单词及对应题目。 */
+    loadTest() {
+      if (!this.articleId) {
+        this.$modal.msgError('请指定文章ID')
+        this.loading = false
+        return
       }
-      this.loading = true;
-      listByArticle(articleId,true).then((response) => {
-        this.wordList = (response.rows || []).filter((w) => w.wordName);
-        if (this.wordList.length < 5) {
-          this.$message.error(`单词数小于5个，不能测试`);
-          this.$router.push("/eng/manage/article");
-          this.loading = false;
-          return;
-        } else {
-          this.questionList = getQuestions(this.wordList);
-        }
-        this.start();
-        this.loading = false;
-      });
-    },
-    start() {
-      this.step = 1;
-      this.result = { right: 0, wrong: 0 };
+      this.loading = true
+      getArticleChallenge(this.articleId).then(response => {
+        this.challenge = response.data || {}
+        this.wordList = Array.isArray(this.challenge.words)
+          ? this.challenge.words.filter(word => word.wordName)
+          : []
+        this.progress = this.challenge.progress || {}
+        this.questionList = Array.isArray(this.challenge.questions)
+          ? this.challenge.questions
+          : []
+        this.step = this.questionList.length ? 1 : 0
+      }).finally(() => {
+        this.loading = false
+      })
     },
     toStep2() {
-      this.wordList.forEach((word) => {
-        word.familiarity = (word.familiarity || 0) + 1;
-      });
-      this.step = 2;
+      this.step = 2
     },
-    toStep3() {
-      this.loading = true;
-      //保存结果数据
-      batchUpdate(this.wordList).then((res) => {
-        this.step = 3;
-        this.loading = false;
-      });
+    /** 统一交由服务端判分并维护学习记录、文章进度和错词。 */
+    submitAnswers(answers) {
+      if (this.submitting) return
+      this.submitting = true
+      submitArticleChallenge({
+        // 路由参数保持字符串传递，避免雪花 ID 转 Number 后精度丢失。
+        articleId: this.articleId,
+        answers
+      }).then(response => {
+        this.result = response.data || {}
+        this.step = 3
+      }).finally(() => {
+        this.submitting = false
+      })
     },
-    play(url, time) {
-      play(url, time);
+    restart() {
+      this.loading = true
+      getArticleChallenge(this.articleId).then(response => {
+        this.challenge = response.data || {}
+        this.wordList = Array.isArray(this.challenge.words)
+          ? this.challenge.words.filter(word => word.wordName)
+          : []
+        this.progress = this.challenge.progress || {}
+        this.questionList = Array.isArray(this.challenge.questions)
+          ? this.challenge.questions
+          : []
+        this.result = null
+        this.roundKey++
+        this.step = this.questionList.length ? 2 : 0
+      }).finally(() => {
+        this.loading = false
+      })
     },
-    acceptationFormatter(row) {
-      const acceptation = row.acceptation || "";
-      const strs = acceptation.split("|");
-      return strs[0] + (strs.length > 1 ? "..." : "");
+    backToStudy() {
+      this.$router.push('/eng/study/index')
     },
-  },
-};
-</script>
-<style lang='scss'>
-.test-article{
-  padding: 24px;
-  flex: 1;
-  /* 目标项目没有参考图片资源，使用项目内可直接渲染的渐变保持测试区域层次。 */
-  background: linear-gradient(135deg, #e8f3ff 0%, #f4ecff 55%, #fff6e5 100%);
-  height: calc(100vh - 84px);
-  .test-container {
-    color: #333;
-    background: rgba(255, 255, 255, 0.1);
-    width: 400px;
-    height: calc(100% - 80px);
-    padding: 20px;
-    margin: 40px auto;
-    border-radius: 10px;
-    backdrop-filter: blur(18px);
-    box-shadow: 0 25px 45px rgba(0, 0, 0, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.3);
-    border-right: 1px solid rgba(255, 255, 255, 0.2);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
-    position: relative;
-    .tip {
-      top: 24px;
-      right: 24px;
-      position: absolute;
+    openWrongWords() {
+      this.$router.push('/eng/study/wrong')
     }
+  }
+}
+</script>
+
+<style lang="scss">
+.test-article {
+  min-height: calc(100vh - 84px);
+  padding: 24px;
+  color: #333;
+  background: linear-gradient(135deg, #e8f3ff 0%, #f4ecff 55%, #fff6e5 100%);
+
+  .test-container {
+    position: relative;
+    width: 460px;
+    height: calc(100vh - 164px);
+    min-height: 560px;
+    margin: 16px auto;
+    padding: 20px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-right-color: rgba(255, 255, 255, 0.2);
+    border-bottom-color: rgba(255, 255, 255, 0.2);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.18);
+    box-shadow: 0 25px 45px rgba(0, 0, 0, 0.1);
+    backdrop-filter: blur(18px);
+  }
+
+  .test-container--questions {
+    display: flex;
+    flex-direction: column;
+    height: auto;
+    min-height: max(560px, calc(100vh - 164px));
+    overflow: visible;
+  }
+
+  .test-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 28px;
+    margin-bottom: 12px;
+    font-weight: 600;
+  }
+
+  .best-score {
+    color: #909399;
+    font-size: 12px;
+    font-weight: normal;
   }
 
   .box-block {
     width: 100%;
-    background: rgba(255, 255, 255, 0.3);
-    padding: 15px 20px;
-    margin-top: 20px;
-    border-radius: 35px;
+    margin-top: 14px;
+    padding: 13px 18px;
     border: 1px solid rgba(255, 255, 255, 0.3);
-    border-right: 1px solid rgba(255, 255, 255, 0.2);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+    border-right-color: rgba(255, 255, 255, 0.2);
+    border-bottom-color: rgba(255, 255, 255, 0.2);
+    border-radius: 28px;
+    background: rgba(255, 255, 255, 0.3);
     box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
-    font-size: 0.8rem;
+    font-size: 14px;
   }
 
-  .wordName {
-    font-size: 2rem;
+  .block-button {
+    min-width: 96px;
+    padding: 12px 18px;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: 28px;
+    color: #333;
+    background: #fff;
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
     font-weight: 600;
+    cursor: pointer;
   }
-  .ph {
+
+  .block-button:disabled {
+    color: #c0c4cc;
+    cursor: not-allowed;
+  }
+
+  .toolbar {
     display: flex;
     justify-content: center;
-    align-items: center;
-    gap: 10px;
-    font-size: 1.2rem;
+    gap: 12px;
+    padding: 10px 0;
   }
-  .block-button {
-    background: #fff;
-    color: #333;
-    width: 120px;
-    cursor: pointer;
-    font-weight: 600;
-    padding: 15px 20px;
-    border-radius: 35px;
-    border: 1px solid rgba(255, 255, 255, 0.3);
-    border-right: 1px solid rgba(255, 255, 255, 0.2);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
-    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
+}
+
+@media (max-width: 600px) {
+  .test-article {
+    padding: 12px;
+
+    .test-container {
+      width: 100%;
+      min-height: calc(100vh - 132px);
+      margin: 0;
+    }
   }
 }
 </style>
