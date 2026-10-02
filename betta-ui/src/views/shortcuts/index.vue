@@ -78,27 +78,46 @@
       width="520px"
       append-to-body
     >
+      <el-input
+        v-model="wordBookKeyword"
+        class="word-book-search"
+        prefix-icon="el-icon-search"
+        placeholder="搜索词书"
+        clearable
+      />
       <div v-loading="wordBookLoading" class="word-book-list">
         <el-empty
           v-if="!wordBookLoading && wordBookOptions.length === 0"
           description="暂无可选择的词书"
         />
-        <div
-          v-for="item in wordBookOptions"
-          v-else
-          :key="item.id"
-          class="word-book-item"
-        >
-          <span class="word-book-title">{{ item.title || '未命名文章' }}</span>
-          <el-button
-            type="primary"
-            size="small"
-            :disabled="wordBookSelectingId !== null || article.id === item.id"
-            :loading="wordBookSelectingId === item.id"
-            @click="selectWordBook(item)"
+        <el-empty
+          v-else-if="!wordBookLoading && filteredWordBookOptions.length === 0"
+          description="未找到匹配的词书"
+        />
+        <div v-else>
+          <section
+            v-for="group in groupedWordBookOptions"
+            :key="group.name"
+            class="word-book-group"
           >
-            {{ article.id === item.id ? '当前词书' : '选择' }}
-          </el-button>
+            <div class="word-book-group-title">{{ group.name }}</div>
+            <div
+              v-for="item in group.items"
+              :key="item.id"
+              class="word-book-item"
+            >
+              <span class="word-book-title">{{ item.title || '未命名文章' }}</span>
+              <el-button
+                type="primary"
+                size="small"
+                :disabled="wordBookSelectingId !== null || article.id === item.id"
+                :loading="wordBookSelectingId === item.id"
+                @click="selectWordBook(item)"
+              >
+                {{ article.id === item.id ? '当前词书' : '选择' }}
+              </el-button>
+            </div>
+          </section>
         </div>
       </div>
     </el-dialog>
@@ -122,8 +141,34 @@ export default {
       wordBookDialogVisible: false,
       wordBookLoading: false,
       wordBookOptions: [],
+      wordBookKeyword: '',
       wordBookSelectingId: null
     };
+  },
+  computed: {
+    filteredWordBookOptions() {
+      const keyword = this.wordBookKeyword.trim().toLowerCase();
+      if (!keyword) {
+        return this.wordBookOptions;
+      }
+      return this.wordBookOptions.filter((item) => {
+        const title = item.title || '未命名文章';
+        return title.toLowerCase().includes(keyword);
+      });
+    },
+    groupedWordBookOptions() {
+      // 分组及组内词书均保持接口中的首次出现顺序。
+      return this.filteredWordBookOptions.reduce((groups, item) => {
+        const groupName = item.groupName || '未分组';
+        let group = groups.find((current) => current.name === groupName);
+        if (!group) {
+          group = { name: groupName, items: [] };
+          groups.push(group);
+        }
+        group.items.push(item);
+        return groups;
+      }, []);
+    }
   },
   created() {
     getCurrentArticle().then((res) => {
@@ -132,6 +177,7 @@ export default {
   },
   methods: {
     changeWordBook() {
+      this.wordBookKeyword = '';
       this.wordBookDialogVisible = true;
       this.wordBookLoading = true;
       listCurrentArticleOptions().then((res) => {
@@ -257,6 +303,22 @@ export default {
 
 .word-book-list {
   min-height: 120px;
+  max-height: 55vh;
+  padding-right: 8px;
+  overflow-y: auto;
+
+  .word-book-group + .word-book-group {
+    margin-top: 16px;
+  }
+
+  .word-book-group-title {
+    padding: 8px 12px;
+    border-radius: 4px;
+    background-color: #f5f7fa;
+    color: #909399;
+    font-size: 13px;
+    font-weight: 600;
+  }
 
   .word-book-item {
     display: flex;
@@ -278,5 +340,9 @@ export default {
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+}
+
+.word-book-search {
+  margin-bottom: 16px;
 }
 </style>

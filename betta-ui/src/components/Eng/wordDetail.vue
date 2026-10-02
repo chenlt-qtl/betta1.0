@@ -35,6 +35,7 @@
             @click="updateRel"
           ></el-button>
           <el-button
+            v-if="showEdit"
             type="text"
             @click="updateWord"
             icon="el-icon-edit-outline"
@@ -188,7 +189,17 @@ import { play } from "@/utils/audio";
 import { delArticleWordRel } from "@/api/eng/articleWordRel";
 
 export default {
-  props: ["wordName"],
+  props: {
+    wordName: {
+      type: String,
+      default: "",
+    },
+    // 文章列表已有完整编辑入口，查看弹窗可关闭简明注释编辑。
+    showEdit: {
+      type: Boolean,
+      default: true,
+    },
+  },
   name: "Word",
   data() {
     return {

@@ -1,12 +1,12 @@
 <template>
   <div>
     <el-row :gutter="10" class="mb8">
-      <el-col :span="1.5">
+      <el-col v-if="!hideAdd" :span="1.5">
         <el-button type="primary" icon="el-icon-plus" size="mini" v-if="!manualAdd" @click="() => handleAddWord(false)">
           添加
         </el-button>
       </el-col>
-      <el-col :span="1.5" v-if="manualAdd">
+      <el-col :span="1.5" v-if="!hideAdd && manualAdd">
         <el-button type="primary" icon="el-icon-plus" size="mini" @click="() => handleAddWord(true)">
           手工添加
         </el-button>
@@ -72,31 +72,41 @@
     </el-dialog>
 
     <!-- 修改单词对话框 -->
-    <el-dialog title="单词详情" :visible.sync="openEdit" width="500px" append-to-body>
+    <el-dialog title="单词详情" :visible.sync="openEdit" width="500px" append-to-body @closed="handleEditClosed">
       <el-form ref="form" :model="form" :rules="rules" label-width="80px">
         <el-form-item label="单词内容" prop="wordName">
-          <el-input v-model="form.wordName" placeholder="请输入单词内容" :disabled="isEdit" />
+          <span v-if="isEdit">{{ form.wordName || "-" }}</span>
+          <el-input v-else v-model="form.wordName" placeholder="请输入单词内容" />
         </el-form-item>
-        <el-form-item label="原型" prop="prototype">
+        <el-form-item v-if="!isEdit" label="原型" prop="prototype">
           <el-input v-model="form.prototype" placeholder="请输原型" />
         </el-form-item>
         <el-form-item label="音标" prop="phonetics">
-          <el-input v-model="form.phonetics" placeholder="请输入音标" :disabled="isEdit" />
+          <span v-if="isEdit">{{ form.phonetics || "-" }}</span>
+          <el-input v-else v-model="form.phonetics" placeholder="请输入音标" />
         </el-form-item>
         <el-form-item label="解释" prop="acceptation">
-          <el-input :disabled="isEdit" v-model="form.acceptation" type="textarea" placeholder="请输入内容" />
+          <template v-if="isEdit">
+            <div
+              v-for="(item, index) in (form.acceptation || '').split('|').filter(Boolean)"
+              :key="index"
+            >
+              {{ item }}
+            </div>
+            <span v-if="!form.acceptation">-</span>
+          </template>
+          <el-input v-else v-model="form.acceptation" type="textarea" placeholder="请输入内容" />
         </el-form-item>
         <el-form-item label="手动注释" prop="exchange">
           <el-input v-model="form.exchange" placeholder="请输入手动注释">
             <el-button slot="append" @click="() => this.form.exchange = this.form.acceptation">复制解释</el-button>
           </el-input>
         </el-form-item>
-        <el-form-item label="音频位置" prop="phMp3">
+        <el-form-item v-if="!isEdit" label="音频位置" prop="phMp3">
           <file-upload v-model="form.phMp3" :fileType="['mp3']" :limit="1" />
         </el-form-item>
       </el-form>
       <div slot="footer" class="dialog-footer">
-        <el-button @click="getFromApi">获取API数据</el-button>
         <el-button type="primary" @click="saveWordSubmit">确 定</el-button>
         <el-button @click="() => (openEdit = false)">取 消</el-button>
       </div>
@@ -109,7 +119,6 @@ import {
   addWordByArticle,
   getWord,
   updateWord,
-  getWordFromApi,
   addWord
 } from "@/api/eng/word";
 
@@ -121,6 +130,8 @@ export default {
     "getWordList",
     "play",
     "manualAdd",
+    // 单词管理等无需新增入口的页面可隐藏添加按钮。
+    "hideAdd",
     "hideScore",
   ],
   data() {
@@ -132,6 +143,8 @@ export default {
       relIds: [],
       form: {},
       word: {},
+      // 保存当前编辑行，提交成功后立即同步表格展示内容。
+      editingRow: null,
       // 表单校验
       rules: {
         wordName: [
@@ -170,6 +183,7 @@ export default {
     },
     //打开添加弹出框
     handleAddWord(manual) {
+      this.editingRow = null;
       if (manual) {
         this.openEdit = true;
         this.isEdit = false;
@@ -203,21 +217,21 @@ export default {
     /** 修改按钮操作 */
     handleUpdate(row) {
       // 文章单词和生词本返回 wordId，普通单词列表直接返回 id。
+      this.editingRow = row;
       this.form = { ...row, id: row.wordId || row.id };
       this.openEdit = true;
       this.isEdit = true;
     },
-    //更新单词
-    getFromApi() {
-      getWordFromApi(this.form.wordName).then((res) => {
-        const word = res.data;
-        const { phonetics, acceptation, phMp3 } = word;
-        this.form = { ...this.form, phonetics, acceptation, phMp3 };
-      });
+    handleEditClosed() {
+      this.editingRow = null;
     },
     saveWordSubmit() {
       if (this.isEdit) {
         updateWord(this.form).then(() => {
+          if (this.editingRow) {
+            const rowId = this.editingRow.id;
+            Object.assign(this.editingRow, this.form, { id: rowId });
+          }
           this.$modal.msgSuccess("修改成功");
           this.openEdit = false;
           this.getWordList();
