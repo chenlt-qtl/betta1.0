@@ -19,7 +19,11 @@ const resolveAudioUrl = (url) => {
     : normalized.startsWith(legacyProfilePrefix + "/")
       ? normalized.slice(legacyProfilePrefix.length)
       : normalized;
-  return resourcePrefix + (resourcePath.startsWith("/") ? resourcePath : "/" + resourcePath);
+  // 本地文件名中的 URL 保留字符必须编码，否则浏览器会截断实际请求路径。
+  const encodedResourcePath = resourcePath
+    .replace(/\?/g, "%3F")
+    .replace(/#/g, "%23");
+  return resourcePrefix + (encodedResourcePath.startsWith("/") ? encodedResourcePath : "/" + encodedResourcePath);
 }
 
 /**播放MP3 */

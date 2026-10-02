@@ -89,7 +89,18 @@
         <ol>
           <li v-for="item in form.icibaSentenceList" :key="item.id">
             <div class="sentence">
-              <span>{{ item.orig }}</span>
+              <span>
+                {{ item.orig
+                }}<el-button
+                  v-if="item.audioPath"
+                  style="margin-left: 10px"
+                  type="text"
+                  title="播放例句发音"
+                  aria-label="播放例句发音"
+                  @click="() => play(item.audioPath)"
+                  ><svg-icon icon-class="sound" />
+                </el-button>
+              </span>
               <span>{{ item.trans }}</span>
             </div>
           </li>
@@ -105,7 +116,14 @@
       append-to-body
     >
       <el-form ref="form" :model="form" label-width="80px">
-        <div class="word-acceptation">{{ form.acceptation }}</div>
+        <div class="word-acceptation">
+          <div
+            v-for="(item, index) in acceptations"
+            :key="`${index}-${item}`"
+          >
+            {{ item }}
+          </div>
+        </div>
         <el-form-item label="简明注释" prop="exchange">
           <el-input v-model="form.exchange" placeholder="请输入简明注释" />
         </el-form-item>
