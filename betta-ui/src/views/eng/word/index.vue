@@ -6,7 +6,7 @@
       size="small"
       :inline="true"
       v-show="showSearch"
-      label-width="68px"
+      label-width="75px"
     >
       <el-form-item label="单词内容" prop="wordName">
         <el-input
@@ -43,32 +43,21 @@
       :listData="wordList"
       :getWordList="getList"
       :manualAdd="true"
+      :hideAdd="true"
       :hideScore="true"
     >
-      <template v-slot:toolBtn="slotProps">
-        <el-col :span="1.5">
-          <el-button
-            type="danger"
-            icon="el-icon-delete"
-            size="mini"
-            @click="() => handleDelete(slotProps.ids)"
-            :disabled="slotProps.ids.length == 0"
-            >删除</el-button
-          >
-        </el-col>
+      <template v-slot:toolBtn>
         <right-toolbar
           :showSearch.sync="showSearch"
           @queryTable="getList"
         ></right-toolbar>
       </template>
       <template v-slot:tableBtn="slotProps">
-        <el-button
-          size="mini"
-          type="text"
-          icon="el-icon-delete"
-          @click="handleDelete([slotProps.word.id])"
-          >删除</el-button
-        >
+        <view-word-btn
+          :wordName="slotProps.word.wordName"
+          :permissions="['eng:word:list']"
+          style="padding-right: 10px"
+        ></view-word-btn>
       </template>
     </WordTable>
     <pagination
@@ -82,13 +71,14 @@
 </template>
 
 <script>
-import { listWord, delWord } from "@/api/eng/word";
+import { listWord } from "@/api/eng/word";
 import { play } from "@/utils/audio";
 import WordTable from "@/components/Eng/wordList/wordTable.vue";
+import ViewWordBtn from "@/components/Eng/btns/viewWordBtn.vue";
 
 export default {
   name: "Word",
-  components: { WordTable },
+  components: { WordTable, ViewWordBtn },
   data() {
     return {
       // 遮罩层
@@ -142,19 +132,6 @@ export default {
     resetQuery() {
       this.resetForm("queryForm");
       this.handleQuery();
-    },
-    /** 删除按钮操作 */
-    handleDelete(ids) {
-      this.$modal
-        .confirm('是否确认删除单词编号为"' + ids + '"的数据项？')
-        .then(function () {
-          return delWord(ids);
-        })
-        .then(() => {
-          this.getList();
-          this.$modal.msgSuccess("删除成功");
-        })
-        .catch(() => {});
     },
   },
 };

@@ -5,13 +5,13 @@
       type="text"
       icon="el-icon-search"
       @click="handlePlayArticle"
-      v-hasPermi="['eng:article:edit', 'eng:score:list']"
+      v-hasPermi="permissions"
     >
       查看
     </el-button>
     <el-dialog title="查看单词" :visible.sync="open">
       <div class="wordDetail">
-        <word-detail :wordName="wordName"></word-detail>
+        <word-detail :wordName="wordName" :show-edit="false"></word-detail>
       </div>
     </el-dialog>
   </span>
@@ -25,7 +25,17 @@ export default {
     return { open: false };
   },
   components: { WordDetail },
-  props: ["wordName"],
+  props: {
+    wordName: {
+      type: String,
+      default: "",
+    },
+    // 不同列表按各自的访问权限控制查看入口。
+    permissions: {
+      type: Array,
+      default: () => ["eng:article:edit", "eng:score:list"],
+    },
+  },
   methods: {
     handlePlayArticle: function () {
       this.open = true;
