@@ -503,14 +503,15 @@ public class EngStudyServiceImplTest {
     /** 验证全部奖励分档边界只增加当前最高档奖励，不累计较低档奖励。 */
     private void shouldApplyCoinRewardBoundariesWithoutStackingBonuses() throws Exception {
         EngStudyServiceImpl service = createService(createWords(), createSentences());
-        assertEquals(59L, calculateCoinReward(service, 59, 59), "五十九分不应获得额外奖励");
-        assertEquals(62L, calculateCoinReward(service, 60, 60), "六十分应额外奖励两枚金币");
-        assertEquals(81L, calculateCoinReward(service, 79, 79), "七十九分仍应只额外奖励两枚金币");
-        assertEquals(83L, calculateCoinReward(service, 80, 80), "八十分应额外奖励三枚金币");
-        assertEquals(92L, calculateCoinReward(service, 89, 89), "八十九分仍应只额外奖励三枚金币");
-        assertEquals(95L, calculateCoinReward(service, 90, 90), "九十分应额外奖励五枚金币");
-        assertEquals(104L, calculateCoinReward(service, 99, 99), "九十九分仍应只额外奖励五枚金币");
-        assertEquals(115L, calculateCoinReward(service, 100, 100), "满分应只额外奖励十五枚金币");
+        assertEquals(59L, calculateCoinReward(service, 59, 100, 59), "五十九分不应获得额外奖励");
+        assertEquals(62L, calculateCoinReward(service, 60, 100, 60), "六十分应额外奖励两枚金币");
+        assertEquals(81L, calculateCoinReward(service, 79, 100, 79), "七十九分仍应只额外奖励两枚金币");
+        assertEquals(83L, calculateCoinReward(service, 80, 100, 80), "八十分应额外奖励三枚金币");
+        assertEquals(92L, calculateCoinReward(service, 89, 100, 89), "八十九分仍应只额外奖励三枚金币");
+        assertEquals(95L, calculateCoinReward(service, 90, 100, 90), "九十分应额外奖励五枚金币");
+        assertEquals(104L, calculateCoinReward(service, 99, 100, 99), "九十九分仍应只额外奖励五枚金币");
+        assertEquals(104L, calculateCoinReward(service, 99, 100, 100), "未全部答对时不得获得十五枚金币");
+        assertEquals(115L, calculateCoinReward(service, 100, 100, 100), "全部答对时应只额外奖励十五枚金币");
     }
 
     /** 验证每次合法完成整轮提交都会写入本轮奖励并原子增加钱包。 */
@@ -944,10 +945,12 @@ public class EngStudyServiceImplTest {
     }
 
     /** 调用私有金币奖励计算方法，验证成绩分档边界。 */
-    private long calculateCoinReward(EngStudyServiceImpl service, int correctCount, int score) throws Exception {
-        Method method = EngStudyServiceImpl.class.getDeclaredMethod("calculateCoinReward", int.class, int.class);
+    private long calculateCoinReward(EngStudyServiceImpl service, int correctCount, int totalCount, int score)
+            throws Exception {
+        Method method = EngStudyServiceImpl.class.getDeclaredMethod("calculateCoinReward", int.class, int.class,
+                int.class);
         method.setAccessible(true);
-        return (Long) method.invoke(service, correctCount, score);
+        return (Long) method.invoke(service, correctCount, totalCount, score);
     }
 
     /** 从全部题目中筛选 apple 对应四类题；definitions 为全部定义，返回四题集合。 */
