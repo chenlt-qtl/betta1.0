@@ -5,12 +5,14 @@ import java.util.List;
 import lombok.Data;
 
 /**
- * 当前用户学习统计展示对象，汇总闯关次数、积分、进度和错词。
+ * 当前用户学习统计展示对象，汇总闯关次数、积分、金币、进度和错词。
  */
 @Data
 public class EngStudySummaryVo {
     /** 历史累计积分。 */
     private Long totalScore;
+    /** 当前金币余额。 */
+    private Long coinBalance;
     /** 闯关提交次数。 */
     private Long studyCount;
     /** 已通关文章数量。 */

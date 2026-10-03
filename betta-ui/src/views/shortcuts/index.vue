@@ -70,6 +70,10 @@
           <img src="@/assets/shortcuts/打卡.svg" />
           任务
         </a>
+        <router-link to="/mall/index" class="item">
+          <img src="@/assets/shortcuts/商城.svg" />
+          商城
+        </router-link>
       </div>
     </div>
 
@@ -298,6 +302,12 @@ export default {
 
         img {
           width: 50px;
+        }
+
+        .svg-icon {
+          width: 50px;
+          height: 50px;
+          color: #ffc94c;
         }
       }
     }

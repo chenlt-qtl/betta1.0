@@ -47,7 +47,9 @@
         <el-table-column label="文章" min-width="180">
           <template slot-scope="scope">{{ scope.row.articleTitle || ('文章 #' + scope.row.articleId) }}</template>
         </el-table-column>
-        <el-table-column label="得分" prop="score" width="100" align="center" />
+        <el-table-column label="获得金币" width="110" align="center">
+          <template slot-scope="scope">{{ scope.row.coinReward || 0 }}</template>
+        </el-table-column>
         <el-table-column label="答对" width="120" align="center">
           <template slot-scope="scope">
             {{ scope.row.correctCount || 0 }}/{{ scope.row.totalCount || 0 }}
@@ -79,7 +81,7 @@ export default {
       loading: false,
       articleList: [],
       summary: {
-        totalScore: 0,
+        coinBalance: 0,
         studyCount: 0,
         completedArticleCount: 0,
         wrongWordCount: 0,
@@ -91,7 +93,7 @@ export default {
   computed: {
     summaryCards() {
       return [
-        { label: '累计积分', value: this.summary.totalScore || 0 },
+        { label: '金币余额', value: this.summary.coinBalance || 0 },
         { label: '闯关次数', value: this.summary.studyCount || 0 },
         { label: '完成文章', value: this.summary.completedArticleCount || 0 },
         { label: '待掌握错词', value: this.summary.wrongWordCount || 0 },

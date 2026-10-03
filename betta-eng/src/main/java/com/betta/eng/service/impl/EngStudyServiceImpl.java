@@ -19,6 +19,7 @@ import com.betta.eng.domain.vo.EngChallengeVo;
 import com.betta.eng.domain.vo.EngStudySummaryVo;
 import com.betta.eng.domain.vo.EngWordVo;
 import com.betta.eng.mapper.EngArticleProgressMapper;
+import com.betta.eng.mapper.EngCoinWalletMapper;
 import com.betta.eng.mapper.EngStudyRecordMapper;
 import com.betta.eng.mapper.EngWrongWordMapper;
 import com.betta.eng.service.IEngArticleService;
@@ -81,21 +82,23 @@ public class EngStudyServiceImpl implements IEngStudyService {
     private final IEngIcibaSentenceService dictionarySentenceService;
     private final IEngWordService wordService;
     private final EngStudyRecordMapper recordMapper;
+    private final EngCoinWalletMapper coinWalletMapper;
     private final EngArticleProgressMapper progressMapper;
     private final EngWrongWordMapper wrongWordMapper;
 
     /**
-     * 注入学习业务依赖；参数依次用于文章、文章句子、词典例句、单词、记录、进度和错词访问。
+     * 注入学习业务依赖；参数依次用于文章、文章句子、词典例句、单词、记录、金币钱包、进度和错词访问。
      */
     public EngStudyServiceImpl(IEngArticleService articleService, IEngSentenceService sentenceService,
             IEngIcibaSentenceService dictionarySentenceService, IEngWordService wordService,
-            EngStudyRecordMapper recordMapper,
+            EngStudyRecordMapper recordMapper, EngCoinWalletMapper coinWalletMapper,
             EngArticleProgressMapper progressMapper, EngWrongWordMapper wrongWordMapper) {
         this.articleService = articleService;
         this.sentenceService = sentenceService;
         this.dictionarySentenceService = dictionarySentenceService;
         this.wordService = wordService;
         this.recordMapper = recordMapper;
+        this.coinWalletMapper = coinWalletMapper;
         this.progressMapper = progressMapper;
         this.wrongWordMapper = wrongWordMapper;
     }
@@ -106,6 +109,7 @@ public class EngStudyServiceImpl implements IEngStudyService {
         Long userId = SecurityUtils.getUserId();
         EngStudySummaryVo summary = new EngStudySummaryVo();
         summary.setTotalScore(recordMapper.sumScoreByUserId(userId));
+        summary.setCoinBalance(coinWalletMapper.selectCoinBalance(userId));
         summary.setStudyCount(recordMapper.countByUserId(userId));
         summary.setCompletedArticleCount(progressMapper.countCompletedByUserId(userId));
         summary.setWrongWordCount(wrongWordMapper.countByUserAndMastered(userId, 0));
@@ -201,6 +205,10 @@ public class EngStudyServiceImpl implements IEngStudyService {
         Long userId = SecurityUtils.getUserId();
         String username = SecurityUtils.getUsername();
         saveStudyRecord(userId, username, request.getArticleId(), result);
+        if (result.getCoinReward() > 0) {
+            coinWalletMapper.increaseCoinBalance(userId, result.getCoinReward(), username);
+        }
+        result.setCoinBalance(coinWalletMapper.selectCoinBalance(userId));
         saveBestProgress(userId, username, request.getArticleId(), result);
         updateWrongWords(userId, username, request.getArticleId(), definitions, result);
         updateFamiliarities(definitions, result);
@@ -592,8 +600,28 @@ public class EngStudyServiceImpl implements IEngStudyService {
         result.setCorrectCount(correctCount);
         result.setTotalCount(definitions.size());
         result.setPassed(score >= PASS_SCORE);
+        result.setCoinReward(calculateCoinReward(correctCount, score));
         result.setResults(items);
         return result;
+    }
+
+    /**
+     * 计算本轮金币：答对题数为基础金币，成绩额外奖励仅取最高适用档位且不叠加。
+     */
+    private long calculateCoinReward(int correctCount, int score) {
+        int bonus;
+        if (score == 100) {
+            bonus = 15;
+        } else if (score >= 90) {
+            bonus = 5;
+        } else if (score >= 80) {
+            bonus = 3;
+        } else if (score >= 60) {
+            bonus = 2;
+        } else {
+            bonus = 0;
+        }
+        return (long) correctCount + bonus;
     }
 
     /**
@@ -622,6 +650,7 @@ public class EngStudyServiceImpl implements IEngStudyService {
         record.setCorrectCount(result.getCorrectCount());
         record.setTotalCount(result.getTotalCount());
         record.setPassed(Boolean.TRUE.equals(result.getPassed()) ? 1 : 0);
+        record.setCoinReward(result.getCoinReward());
         record.setCreateBy(username);
         recordMapper.insertEngStudyRecord(record);
     }

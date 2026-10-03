@@ -4,7 +4,7 @@
       <div v-if="challenge.title" class="test-title">
         <span>{{ challenge.title }}</span>
         <span v-if="progress.bestTotalCount" class="best-score">
-          历史最佳 {{ progress.bestScore || 0 }} 分
+          历史最佳 {{ progress.bestCorrectCount || 0 }}/{{ progress.bestTotalCount }} 题
         </span>
       </div>
 

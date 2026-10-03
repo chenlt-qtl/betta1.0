@@ -108,6 +108,19 @@ export const constantRoutes = [
         meta: { title: '个人中心', icon: 'user' }
       }
     ]
+  },
+  {
+    path: '/mall',
+    component: Layout,
+    hidden: true,
+    children: [
+      {
+        path: 'index',
+        component: () => import('@/views/mall/store/index'),
+        name: 'MallStore',
+        meta: { title: '金币商城', icon: 'shopping' }
+      }
+    ]
   }
 ]
 

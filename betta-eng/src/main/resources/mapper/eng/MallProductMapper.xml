@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.betta.eng.mapper.MallProductMapper">
+    <resultMap id="MallProductMap" type="com.betta.eng.domain.mall.MallProduct">
+        <id property="id" column="id"/>
+        <result property="name" column="name"/>
+        <result property="images" column="images"/>
+        <result property="description" column="description"/>
+        <result property="coinPrice" column="coin_price"/>
+        <result property="createBy" column="create_by"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updateBy" column="update_by"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+
+    <sql id="productColumns">
+        id,name,images,description,coin_price,create_by,create_time,update_by,update_time
+    </sql>
+
+    <select id="selectProductList" parameterType="com.betta.eng.domain.mall.MallProduct" resultMap="MallProductMap">
+        select <include refid="productColumns"/> from mall_product
+        <where>
+            <if test="name!=null and name!=''">
+                and name like concat('%',#{name},'%')
+            </if>
+        </where>
+        order by id desc
+    </select>
+
+    <select id="selectProductById" resultMap="MallProductMap">
+        select <include refid="productColumns"/> from mall_product where id=#{id}
+    </select>
+
+    <select id="selectProductByIdForUpdate" resultMap="MallProductMap">
+        select <include refid="productColumns"/> from mall_product where id=#{id} for update
+    </select>
+
+    <insert id="insertProduct" parameterType="com.betta.eng.domain.mall.MallProduct"
+            useGeneratedKeys="true" keyProperty="id">
+        insert into mall_product(name,images,description,coin_price,create_by,create_time)
+        values(#{name},#{images},#{description},#{coinPrice},#{createBy},now())
+    </insert>
+
+    <update id="updateProduct" parameterType="com.betta.eng.domain.mall.MallProduct">
+        update mall_product
+        set name=#{name},images=#{images},description=#{description},coin_price=#{coinPrice},
+            update_by=#{updateBy},update_time=now()
+        where id=#{id}
+    </update>
+
+    <delete id="deleteProductByIds">
+        delete from mall_product where id in
+        <foreach item="id" collection="ids" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </delete>
+</mapper>

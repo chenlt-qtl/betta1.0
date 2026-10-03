@@ -6,6 +6,7 @@ import com.betta.common.exception.ServiceException;
 import com.betta.eng.domain.EngArticle;
 import com.betta.eng.domain.EngIcibaSentence;
 import com.betta.eng.domain.EngSentence;
+import com.betta.eng.domain.EngStudyRecord;
 import com.betta.eng.domain.EngWrongWord;
 import com.betta.eng.domain.dto.EngChallengeAnswerDto;
 import com.betta.eng.domain.dto.EngChallengeCheckDto;
@@ -15,6 +16,7 @@ import com.betta.eng.domain.vo.EngChallengeQuestionVo;
 import com.betta.eng.domain.vo.EngChallengeResultVo;
 import com.betta.eng.domain.vo.EngWordVo;
 import com.betta.eng.mapper.EngArticleProgressMapper;
+import com.betta.eng.mapper.EngCoinWalletMapper;
 import com.betta.eng.mapper.EngStudyRecordMapper;
 import com.betta.eng.mapper.EngWrongWordMapper;
 import com.betta.eng.service.IEngArticleService;
@@ -31,6 +33,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 
@@ -63,6 +66,10 @@ public class EngStudyServiceImplTest {
         test.shouldMarkExistingWrongWordWhenAllQuestionsAreCorrect();
         test.shouldSubmitFiveWordsAndUpdateFamiliarityOncePerWord();
         test.shouldRejectIncompleteAndCrossArticleWordSets();
+        test.shouldApplyCoinRewardBoundariesWithoutStackingBonuses();
+        test.shouldCreditCoinsForEveryLegalSubmission();
+        test.shouldKeepWalletUnchangedForZeroReward();
+        test.shouldNotCreditCoinsForImmediateCheckOrInvalidSubmission();
     }
 
     /**
@@ -493,6 +500,129 @@ public class EngStudyServiceImplTest {
         assertSubmitServiceException(service, crossArticle, "跨文章单词题目应被拒绝");
     }
 
+    /** 验证全部奖励分档边界只增加当前最高档奖励，不累计较低档奖励。 */
+    private void shouldApplyCoinRewardBoundariesWithoutStackingBonuses() throws Exception {
+        EngStudyServiceImpl service = createService(createWords(), createSentences());
+        assertEquals(59L, calculateCoinReward(service, 59, 59), "五十九分不应获得额外奖励");
+        assertEquals(62L, calculateCoinReward(service, 60, 60), "六十分应额外奖励两枚金币");
+        assertEquals(81L, calculateCoinReward(service, 79, 79), "七十九分仍应只额外奖励两枚金币");
+        assertEquals(83L, calculateCoinReward(service, 80, 80), "八十分应额外奖励三枚金币");
+        assertEquals(92L, calculateCoinReward(service, 89, 89), "八十九分仍应只额外奖励三枚金币");
+        assertEquals(95L, calculateCoinReward(service, 90, 90), "九十分应额外奖励五枚金币");
+        assertEquals(104L, calculateCoinReward(service, 99, 99), "九十九分仍应只额外奖励五枚金币");
+        assertEquals(115L, calculateCoinReward(service, 100, 100), "满分应只额外奖励十五枚金币");
+    }
+
+    /** 验证每次合法完成整轮提交都会写入本轮奖励并原子增加钱包。 */
+    private void shouldCreditCoinsForEveryLegalSubmission() throws Exception {
+        List<EngStudyRecord> records = new ArrayList<>();
+        AtomicLong balance = new AtomicLong();
+        EngStudyServiceImpl service = createCoinSubmissionService(records, balance, new HashMap<>());
+        EngChallengeSubmitDto request = allCorrectTwoQuestionRequest();
+
+        setTestLoginUser();
+        try {
+            EngChallengeResultVo first = service.submitChallenge(request);
+            EngChallengeResultVo second = service.submitChallenge(request);
+            assertEquals(17L, first.getCoinReward(), "两题全对满分应获得两枚基础金币和十五枚额外金币");
+            assertEquals(17L, first.getCoinBalance(), "首次合法提交后余额应为十七");
+            assertEquals(17L, second.getCoinReward(), "重复完成同一闯关仍应获得完整奖励");
+            assertEquals(34L, second.getCoinBalance(), "第二次合法提交应继续累加余额");
+        } finally {
+            SecurityContextHolder.clearContext();
+        }
+
+        assertEquals(2, records.size(), "每次合法提交都应保存一条学习记录");
+        assertEquals(17L, records.get(0).getCoinReward(), "学习记录应保存首次实际金币奖励");
+        assertEquals(17L, records.get(1).getCoinReward(), "学习记录应保存重复提交实际金币奖励");
+    }
+
+    /** 验证全错提交仍保存零奖励记录，但不创建或更新钱包。 */
+    private void shouldKeepWalletUnchangedForZeroReward() {
+        List<EngStudyRecord> records = new ArrayList<>();
+        AtomicLong balance = new AtomicLong(7L);
+        Map<String, Integer> walletCalls = new HashMap<>();
+        EngStudyServiceImpl service = createCoinSubmissionService(records, balance, walletCalls);
+        EngChallengeSubmitDto request = new EngChallengeSubmitDto();
+        request.setArticleId(ARTICLE_ID);
+        request.setAnswers(List.of(
+                answer("WORD_TO_CN:1", "错误释义"), answer("CN_TO_WORD:1", "wrong")));
+
+        setTestLoginUser();
+        try {
+            EngChallengeResultVo result = service.submitChallenge(request);
+            assertEquals(0L, result.getCoinReward(), "全错提交金币奖励应为零");
+            assertEquals(7L, result.getCoinBalance(), "零奖励提交不得改变已有钱包余额");
+        } finally {
+            SecurityContextHolder.clearContext();
+        }
+
+        assertEquals(1, records.size(), "全错合法提交仍应保存学习记录");
+        assertEquals(0L, records.get(0).getCoinReward(), "全错学习记录应保存零奖励");
+        assertEquals(0, walletCalls.getOrDefault("increaseCoinBalance", 0), "零奖励不得写入钱包");
+    }
+
+    /** 验证即时判题和非法整轮提交都不会触发金币入账。 */
+    private void shouldNotCreditCoinsForImmediateCheckOrInvalidSubmission() {
+        Map<String, Integer> calls = new HashMap<>();
+        EngStudyServiceImpl service = createService(createWords(), createSentences(), calls);
+
+        service.checkChallengeAnswer(checkRequest(ARTICLE_ID, "WORD_TO_CN:1", "苹果"));
+        EngChallengeSubmitDto invalid = new EngChallengeSubmitDto();
+        invalid.setArticleId(ARTICLE_ID);
+        invalid.setAnswers(List.of(answer("WORD_TO_CN:1", "苹果")));
+        assertSubmitServiceException(service, invalid, "答案缺失的非法提交应被拒绝");
+
+        assertEquals(0, calls.getOrDefault("increaseCoinBalance", 0), "即时判题和非法提交不得增加金币");
+        assertEquals(0, calls.getOrDefault("selectCoinBalance", 0), "即时判题和非法提交不得访问钱包余额");
+    }
+
+    /** 创建仅含一个单词两道选择题、可观察金币入账的提交服务。 */
+    private EngStudyServiceImpl createCoinSubmissionService(List<EngStudyRecord> records, AtomicLong balance,
+            Map<String, Integer> walletCalls) {
+        EngWordVo apple = word(1L, "apple", "苹果", null);
+        EngStudyRecordMapper recordMapper = (EngStudyRecordMapper) Proxy.newProxyInstance(
+                EngStudyRecordMapper.class.getClassLoader(), new Class<?>[] {EngStudyRecordMapper.class},
+                (proxy, method, args) -> {
+                    if ("insertEngStudyRecord".equals(method.getName())) {
+                        records.add((EngStudyRecord) args[0]);
+                        return 1;
+                    }
+                    return defaultValue(method.getReturnType());
+                });
+        EngCoinWalletMapper walletMapper = (EngCoinWalletMapper) Proxy.newProxyInstance(
+                EngCoinWalletMapper.class.getClassLoader(), new Class<?>[] {EngCoinWalletMapper.class},
+                (proxy, method, args) -> {
+                    walletCalls.merge(method.getName(), 1, Integer::sum);
+                    if ("increaseCoinBalance".equals(method.getName())) {
+                        balance.addAndGet((Long) args[1]);
+                        return 1;
+                    }
+                    if ("selectCoinBalance".equals(method.getName())) {
+                        return balance.get();
+                    }
+                    return defaultValue(method.getReturnType());
+                });
+        EngArticle article = new EngArticle();
+        article.setId(ARTICLE_ID);
+        IEngWordService wordService = proxy(IEngWordService.class, Map.of(
+                "selectWordListByArticle", List.of(apple),
+                "selectLowestFamiliarityWordsByArticle", List.of(apple)));
+        return new EngStudyServiceImpl(proxy(IEngArticleService.class, Map.of("selectEngArticleById", article)),
+                proxy(IEngSentenceService.class, Map.of("selectEngSentenceList", List.of())),
+                proxy(IEngIcibaSentenceService.class, Map.of()), wordService, recordMapper, walletMapper,
+                proxy(EngArticleProgressMapper.class, Map.of()), proxy(EngWrongWordMapper.class, Map.of()));
+    }
+
+    /** 构造一个单词两道选择题全部答对的完整提交。 */
+    private EngChallengeSubmitDto allCorrectTwoQuestionRequest() {
+        EngChallengeSubmitDto request = new EngChallengeSubmitDto();
+        request.setArticleId(ARTICLE_ID);
+        request.setAnswers(List.of(
+                answer("WORD_TO_CN:1", "苹果"), answer("CN_TO_WORD:1", "apple")));
+        return request;
+    }
+
     /**
      * 创建包含测试数据服务桩的学习业务；words 为文章单词，sentences 为文章句子，返回待测试服务。
      */
@@ -527,7 +657,8 @@ public class EngStudyServiceImplTest {
         article.setId(ARTICLE_ID);
         return new EngStudyServiceImpl(proxy(IEngArticleService.class, Map.of("selectEngArticleById", article)),
                 sentenceService, dictionarySentenceService, wordService,
-                proxy(EngStudyRecordMapper.class, Map.of()), proxy(EngArticleProgressMapper.class, Map.of()),
+                proxy(EngStudyRecordMapper.class, Map.of()), proxy(EngCoinWalletMapper.class, Map.of()),
+                proxy(EngArticleProgressMapper.class, Map.of()),
                 wrongWordMapper);
     }
 
@@ -552,6 +683,7 @@ public class EngStudyServiceImplTest {
         return new EngStudyServiceImpl(proxy(IEngArticleService.class, Map.of("selectEngArticleById", article)),
                 sentenceService, proxy(IEngIcibaSentenceService.class, Map.of()), wordService,
                 countingProxy(EngStudyRecordMapper.class, calls),
+                countingProxy(EngCoinWalletMapper.class, calls),
                 countingProxy(EngArticleProgressMapper.class, calls), countingProxy(EngWrongWordMapper.class, calls));
     }
 
@@ -578,7 +710,8 @@ public class EngStudyServiceImplTest {
         return new EngStudyServiceImpl(proxy(IEngArticleService.class, Map.of("selectEngArticleById", article)),
                 proxy(IEngSentenceService.class, Map.of("selectEngSentenceList", sentences)),
                 proxy(IEngIcibaSentenceService.class, Map.of()), wordService,
-                proxy(EngStudyRecordMapper.class, Map.of()), proxy(EngArticleProgressMapper.class, Map.of()),
+                proxy(EngStudyRecordMapper.class, Map.of()), proxy(EngCoinWalletMapper.class, Map.of()),
+                proxy(EngArticleProgressMapper.class, Map.of()),
                 proxy(EngWrongWordMapper.class, Map.of()));
     }
 
@@ -628,6 +761,21 @@ public class EngStudyServiceImplTest {
         }
         if (type == char.class) {
             return '\0';
+        }
+        if (type == long.class) {
+            return 0L;
+        }
+        if (type == double.class) {
+            return 0D;
+        }
+        if (type == float.class) {
+            return 0F;
+        }
+        if (type == byte.class) {
+            return (byte) 0;
+        }
+        if (type == short.class) {
+            return (short) 0;
         }
         return 0;
     }
@@ -793,6 +941,13 @@ public class EngStudyServiceImplTest {
         Method method = EngStudyServiceImpl.class.getDeclaredMethod("calculateResult", List.class, Map.class);
         method.setAccessible(true);
         return (EngChallengeResultVo) method.invoke(service, definitions, answers);
+    }
+
+    /** 调用私有金币奖励计算方法，验证成绩分档边界。 */
+    private long calculateCoinReward(EngStudyServiceImpl service, int correctCount, int score) throws Exception {
+        Method method = EngStudyServiceImpl.class.getDeclaredMethod("calculateCoinReward", int.class, int.class);
+        method.setAccessible(true);
+        return (Long) method.invoke(service, correctCount, score);
     }
 
     /** 从全部题目中筛选 apple 对应四类题；definitions 为全部定义，返回四题集合。 */
