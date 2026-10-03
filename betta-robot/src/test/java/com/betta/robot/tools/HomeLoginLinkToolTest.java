@@ -24,14 +24,14 @@ public class HomeLoginLinkToolTest {
         HomeLoginLinkTool tool = createTool(autoLoginService);
         Map<String, Object> params = new HashMap<>();
         params.put("frontBaseUrl", " https://betta.example.com/ ");
-        params.put("nickname", "大目");
+        params.put("nickname", "新同学 小满");
 
         ActionResult result = tool.execute(params);
 
         assertTrue(result.isSuccess(), "首页链接应生成成功");
         assertEquals("首页链接：https://betta.example.com/auto-login?ticket=test-ticket",
                 result.getMessage(), "返回文案和中转地址应正确");
-        assertEquals("大目", autoLoginService.nickname, "应按正则提取的昵称签发 ticket");
+        assertEquals("新同学 小满", autoLoginService.nickname, "应支持未预置且包含空格的新昵称");
         assertEquals("/index", autoLoginService.targetPath, "未配置目标路径时应跳转首页");
         assertEquals(Integer.valueOf(5), autoLoginService.expireMinutes, "未配置有效期时应使用 5 分钟");
     }
@@ -40,7 +40,7 @@ public class HomeLoginLinkToolTest {
         RecordingAutoLoginService autoLoginService = new RecordingAutoLoginService();
         HomeLoginLinkTool tool = createTool(autoLoginService);
 
-        ActionResult result = tool.execute(Map.of("nickname", "豆芽"));
+        ActionResult result = tool.execute(Map.of("nickname", "任意用户"));
 
         assertTrue(!result.isSuccess(), "缺失前端地址时应拒绝生成链接");
         assertTrue(result.getMessage().contains("frontBaseUrl"), "错误信息应指出缺失的配置");

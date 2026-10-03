@@ -10,6 +10,10 @@ public interface IEngWordService {
     List<EngWordVo> selectEngWordList(EngWord word);
     /** 查询 articleId 关联单词。 */
     List<EngWordVo> selectWordListByArticle(Long articleId);
+    /** 查询 articleId 关联单词及未衰减的当前用户成绩元数据，供每日队列分类。 */
+    List<EngWordVo> selectDailyCandidatesByArticle(Long articleId);
+    /** 按每日学习、复习和新词规则查询下一轮最多五个单词。 */
+    List<EngWordVo> selectNextReviewWords(Long userId, Long articleId);
     /** 按当前用户熟悉度升序查询 articleId 的最多五个挑战单词。 */
     List<EngWordVo> selectLowestFamiliarityWordsByArticle(Long articleId);
     /** 将 wordName 的当前用户熟悉度增加 delta。 */

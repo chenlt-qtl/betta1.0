@@ -5,6 +5,9 @@
         <id property="id" column="id"/>
         <result property="relId" column="rel_id"/>
         <result property="familiarity" column="familiarity"/>
+        <result property="baseFamiliarity" column="base_familiarity"/>
+        <result property="scoreExists" column="score_exists"/>
+        <result property="lastReviewTime" column="last_review_time"/>
         <result property="wordName" column="word_name"/>
         <result property="prototype" column="prototype"/>
         <result property="phMp3" column="ph_mp3"/>
@@ -67,16 +70,25 @@
     </select>
     <select id="selectWordListByArticleId" resultMap="WordMap">
         select w.*,r.id rel_id,
-               coalesce((select min(s.familiarity) from eng_user_score s
-                         where s.word_name=w.word_name and s.user=#{username}),0) familiarity
+               coalesce(s.familiarity,0) familiarity,
+               coalesce(s.familiarity,0) base_familiarity,
+               case when s.id is null then 0 else 1 end score_exists,
+               coalesce(s.update_time,s.create_time) last_review_time
         from eng_word w join eng_article_word_rel r on r.word_name=w.word_name
+        left join eng_user_score s on s.id=(
+            select s1.id from eng_user_score s1
+            where s1.word_name=w.word_name and s1.user=#{username}
+            order by s1.familiarity,s1.id limit 1
+        )
         where r.article_id=#{articleId}
-        order by w.word_name
+        order by r.id,w.word_name,w.id
     </select>
     <select id="selectLowestFamiliarityWordsByArticleId" resultMap="WordMap">
         select w.*,r.rel_id,
-               coalesce((select min(s.familiarity) from eng_user_score s
-                         where s.word_name=w.word_name and s.user=#{username}),0) familiarity
+               coalesce(s.familiarity,0) familiarity,
+               coalesce(s.familiarity,0) base_familiarity,
+               case when s.id is null then 0 else 1 end score_exists,
+               coalesce(s.update_time,s.create_time) last_review_time
         from eng_word w
         join (
             select word_name,min(id) rel_id
@@ -84,10 +96,14 @@
             where article_id=#{articleId}
             group by word_name
         ) r on r.word_name=w.word_name
+        left join eng_user_score s on s.id=(
+            select s1.id from eng_user_score s1
+            where s1.word_name=w.word_name and s1.user=#{username}
+            order by s1.familiarity,s1.id limit 1
+        )
         where w.word_name is not null and w.word_name!=''
           and w.acceptation is not null and w.acceptation!=''
-        order by familiarity,w.word_name,w.id
-        limit 5
+        order by base_familiarity,w.word_name,w.id
     </select>
     <insert id="insertEngWord" parameterType="EngWord" useGeneratedKeys="true" keyProperty="id">
         insert into eng_word(word_name,prototype,ph_mp3,phonetics,display_name,phonetics_uk,phonetics_us,

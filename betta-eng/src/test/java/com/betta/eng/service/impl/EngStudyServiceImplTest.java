@@ -17,6 +17,7 @@ import com.betta.eng.domain.vo.EngChallengeResultVo;
 import com.betta.eng.domain.vo.EngWordVo;
 import com.betta.eng.mapper.EngArticleProgressMapper;
 import com.betta.eng.mapper.EngCoinWalletMapper;
+import com.betta.eng.mapper.EngDailyTestWordMapper;
 import com.betta.eng.mapper.EngStudyRecordMapper;
 import com.betta.eng.mapper.EngWrongWordMapper;
 import com.betta.eng.service.IEngArticleService;
@@ -34,8 +35,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
+import java.time.LocalDate;
+import com.betta.eng.domain.EngDailyTestWord;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 英语闯关业务的无第三方依赖回归测试，通过 JDK 动态代理和反射验证题目构建、即时判题、最终判分及答案校验。
@@ -70,6 +75,65 @@ public class EngStudyServiceImplTest {
         test.shouldCreditCoinsForEveryLegalSubmission();
         test.shouldKeepWalletUnchangedForZeroReward();
         test.shouldNotCreditCoinsForImmediateCheckOrInvalidSubmission();
+        test.shouldRejectPartialDuplicateBeforeAnyLaterSideEffect();
+        test.shouldReportDailyCompletedAfterFinalSubmission();
+    }
+
+    /** 部分占位成功后若发生重复键，必须在学习记录及其他后续副作用前失败。 */
+    private void shouldRejectPartialDuplicateBeforeAnyLaterSideEffect() throws Exception {
+        List<EngDailyTestWord> inserted = new ArrayList<>();
+        Map<String, Integer> sideEffects = new HashMap<>();
+        EngWordVo apple = word(1L, "apple", "苹果", null);
+        EngWordVo cat = word(2L, "cat", "猫", null);
+        apple.setReviewCategory("NEW");
+        cat.setReviewCategory("NEW");
+        IEngWordService wordService = (IEngWordService) Proxy.newProxyInstance(IEngWordService.class.getClassLoader(),
+                new Class<?>[] {IEngWordService.class}, (proxy, method, args) -> {
+                    if ("selectNextReviewWords".equals(method.getName())) {
+                        return List.of(apple, cat);
+                    }
+                    if ("updateFamiliarity".equals(method.getName())) {
+                        sideEffects.merge("familiarity", 1, Integer::sum);
+                    }
+                    return defaultValue(method.getReturnType());
+                });
+        EngDailyTestWordMapper dailyMapper = new EngDailyTestWordMapper() {
+            @Override public List<Long> selectCompletedWordIds(Long userId, LocalDate date) { return List.of(); }
+            @Override public int countNewWords(Long userId, Long articleId, LocalDate date) { return 0; }
+            @Override public int insertDailyTestWord(EngDailyTestWord item) {
+                if (!inserted.isEmpty()) {
+                    throw new DuplicateKeyException("duplicate after first placeholder");
+                }
+                inserted.add(item);
+                return 1;
+            }
+            @Override public int bindStudyRecord(Long userId, Long articleId, LocalDate date,
+                    List<Long> ids, Long recordId) { sideEffects.merge("bind", 1, Integer::sum); return ids.size(); }
+        };
+        EngArticle article = new EngArticle();
+        article.setId(ARTICLE_ID);
+        EngStudyServiceImpl service = new EngStudyServiceImpl(
+                proxy(IEngArticleService.class, Map.of("selectEngArticleById", article)),
+                proxy(IEngSentenceService.class, Map.of("selectEngSentenceList", List.of())),
+                proxy(IEngIcibaSentenceService.class, Map.of()), wordService,
+                countingProxy(EngStudyRecordMapper.class, sideEffects),
+                countingProxy(EngCoinWalletMapper.class, sideEffects),
+                countingProxy(EngArticleProgressMapper.class, sideEffects),
+                countingProxy(EngWrongWordMapper.class, sideEffects), dailyMapper);
+        EngChallengeSubmitDto request = new EngChallengeSubmitDto();
+        request.setArticleId(ARTICLE_ID);
+        request.setAnswers(List.of(answer("WORD_TO_CN:1", "苹果"), answer("CN_TO_WORD:1", "apple"),
+                answer("WORD_TO_CN:2", "猫"), answer("CN_TO_WORD:2", "cat")));
+        setTestLoginUser();
+        try {
+            assertSubmitServiceException(service, request, "部分占位后重复提交必须失败");
+        } finally {
+            SecurityContextHolder.clearContext();
+        }
+        assertEquals(1, inserted.size(), "冲突前应已模拟一条占位成功");
+        assertEquals(Map.of(), sideEffects, "重复键后不得调用学习记录、金币、进度、错词、绑定或熟悉度副作用");
+        Method submit = EngStudyServiceImpl.class.getMethod("submitChallenge", EngChallengeSubmitDto.class);
+        assertTrue(submit.isAnnotationPresent(Transactional.class), "提交入口必须保留事务注解以回滚已写占位");
     }
 
     /**
@@ -442,6 +506,7 @@ public class EngStudyServiceImplTest {
         setTestLoginUser();
         try {
             EngChallengeVo challenge = service.getChallenge(ARTICLE_ID);
+            assertEquals(Boolean.FALSE, challenge.getDailyCompleted(), "存在本轮单词时 GET 应返回未完成");
             assertEquals(5, challenge.getWords().size(), "每轮挑战最多只能返回五个单词");
             assertEquals(List.of(1L, 2L, 3L, 4L, 5L), wordIds(challenge.getWords()),
                     "挑战单词应保留单词服务返回的熟悉度顺序");
@@ -451,6 +516,8 @@ public class EngStudyServiceImplTest {
             }
             assertEquals(new HashSet<>(List.of(1L, 2L, 3L, 4L, 5L)), questionWordIds,
                     "题目只能围绕本轮返回的五个单词生成");
+            EngChallengeVo completed = createService(List.of(), List.of()).getChallenge(ARTICLE_ID);
+            assertEquals(Boolean.TRUE, completed.getDailyCompleted(), "没有下一轮单词时 GET 应返回今日完成");
         } finally {
             SecurityContextHolder.clearContext();
         }
@@ -473,7 +540,8 @@ public class EngStudyServiceImplTest {
         request.setAnswers(answers);
         setTestLoginUser();
         try {
-            service.submitChallenge(request);
+            EngChallengeResultVo result = service.submitChallenge(request);
+            assertEquals(Boolean.FALSE, result.getDailyCompleted(), "仍有下一轮单词时 POST 应返回未完成");
         } finally {
             SecurityContextHolder.clearContext();
         }
@@ -483,6 +551,35 @@ public class EngStudyServiceImplTest {
         assertEquals(List.of(1), deltas.get("word4"), "其他全对单词应加一次熟悉度");
         assertEquals(List.of(1), deltas.get("word5"), "其他全对单词应加一次熟悉度");
         assertEquals(null, deltas.get("word6"), "本轮未选中单词不得更新熟悉度");
+    }
+
+    /** 最后一轮提交后重新查询队列为空时，POST 应返回今日完成。 */
+    private void shouldReportDailyCompletedAfterFinalSubmission() {
+        EngWordVo apple = word(1L, "apple", "苹果", null);
+        AtomicLong queueCalls = new AtomicLong();
+        IEngWordService wordService = (IEngWordService) Proxy.newProxyInstance(IEngWordService.class.getClassLoader(),
+                new Class<?>[] {IEngWordService.class}, (proxy, method, args) -> {
+                    if ("selectNextReviewWords".equals(method.getName())) {
+                        return queueCalls.getAndIncrement() == 0 ? List.of(apple) : List.of();
+                    }
+                    return defaultValue(method.getReturnType());
+                });
+        EngArticle article = new EngArticle();
+        article.setId(ARTICLE_ID);
+        EngStudyServiceImpl service = new EngStudyServiceImpl(
+                proxy(IEngArticleService.class, Map.of("selectEngArticleById", article)),
+                proxy(IEngSentenceService.class, Map.of("selectEngSentenceList", List.of())),
+                proxy(IEngIcibaSentenceService.class, Map.of()), wordService,
+                proxy(EngStudyRecordMapper.class, Map.of()), proxy(EngCoinWalletMapper.class, Map.of()),
+                proxy(EngArticleProgressMapper.class, Map.of()), proxy(EngWrongWordMapper.class, Map.of()),
+                dailyTestWordMapper());
+        setTestLoginUser();
+        try {
+            EngChallengeResultVo result = service.submitChallenge(allCorrectTwoQuestionRequest());
+            assertEquals(Boolean.TRUE, result.getDailyCompleted(), "最后一轮提交后 POST 应返回今日完成");
+        } finally {
+            SecurityContextHolder.clearContext();
+        }
     }
 
     /** 验证文章超过五词时拒绝少词提交和跨文章单词。 */
@@ -581,6 +678,7 @@ public class EngStudyServiceImplTest {
     /** 创建仅含一个单词两道选择题、可观察金币入账的提交服务。 */
     private EngStudyServiceImpl createCoinSubmissionService(List<EngStudyRecord> records, AtomicLong balance,
             Map<String, Integer> walletCalls) {
+        setTestLoginUser();
         EngWordVo apple = word(1L, "apple", "苹果", null);
         EngStudyRecordMapper recordMapper = (EngStudyRecordMapper) Proxy.newProxyInstance(
                 EngStudyRecordMapper.class.getClassLoader(), new Class<?>[] {EngStudyRecordMapper.class},
@@ -608,11 +706,13 @@ public class EngStudyServiceImplTest {
         article.setId(ARTICLE_ID);
         IEngWordService wordService = proxy(IEngWordService.class, Map.of(
                 "selectWordListByArticle", List.of(apple),
-                "selectLowestFamiliarityWordsByArticle", List.of(apple)));
+                "selectLowestFamiliarityWordsByArticle", List.of(apple),
+                "selectNextReviewWords", List.of(apple)));
         return new EngStudyServiceImpl(proxy(IEngArticleService.class, Map.of("selectEngArticleById", article)),
                 proxy(IEngSentenceService.class, Map.of("selectEngSentenceList", List.of())),
                 proxy(IEngIcibaSentenceService.class, Map.of()), wordService, recordMapper, walletMapper,
-                proxy(EngArticleProgressMapper.class, Map.of()), proxy(EngWrongWordMapper.class, Map.of()));
+                proxy(EngArticleProgressMapper.class, Map.of()), proxy(EngWrongWordMapper.class, Map.of()),
+                dailyTestWordMapper());
     }
 
     /** 构造一个单词两道选择题全部答对的完整提交。 */
@@ -648,8 +748,10 @@ public class EngStudyServiceImplTest {
     /** 创建包含指定词典例句和错词 Mapper 的学习业务测试桩。 */
     private EngStudyServiceImpl createService(List<EngWordVo> words, List<EngSentence> sentences,
             List<EngIcibaSentence> dictionarySentences, EngWrongWordMapper wrongWordMapper) {
+        setTestLoginUser();
         IEngWordService wordService = proxy(IEngWordService.class, Map.of(
-                "selectWordListByArticle", words, "selectLowestFamiliarityWordsByArticle", words));
+                "selectWordListByArticle", words, "selectLowestFamiliarityWordsByArticle", words,
+                "selectNextReviewWords", words.subList(0, Math.min(5, words.size()))));
         IEngSentenceService sentenceService = proxy(IEngSentenceService.class,
                 Map.of("selectEngSentenceList", sentences));
         IEngIcibaSentenceService dictionarySentenceService = proxy(IEngIcibaSentenceService.class,
@@ -660,7 +762,7 @@ public class EngStudyServiceImplTest {
                 sentenceService, dictionarySentenceService, wordService,
                 proxy(EngStudyRecordMapper.class, Map.of()), proxy(EngCoinWalletMapper.class, Map.of()),
                 proxy(EngArticleProgressMapper.class, Map.of()),
-                wrongWordMapper);
+                wrongWordMapper, dailyTestWordMapper());
     }
 
     /**
@@ -668,11 +770,13 @@ public class EngStudyServiceImplTest {
      */
     private EngStudyServiceImpl createService(List<EngWordVo> words, List<EngSentence> sentences,
             Map<String, Integer> calls) {
+        setTestLoginUser();
         IEngWordService wordService = (IEngWordService) Proxy.newProxyInstance(IEngWordService.class.getClassLoader(),
                 new Class<?>[] {IEngWordService.class}, (proxy, method, args) -> {
                     calls.merge(method.getName(), 1, Integer::sum);
                     if ("selectWordListByArticle".equals(method.getName())
-                            || "selectLowestFamiliarityWordsByArticle".equals(method.getName())) {
+                            || "selectLowestFamiliarityWordsByArticle".equals(method.getName())
+                            || "selectNextReviewWords".equals(method.getName())) {
                         return words;
                     }
                     return defaultValue(method.getReturnType());
@@ -685,7 +789,8 @@ public class EngStudyServiceImplTest {
                 sentenceService, proxy(IEngIcibaSentenceService.class, Map.of()), wordService,
                 countingProxy(EngStudyRecordMapper.class, calls),
                 countingProxy(EngCoinWalletMapper.class, calls),
-                countingProxy(EngArticleProgressMapper.class, calls), countingProxy(EngWrongWordMapper.class, calls));
+                countingProxy(EngArticleProgressMapper.class, calls), countingProxy(EngWrongWordMapper.class, calls),
+                dailyTestWordMapper());
     }
 
     /**
@@ -693,12 +798,16 @@ public class EngStudyServiceImplTest {
      */
     private EngStudyServiceImpl createFamiliarityService(List<EngWordVo> words, List<EngSentence> sentences,
             Map<String, List<Integer>> deltas) {
+        setTestLoginUser();
         IEngWordService wordService = (IEngWordService) Proxy.newProxyInstance(IEngWordService.class.getClassLoader(),
                 new Class<?>[] {IEngWordService.class}, (proxy, method, args) -> {
                     if ("selectWordListByArticle".equals(method.getName())) {
                         return words;
                     }
                     if ("selectLowestFamiliarityWordsByArticle".equals(method.getName())) {
+                        return words.subList(0, Math.min(5, words.size()));
+                    }
+                    if ("selectNextReviewWords".equals(method.getName())) {
                         return words.subList(0, Math.min(5, words.size()));
                     }
                     if ("updateFamiliarity".equals(method.getName())) {
@@ -713,7 +822,33 @@ public class EngStudyServiceImplTest {
                 proxy(IEngIcibaSentenceService.class, Map.of()), wordService,
                 proxy(EngStudyRecordMapper.class, Map.of()), proxy(EngCoinWalletMapper.class, Map.of()),
                 proxy(EngArticleProgressMapper.class, Map.of()),
-                proxy(EngWrongWordMapper.class, Map.of()));
+                proxy(EngWrongWordMapper.class, Map.of()), dailyTestWordMapper());
+    }
+
+    /** 不持久化完成记录的测试 Mapper。 */
+    private EngDailyTestWordMapper dailyTestWordMapper() {
+        return new EngDailyTestWordMapper() {
+            @Override
+            public List<Long> selectCompletedWordIds(Long userId, LocalDate studyDate) {
+                return List.of();
+            }
+
+            @Override
+            public int countNewWords(Long userId, Long articleId, LocalDate studyDate) {
+                return 0;
+            }
+
+            @Override
+            public int insertDailyTestWord(EngDailyTestWord dailyTestWord) {
+                return 1;
+            }
+
+            @Override
+            public int bindStudyRecord(Long userId, Long articleId, LocalDate studyDate,
+                    List<Long> wordIds, Long studyRecordId) {
+                return wordIds.size();
+            }
+        };
     }
 
     /**

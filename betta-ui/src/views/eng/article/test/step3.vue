@@ -12,6 +12,9 @@
       <div class="coin-balance">
         <i class="el-icon-coin" /> 金币余额 {{ result.coinBalance || 0 }}
       </div>
+      <p v-if="result.dailyCompleted" class="daily-completed">
+        该文章今日学习任务已完成，明天再来
+      </p>
     </section>
     <div class="toolbar result-actions">
       <!-- <button class="block-button" @click="$emit('restart')">重新测试</button> -->
@@ -99,6 +102,12 @@ export default {
     border-radius: 18px;
     color: #b88230;
     background: rgba(253, 246, 236, 0.85);
+    font-weight: 600;
+  }
+
+  .daily-completed {
+    margin: 18px 0 0;
+    color: #67c23a;
     font-weight: 600;
   }
 

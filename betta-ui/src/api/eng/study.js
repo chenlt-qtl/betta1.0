@@ -58,3 +58,21 @@ export function markWrongWordMastered(id) {
     method: 'put'
   })
 }
+
+// 分页查询全员积分汇总，仅供拥有积分管理权限的管理员使用
+export function listAdminScores(query) {
+  return request({
+    url: '/eng/study/admin/score/list',
+    method: 'get',
+    params: query
+  })
+}
+
+// 分页查询指定用户的完整积分历史
+export function listAdminScoreHistory(query) {
+  return request({
+    url: '/eng/study/admin/score/history/list',
+    method: 'get',
+    params: query
+  })
+}

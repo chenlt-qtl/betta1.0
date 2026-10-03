@@ -12,6 +12,8 @@ import com.betta.eng.domain.vo.EngUserScoreVo;
 import com.betta.eng.mapper.EngUserScoreMapper;
 import com.betta.eng.service.IEngSentenceService;
 import com.betta.eng.service.IEngUserScoreService;
+import com.betta.eng.utils.FamiliarityCalculator;
+import java.util.Date;
 
 /** 用户成绩业务实现，负责用户隔离、例句组装和熟悉度增量累计。 */
 @Service
@@ -31,13 +33,17 @@ public class EngUserScoreServiceImpl implements IEngUserScoreService
     public List<EngUserScore> selectEngUserScoreList(EngUserScore score)
     {
         score.setUser(SecurityUtils.getUsername());
-        return mapper.selectEngUserScoreList(score);
+        List<EngUserScore> result = mapper.selectEngUserScoreList(score);
+        applyEffectiveFamiliarity(result);
+        return result;
     }
 
     @Override
     public List<EngUserScoreVo> selectEngUserScoreVoList(EngUserScore score)
     {
-        return mapper.selectEngUserScoreVo(score, SecurityUtils.getUsername());
+        List<EngUserScoreVo> result = mapper.selectEngUserScoreVo(score, SecurityUtils.getUsername());
+        applyEffectiveFamiliarity(result);
+        return result;
     }
 
     @Override
@@ -70,6 +76,7 @@ public class EngUserScoreServiceImpl implements IEngUserScoreService
         String username = SecurityUtils.getUsername();
         score.setUser(username);
         score.setCreateBy(username);
+        score.setFamiliarity(FamiliarityCalculator.clamp(score.getFamiliarity()));
         return mapper.insertEngUserScore(score);
     }
 
@@ -80,6 +87,7 @@ public class EngUserScoreServiceImpl implements IEngUserScoreService
         String username = SecurityUtils.getUsername();
         score.setUser(username);
         score.setUpdateBy(username);
+        score.setFamiliarity(FamiliarityCalculator.clamp(score.getFamiliarity()));
         return mapper.updateEngUserScore(score);
     }
 
@@ -116,11 +124,12 @@ public class EngUserScoreServiceImpl implements IEngUserScoreService
         {
             score = new EngUserScore();
             score.setWordName(wordName);
-            score.setFamiliarity(delta);
+            score.setFamiliarity(FamiliarityCalculator.clamp(delta));
             insertEngUserScore(score);
             return;
         }
-        score.setFamiliarity((score.getFamiliarity() == null ? 0 : score.getFamiliarity()) + delta);
+        score.setFamiliarity(FamiliarityCalculator.clamp(
+                (score.getFamiliarity() == null ? 0 : score.getFamiliarity()) + delta));
         score.setUser(username);
         score.setUpdateBy(username);
         mapper.updateEngUserScore(score);
@@ -132,6 +141,17 @@ public class EngUserScoreServiceImpl implements IEngUserScoreService
         if (score == null || StringUtils.isEmpty(score.getWordName()))
         {
             throw new ServiceException("单词不能为空");
+        }
+    }
+
+    /** 查询结果只替换展示值，不写回数据库中的基础熟悉度。 */
+    private void applyEffectiveFamiliarity(List<? extends EngUserScore> scores)
+    {
+        Date now = new Date();
+        for (EngUserScore score : scores)
+        {
+            Date lastReviewTime = score.getUpdateTime() == null ? score.getCreateTime() : score.getUpdateTime();
+            score.setFamiliarity(FamiliarityCalculator.effective(score.getFamiliarity(), lastReviewTime, now));
         }
     }
 }

@@ -2,10 +2,12 @@ package com.betta.eng.service.impl;
 
 import com.betta.common.exception.ServiceException;
 import com.betta.eng.domain.EngArticleWordRel;
+import com.betta.eng.domain.EngDailyTestWord;
 import com.betta.eng.domain.EngIcibaSentence;
 import com.betta.eng.domain.EngWord;
 import com.betta.eng.domain.vo.EngWordVo;
 import com.betta.eng.mapper.EngWordMapper;
+import com.betta.eng.mapper.EngDailyTestWordMapper;
 import com.betta.eng.service.IEngArticleWordRelService;
 import com.betta.eng.service.IEngIcibaSentenceService;
 import com.betta.eng.service.IEngSentenceService;
@@ -16,8 +18,17 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
+import java.time.LocalDate;
+import java.util.Date;
+import com.betta.common.core.domain.entity.SysUser;
+import com.betta.common.core.domain.model.LoginUser;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 
 /** 单词数据库查询和正式词头关系处理的独立回归入口。 */
 public class EngWordServiceImplTest
@@ -38,6 +49,191 @@ public class EngWordServiceImplTest
         shouldSaveKnownBatchWordsAndReturnMissingWords();
         shouldReturnAllMissingBatchWordsWithoutWritingRelations();
         shouldApplyDuplicateArticlePenaltyOncePerCanonicalWord();
+        shouldMixDailyReviewCategoriesInPriorityOrder();
+        shouldRespectDailyNewWordQuota();
+        shouldExcludeGloballyCompletedDailyWord();
+        shouldStopAfterTenNewWordRoundsAndResetNextDay();
+    }
+
+    /** 连续十轮完成五十个新词后第十一轮为空，次日则按已有成绩进入学习期。 */
+    private static void shouldStopAfterTenNewWordRoundsAndResetNextDay()
+    {
+        Date now = reviewNow();
+        LocalDate firstDay = LocalDate.of(2026, 10, 3);
+        LocalDate nextDay = firstDay.plusDays(1);
+        List<EngWordVo> words = new ArrayList<>();
+        for (long id = 1; id <= 55; id++)
+        {
+            words.add(reviewWord(id, id, "new" + id, 0, false, 0, now));
+        }
+        StatefulDailyMapper dailyMapper = new StatefulDailyMapper();
+        EngWordServiceImpl service = reviewService(words, dailyMapper);
+        for (int round = 0; round < 10; round++)
+        {
+            List<EngWordVo> selected = service.selectNextReviewWords(7L, 9L, firstDay, now);
+            assertEquals(5, selected.size(), "前十轮应各返回五个新词");
+            assertTrue(selected.stream().allMatch(word -> "NEW".equals(word.getReviewCategory())),
+                    "首日十轮应全部为新词");
+            dailyMapper.complete(firstDay, selected);
+        }
+        assertEquals(List.of(), service.selectNextReviewWords(7L, 9L, firstDay, now),
+                "首日完成五十个新词后第十一轮不应再返回新词");
+
+        for (int index = 0; index < 50; index++)
+        {
+            EngWordVo learned = words.get(index);
+            learned.setScoreExists(true);
+            learned.setBaseFamiliarity(1);
+            learned.setLastReviewTime(now);
+        }
+        List<EngWordVo> nextDayWords = service.selectNextReviewWords(7L, 9L, nextDay,
+                new Date(now.getTime() + 24L * 60L * 60L * 1000L));
+        assertEquals(5, nextDayWords.size(), "次日完成集合和新词计数应按日期重置");
+        assertTrue(nextDayWords.stream().allMatch(word -> "LEARNING".equals(word.getReviewCategory())),
+                "前日新词产生成绩后次日应优先进入学习期");
+    }
+
+    /** 每日队列应按学习期、到期复习和新词顺序混合补满五个。 */
+    private static void shouldMixDailyReviewCategoriesInPriorityOrder()
+    {
+        Date now = reviewNow();
+        List<EngWordVo> words = List.of(
+                reviewWord(1L, 3L, "review", 5, true, 20, now),
+                reviewWord(2L, 2L, "learning2", 2, true, 0, now),
+                reviewWord(3L, 1L, "learning1", 1, true, 0, now),
+                reviewWord(4L, 4L, "new1", 0, false, 0, now),
+                reviewWord(5L, 5L, "new2", 0, false, 0, now),
+                reviewWord(6L, 6L, "new3", 0, false, 0, now));
+        List<EngWordVo> result = reviewService(words, 0, List.of())
+                .selectNextReviewWords(7L, 9L, LocalDate.of(2026, 10, 3), now);
+        assertEquals(List.of(3L, 2L, 1L, 4L, 5L), reviewWordIds(result), "每日队列优先级错误");
+        assertEquals(List.of("LEARNING", "LEARNING", "REVIEW", "NEW", "NEW"),
+                result.stream().map(EngWordVo::getReviewCategory).toList(), "每日队列分类错误");
+    }
+
+    /** 新词达到五十个后不得继续加入，仅剩一个配额时也只能补一个。 */
+    private static void shouldRespectDailyNewWordQuota()
+    {
+        Date now = reviewNow();
+        List<EngWordVo> words = List.of(
+                reviewWord(1L, 1L, "learning", 1, true, 0, now),
+                reviewWord(2L, 2L, "new1", 0, false, 0, now),
+                reviewWord(3L, 3L, "new2", 0, false, 0, now));
+        assertEquals(List.of(1L), reviewWordIds(reviewService(words, 50, List.of())
+                .selectNextReviewWords(7L, 9L, LocalDate.of(2026, 10, 3), now)), "达到配额后不应返回新词");
+        assertEquals(List.of(1L, 2L), reviewWordIds(reviewService(words, 49, List.of())
+                .selectNextReviewWords(7L, 9L, LocalDate.of(2026, 10, 3), now)), "剩余配额必须准确限制新词数");
+    }
+
+    /** 同一单词在其他文章完成后当天全站不再出现。 */
+    private static void shouldExcludeGloballyCompletedDailyWord()
+    {
+        Date now = reviewNow();
+        List<EngWordVo> words = List.of(
+                reviewWord(1L, 1L, "done", 1, true, 0, now),
+                reviewWord(2L, 2L, "available", 1, true, 0, now));
+        assertEquals(List.of(2L), reviewWordIds(reviewService(words, 0, List.of(1L))
+                .selectNextReviewWords(7L, 99L, LocalDate.of(2026, 10, 3), now)), "已完成单词应全站日去重");
+    }
+
+    private static EngWordServiceImpl reviewService(List<EngWordVo> words, int newCount, List<Long> completed)
+    {
+        setTestLoginUser();
+        EngWordMapper wordMapper = (EngWordMapper) Proxy.newProxyInstance(EngWordMapper.class.getClassLoader(),
+                new Class<?>[] {EngWordMapper.class}, (proxy, method, args) ->
+                        "selectWordListByArticleId".equals(method.getName()) ? words : null);
+        EngDailyTestWordMapper dailyMapper = dailyTestWordMapper(newCount, completed);
+        return new EngWordServiceImpl(wordMapper, null, null, null, null, new DictUtils(wordMapper), dailyMapper);
+    }
+
+    private static EngWordServiceImpl reviewService(List<EngWordVo> words, EngDailyTestWordMapper dailyMapper)
+    {
+        setTestLoginUser();
+        EngWordMapper wordMapper = (EngWordMapper) Proxy.newProxyInstance(EngWordMapper.class.getClassLoader(),
+                new Class<?>[] {EngWordMapper.class}, (proxy, method, args) ->
+                        "selectWordListByArticleId".equals(method.getName()) ? words : null);
+        return new EngWordServiceImpl(wordMapper, null, null, null, null, new DictUtils(wordMapper), dailyMapper);
+    }
+
+    /** 按日期保存已完成集合和新词计数，用于连续多轮队列测试。 */
+    private static class StatefulDailyMapper implements EngDailyTestWordMapper
+    {
+        private final Map<LocalDate, Set<Long>> completedIds = new HashMap<>();
+        private final Map<LocalDate, Integer> newCounts = new HashMap<>();
+
+        private void complete(LocalDate studyDate, List<EngWordVo> words)
+        {
+            completedIds.computeIfAbsent(studyDate, key -> new HashSet<>())
+                    .addAll(words.stream().map(EngWordVo::getId).toList());
+            int newCount = (int) words.stream().filter(word -> "NEW".equals(word.getReviewCategory())).count();
+            newCounts.merge(studyDate, newCount, Integer::sum);
+        }
+
+        @Override
+        public List<Long> selectCompletedWordIds(Long userId, LocalDate studyDate)
+        {
+            return new ArrayList<>(completedIds.getOrDefault(studyDate, Set.of()));
+        }
+
+        @Override
+        public int countNewWords(Long userId, Long articleId, LocalDate studyDate)
+        {
+            return newCounts.getOrDefault(studyDate, 0);
+        }
+
+        @Override
+        public int insertDailyTestWord(EngDailyTestWord dailyTestWord) { return 1; }
+
+        @Override
+        public int bindStudyRecord(Long userId, Long articleId, LocalDate studyDate,
+                List<Long> wordIds, Long studyRecordId) { return wordIds.size(); }
+    }
+
+    private static EngDailyTestWordMapper dailyTestWordMapper(int newCount, List<Long> completed)
+    {
+        return new EngDailyTestWordMapper() {
+            @Override
+            public List<Long> selectCompletedWordIds(Long userId, LocalDate studyDate) { return completed; }
+            @Override
+            public int countNewWords(Long userId, Long articleId, LocalDate studyDate) { return newCount; }
+            @Override
+            public int insertDailyTestWord(EngDailyTestWord dailyTestWord) { return 1; }
+            @Override
+            public int bindStudyRecord(Long userId, Long articleId, LocalDate studyDate,
+                    List<Long> wordIds, Long studyRecordId) { return wordIds.size(); }
+        };
+    }
+
+    private static Date reviewNow() { return new Date(2_000L * 24L * 60L * 60L * 1000L); }
+
+    private static EngWordVo reviewWord(Long id, Long relId, String name, int familiarity,
+            boolean scoreExists, int elapsedDays, Date now)
+    {
+        EngWordVo word = new EngWordVo();
+        word.setId(id);
+        word.setRelId(relId);
+        word.setWordName(name);
+        word.setAcceptation("释义");
+        word.setBaseFamiliarity(familiarity);
+        word.setScoreExists(scoreExists);
+        word.setLastReviewTime(new Date(now.getTime() - elapsedDays * 24L * 60L * 60L * 1000L));
+        return word;
+    }
+
+    private static List<Long> reviewWordIds(List<EngWordVo> words)
+    {
+        return words.stream().map(EngWordVo::getId).toList();
+    }
+
+    private static void setTestLoginUser()
+    {
+        SysUser user = new SysUser();
+        user.setUserId(7L);
+        user.setUserName("tester");
+        LoginUser loginUser = new LoginUser();
+        loginUser.setUser(user);
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(loginUser, null, List.of()));
     }
 
     /** 查词应聚合数据库现有数据，不新增或刷新词条和例句。 */
@@ -267,6 +463,14 @@ public class EngWordServiceImplTest
         }
     }
 
+    private static void assertTrue(boolean value, String message)
+    {
+        if (!value)
+        {
+            throw new AssertionError(message);
+        }
+    }
+
     /** 为单词、例句和文章关系提供内存桩。 */
     private static final class Harness
     {
@@ -296,7 +500,8 @@ public class EngWordServiceImplTest
             this.wordLookup = wordLookup;
             EngWordMapper wordMapper = wordMapper();
             service = new EngWordServiceImpl(wordMapper, articleWordRelService(), userScoreService(),
-                    sentenceService(), dictionarySentenceService(), new DictUtils(wordMapper));
+                    sentenceService(), dictionarySentenceService(), new DictUtils(wordMapper),
+                    dailyTestWordMapper(0, List.of()));
         }
 
         private EngWordMapper wordMapper()
