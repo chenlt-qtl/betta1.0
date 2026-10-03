@@ -316,3 +316,42 @@ export default {
   .product-cover { height: 150px; }
 }
 </style>
+
+<style lang="scss">
+.mall-product-dialog {
+  max-width: calc(100vw - 32px);
+}
+
+@media (max-width: 768px) {
+  .mall-product-dialog {
+    display: flex;
+    flex-direction: column;
+    width: calc(100vw - 24px) !important;
+    max-width: none;
+    max-height: calc(100vh - 24px);
+    margin: 12px auto !important;
+
+    .el-dialog__header {
+      flex: none;
+      padding: 16px 44px 14px 16px;
+    }
+
+    .el-dialog__body {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 0 16px 8px !important;
+    }
+
+    .el-dialog__footer {
+      flex: none;
+      padding: 12px 16px 16px;
+    }
+
+    .el-carousel__container,
+    .detail-image {
+      height: 220px !important;
+    }
+  }
+}
+</style>

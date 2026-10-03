@@ -10,7 +10,7 @@
 
       <el-empty
         v-if="!loading && questionList.length === 0"
-        description="该文章暂时没有可用题目"
+        :description="emptyDescription"
       >
         <el-button type="primary" @click="backToStudy">选择其他文章</el-button>
       </el-empty>
@@ -63,6 +63,11 @@ export default {
   computed: {
     articleId() {
       return this.$route.params && this.$route.params.articleId
+    },
+    emptyDescription() {
+      return this.challenge.dailyCompleted
+        ? '该文章今日学习任务已完成，明天再来'
+        : '该文章暂时没有可用题目'
     }
   },
   created() {

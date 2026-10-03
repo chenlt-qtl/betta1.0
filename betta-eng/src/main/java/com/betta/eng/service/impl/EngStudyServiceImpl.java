@@ -5,6 +5,7 @@ import com.betta.common.utils.SecurityUtils;
 import com.betta.common.utils.StringUtils;
 import com.betta.eng.domain.EngArticle;
 import com.betta.eng.domain.EngArticleProgress;
+import com.betta.eng.domain.EngDailyTestWord;
 import com.betta.eng.domain.EngIcibaSentence;
 import com.betta.eng.domain.EngSentence;
 import com.betta.eng.domain.EngStudyRecord;
@@ -20,6 +21,7 @@ import com.betta.eng.domain.vo.EngStudySummaryVo;
 import com.betta.eng.domain.vo.EngWordVo;
 import com.betta.eng.mapper.EngArticleProgressMapper;
 import com.betta.eng.mapper.EngCoinWalletMapper;
+import com.betta.eng.mapper.EngDailyTestWordMapper;
 import com.betta.eng.mapper.EngStudyRecordMapper;
 import com.betta.eng.mapper.EngWrongWordMapper;
 import com.betta.eng.service.IEngArticleService;
@@ -39,6 +41,8 @@ import java.util.Random;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.time.LocalDate;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -85,14 +89,16 @@ public class EngStudyServiceImpl implements IEngStudyService {
     private final EngCoinWalletMapper coinWalletMapper;
     private final EngArticleProgressMapper progressMapper;
     private final EngWrongWordMapper wrongWordMapper;
+    private final EngDailyTestWordMapper dailyTestWordMapper;
 
     /**
-     * 注入学习业务依赖；参数依次用于文章、文章句子、词典例句、单词、记录、金币钱包、进度和错词访问。
+     * 注入学习业务依赖；参数依次用于文章、句子、词典例句、单词、记录、金币、进度、错词、每日队列和完成记录。
      */
     public EngStudyServiceImpl(IEngArticleService articleService, IEngSentenceService sentenceService,
             IEngIcibaSentenceService dictionarySentenceService, IEngWordService wordService,
             EngStudyRecordMapper recordMapper, EngCoinWalletMapper coinWalletMapper,
-            EngArticleProgressMapper progressMapper, EngWrongWordMapper wrongWordMapper) {
+            EngArticleProgressMapper progressMapper, EngWrongWordMapper wrongWordMapper,
+            EngDailyTestWordMapper dailyTestWordMapper) {
         this.articleService = articleService;
         this.sentenceService = sentenceService;
         this.dictionarySentenceService = dictionarySentenceService;
@@ -101,6 +107,7 @@ public class EngStudyServiceImpl implements IEngStudyService {
         this.coinWalletMapper = coinWalletMapper;
         this.progressMapper = progressMapper;
         this.wrongWordMapper = wrongWordMapper;
+        this.dailyTestWordMapper = dailyTestWordMapper;
     }
 
     /** {@inheritDoc} */
@@ -160,6 +167,7 @@ public class EngStudyServiceImpl implements IEngStudyService {
         // 每次获取挑战都独立打乱完整题集；仅调整题目位置，不改变题目标识、内容及选择题选项顺序。
         Collections.shuffle(questions);
         challenge.setQuestions(questions);
+        challenge.setDailyCompleted(words.isEmpty());
         return challenge;
     }
 
@@ -204,7 +212,11 @@ public class EngStudyServiceImpl implements IEngStudyService {
         EngChallengeResultVo result = calculateResult(definitions, answers);
         Long userId = SecurityUtils.getUserId();
         String username = SecurityUtils.getUsername();
-        saveStudyRecord(userId, username, request.getArticleId(), result);
+        LocalDate studyDate = LocalDate.now();
+        registerDailyCompletions(userId, username, request.getArticleId(), studyDate, submittedWords);
+        Long studyRecordId = saveStudyRecord(userId, username, request.getArticleId(), result);
+        dailyTestWordMapper.bindStudyRecord(userId, request.getArticleId(), studyDate,
+                submittedWords.stream().map(EngWordVo::getId).toList(), studyRecordId);
         if (result.getCoinReward() > 0) {
             coinWalletMapper.increaseCoinBalance(userId, result.getCoinReward(), username);
         }
@@ -212,6 +224,7 @@ public class EngStudyServiceImpl implements IEngStudyService {
         saveBestProgress(userId, username, request.getArticleId(), result);
         updateWrongWords(userId, username, request.getArticleId(), definitions, result);
         updateFamiliarities(definitions, result);
+        result.setDailyCompleted(wordService.selectNextReviewWords(userId, request.getArticleId()).isEmpty());
         return result;
     }
 
@@ -278,19 +291,10 @@ public class EngStudyServiceImpl implements IEngStudyService {
         return definitions;
     }
 
-    /** 查询当前用户熟悉度最低的最多五个有效文章单词。 */
+    /** 按每日队列规则查询当前用户下一轮最多五个有效文章单词。 */
     private List<EngWordVo> selectChallengeWords(Long articleId) {
-        List<EngWordVo> words = wordService.selectLowestFamiliarityWordsByArticle(articleId);
-        Map<Long, EngWordVo> uniqueWords = new LinkedHashMap<>();
-        for (EngWordVo word : words == null ? Collections.<EngWordVo>emptyList() : words) {
-            if (isValidChallengeWord(word)) {
-                uniqueWords.putIfAbsent(word.getId(), word);
-                if (uniqueWords.size() == CHALLENGE_WORD_LIMIT) {
-                    break;
-                }
-            }
-        }
-        return new ArrayList<>(uniqueWords.values());
+        return wordService.selectNextReviewWords(SecurityUtils.getUserId(), articleId).stream()
+                .filter(this::isValidChallengeWord).limit(CHALLENGE_WORD_LIMIT).toList();
     }
 
     /**
@@ -306,13 +310,13 @@ public class EngStudyServiceImpl implements IEngStudyService {
             submittedWordIds.add(wordId);
         }
         Map<Long, EngWordVo> articleWords = new LinkedHashMap<>();
-        List<EngWordVo> words = wordService.selectWordListByArticle(articleId);
-        for (EngWordVo word : words == null ? Collections.<EngWordVo>emptyList() : words) {
+        List<EngWordVo> words = selectChallengeWords(articleId);
+        for (EngWordVo word : words) {
             if (isValidChallengeWord(word)) {
                 articleWords.putIfAbsent(word.getId(), word);
             }
         }
-        int expectedWordCount = Math.min(CHALLENGE_WORD_LIMIT, articleWords.size());
+        int expectedWordCount = articleWords.size();
         if (submittedWordIds.size() != expectedWordCount || !articleWords.keySet().containsAll(submittedWordIds)) {
             throw new ServiceException("存在不属于当前文章的题目或未完成本轮单词");
         }
@@ -642,7 +646,7 @@ public class EngStudyServiceImpl implements IEngStudyService {
     }
 
     /** 保存本次学习记录；参数包含用户、文章和计分结果。 */
-    private void saveStudyRecord(Long userId, String username, Long articleId, EngChallengeResultVo result) {
+    private Long saveStudyRecord(Long userId, String username, Long articleId, EngChallengeResultVo result) {
         EngStudyRecord record = new EngStudyRecord();
         record.setUserId(userId);
         record.setArticleId(articleId);
@@ -653,6 +657,28 @@ public class EngStudyServiceImpl implements IEngStudyService {
         record.setCoinReward(result.getCoinReward());
         record.setCreateBy(username);
         recordMapper.insertEngStudyRecord(record);
+        return record.getId();
+    }
+
+    /**
+     * 在任何积分、进度和熟悉度副作用前登记本轮完成词；数据库唯一键负责阻止并发重复提交。
+     */
+    private void registerDailyCompletions(Long userId, String username, Long articleId, LocalDate studyDate,
+            List<EngWordVo> words) {
+        try {
+            for (EngWordVo word : words) {
+                EngDailyTestWord dailyTestWord = new EngDailyTestWord();
+                dailyTestWord.setUserId(userId);
+                dailyTestWord.setArticleId(articleId);
+                dailyTestWord.setWordId(word.getId());
+                dailyTestWord.setStudyDate(studyDate);
+                dailyTestWord.setCategory(word.getReviewCategory());
+                dailyTestWord.setCreateBy(username);
+                dailyTestWordMapper.insertDailyTestWord(dailyTestWord);
+            }
+        } catch (DuplicateKeyException exception) {
+            throw new ServiceException("本轮单词今日已完成，请重新获取学习内容");
+        }
     }
 
     /** 仅在首次或更高分时写入最好进度；参数包含用户、文章和计分结果。 */

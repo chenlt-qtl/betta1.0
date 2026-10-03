@@ -22,6 +22,8 @@ public class EngChallengeResultVo {
     private Long coinBalance;
     /** 逐题判定结果。 */
     private List<ResultItem> results;
+    /** 本轮提交后当前文章今日是否已无待学习或复习内容。 */
+    private Boolean dailyCompleted;
 
     /**
      * 单题判定结果，仅在提交后返回，避免挑战获取阶段泄露正确答案。

@@ -19,4 +19,6 @@ public class EngChallengeVo {
     private List<EngWordVo> words;
     /** 本次挑战题目集合。 */
     private List<EngChallengeQuestionVo> questions;
+    /** 当前文章今日是否已无待学习或复习内容。 */
+    private Boolean dailyCompleted;
 }
