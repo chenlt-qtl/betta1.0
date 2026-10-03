@@ -14,7 +14,7 @@
       </div>
     </section>
     <div class="toolbar result-actions">
-      <button class="block-button" @click="$emit('restart')">重新测试</button>
+      <!-- <button class="block-button" @click="$emit('restart')">重新测试</button> -->
       <button class="block-button" @click="$emit('study')">继续学习</button>
       <button class="block-button" @click="$emit('wrong')">错词本</button>
     </div>
