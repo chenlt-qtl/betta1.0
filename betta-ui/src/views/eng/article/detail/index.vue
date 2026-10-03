@@ -39,9 +39,16 @@
       :wordList="wordList"
     ></sentence-list>
     <el-descriptions
-      class="margin-top"
+      class="margin-top word-list-header"
       :title="`单词信息 (共` + wordTotal + `条)`"
-    />
+    >
+      <template slot="extra">
+        <el-radio-group v-model="wordSort" size="mini" @change="getWordList">
+          <el-radio-button label="time">按时间</el-radio-button>
+          <el-radio-button label="name">按名称</el-radio-button>
+        </el-radio-group>
+      </template>
+    </el-descriptions>
     <ArticleWordList
       :play="play"
       :showScore="true"
@@ -84,6 +91,7 @@ export default {
       wordTotal: 0,
       form: {},
       wordList: [],
+      wordSort: "time",
     };
   },
   created() {
@@ -105,15 +113,19 @@ export default {
     play(url, mp3Time) {
       url && play(url, mp3Time);
     },
-    /** 查询单词列表 */
+    /** 按当前选择的添加时间或名称顺序查询单词列表。 */
     getWordList() {
       this.loading = true;
-      listByArticle(this.articleId, false, 1000, "word_name").then(
+      const byName = this.wordSort === "name";
+      listByArticle(
+        this.articleId,
+        false,
+        1000,
+        byName ? "word_name" : "rel_id",
+        byName ? "ascending" : "descending"
+      ).then(
         (response) => {
-          // 熟悉度可能为空，按零处理后由低到高展示，避免详情页排序异常。
-          this.wordList = (response.rows || []).sort(
-            (left, right) => (left.familiarity || 0) - (right.familiarity || 0)
-          );
+          this.wordList = response.rows || [];
           this.wordTotal = response.total;
           this.loading = false;
         }
@@ -128,5 +140,15 @@ export default {
 }
 .margin-top {
   margin-top: 24px;
+}
+@media (max-width: 600px) {
+  .app-container {
+    padding: 12px;
+  }
+  .word-list-header ::v-deep .el-descriptions__header {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
 }
 </style>
