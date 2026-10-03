@@ -71,7 +71,7 @@
           任务
         </a>
         <router-link to="/mall/index" class="item">
-          <svg-icon icon-class="shopping" />
+          <img src="@/assets/shortcuts/商城.svg" />
           商城
         </router-link>
       </div>
