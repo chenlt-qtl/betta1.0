@@ -58,7 +58,7 @@
             v-model="form.wordName"
             type="textarea"
             :rows="6"
-            placeholder="请输入单词，支持换行、空格、逗号或分号分隔"
+            placeholder="每行输入一个单词或短语"
           />
           <div v-else style="display: flex; gap: 5px">
             <el-input v-model="form.wordName" placeholder="请输入单词内容" @keyup.enter.native="searchWord"
@@ -242,10 +242,10 @@ export default {
         }
       });
     },
-    /** 解析批量输入，并按首次出现顺序去除大小写重复项。 */
+    /** 按行解析批量输入，保留短语内部空格并去除大小写重复项。 */
     parseBatchWords(value) {
       const words = String(value || "")
-        .split(/[\s,，;；]+/)
+        .split(/[\r\n]+/)
         .map((item) => item.trim())
         .filter(Boolean);
       const seen = new Set();
