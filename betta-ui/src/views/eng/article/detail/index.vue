@@ -48,6 +48,7 @@
       :articleId="articleId"
       :listData="wordList"
       :getWordList="getWordList"
+      :batchAdd="true"
     ></ArticleWordList>
   </div>
 </template>

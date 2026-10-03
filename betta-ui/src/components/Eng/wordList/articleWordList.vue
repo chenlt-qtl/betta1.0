@@ -37,7 +37,14 @@ import WordTable from "./wordTable";
 import ViewWordBtn from "../btns/viewWordBtn";
 
 export default {
-  props: ["listData", "loading", "articleId", "getWordList", "play"],
+  props: [
+    "listData",
+    "loading",
+    "articleId",
+    "getWordList",
+    "play",
+    "batchAdd",
+  ],
   components: { WordTable, ViewWordBtn },
   data() {
     return {};

@@ -16,6 +16,7 @@ import com.betta.system.service.ISysUserService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -70,6 +71,33 @@ public class RobotAutoLoginService {
         payload.put("expireTime", System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(ttl));
         redisCache.setCacheObject(getTicketKey(ticket), payload.toJSONString(), ttl, TimeUnit.MINUTES);
         return ticket;
+    }
+
+    /**
+     * 按昵称为唯一的正常用户签发一次性自动登录 ticket。
+     *
+     * @param nickname 用户昵称，必须精确匹配唯一的未删除用户
+     * @param targetPath 登录成功后的站内目标路径
+     * @param expireMinutes ticket 有效期分钟数
+     * @return 一次性自动登录 ticket
+     */
+    public String createTicketByNickname(String nickname, String targetPath, Integer expireMinutes) {
+        if (StringUtils.isBlank(nickname)) {
+            throw new ServiceException("自动登录用户昵称不能为空");
+        }
+        List<SysUser> users = userService.selectUsersByNickName(nickname);
+        if (users == null || users.isEmpty()) {
+            throw new ServiceException("自动登录用户不存在");
+        }
+        // 昵称不是唯一标识；重名时拒绝签发，避免登录到错误账号。
+        if (users.size() != 1) {
+            throw new ServiceException("自动登录用户昵称不唯一");
+        }
+        SysUser user = users.get(0);
+        if (UserStatus.DISABLE.getCode().equals(user.getStatus())) {
+            throw new ServiceException("自动登录用户已停用");
+        }
+        return createTicket(user.getUserName(), targetPath, expireMinutes);
     }
 
     public AutoLoginResult exchangeToken(String ticket) {

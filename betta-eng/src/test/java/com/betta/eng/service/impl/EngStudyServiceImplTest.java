@@ -4,6 +4,7 @@ import com.betta.common.core.domain.entity.SysUser;
 import com.betta.common.core.domain.model.LoginUser;
 import com.betta.common.exception.ServiceException;
 import com.betta.eng.domain.EngArticle;
+import com.betta.eng.domain.EngIcibaSentence;
 import com.betta.eng.domain.EngSentence;
 import com.betta.eng.domain.EngWrongWord;
 import com.betta.eng.domain.dto.EngChallengeAnswerDto;
@@ -17,6 +18,7 @@ import com.betta.eng.mapper.EngArticleProgressMapper;
 import com.betta.eng.mapper.EngStudyRecordMapper;
 import com.betta.eng.mapper.EngWrongWordMapper;
 import com.betta.eng.service.IEngArticleService;
+import com.betta.eng.service.IEngIcibaSentenceService;
 import com.betta.eng.service.IEngSentenceService;
 import com.betta.eng.service.IEngWordService;
 import java.lang.reflect.InvocationTargetException;
@@ -48,6 +50,7 @@ public class EngStudyServiceImplTest {
     public static void main(String[] args) throws Exception {
         EngStudyServiceImplTest test = new EngStudyServiceImplTest();
         test.shouldBuildSentenceChoiceAndExistingQuestionTypesWithoutLeakingAnswer();
+        test.shouldFallbackToFirstDictionarySentence();
         test.shouldBuildSentenceFillOnlyAtRequiredFamiliarity();
         test.shouldUseConciseMeaningAndFallbackToAcceptation();
         test.shouldExposeAtMostFiveChallengeWords();
@@ -197,6 +200,34 @@ public class EngStudyServiceImplTest {
             exposesCorrectAnswer |= "correctAnswer".equals(field.getName());
         }
         assertTrue(!exposesCorrectAnswer, "挑战题展示对象不得包含正确答案字段");
+    }
+
+    /** 验证文章没有对应句子时回退第一条词典例句，已有文章句子时仍保持文章句子优先。 */
+    private void shouldFallbackToFirstDictionarySentence() throws Exception {
+        EngWordVo apple = word(1L, "apple", "苹果", null);
+        List<EngIcibaSentence> dictionarySentences = List.of(
+                dictionarySentence(1L, "An apple grows on the tree.", "苹果长在树上。"),
+                dictionarySentence(2L, "I ate an apple.", "我吃了一个苹果。"));
+
+        List<?> fallbackDefinitions = buildDefinitions(createService(
+                List.of(apple), List.of(), dictionarySentences));
+        String fallbackPrompt = (String) definitionValue(
+                findDefinition(fallbackDefinitions, "SENTENCE_CHOICE:1"), "prompt");
+        assertTrue(fallbackPrompt.contains("An _____ grows on the tree."), "无文章句子时应使用第一条词典例句");
+        assertTrue(fallbackPrompt.contains("苹果长在树上。"), "词典例句中文释义应作为句子提示");
+        assertTrue(!fallbackPrompt.contains("I ate"), "词典例句回退不得跳到第二条例句");
+
+        List<?> articleDefinitions = buildDefinitions(createService(
+                List.of(apple), List.of(sentence(10L, "This apple is red.", "这个苹果是红色的。")),
+                dictionarySentences));
+        String articlePrompt = (String) definitionValue(
+                findDefinition(articleDefinitions, "SENTENCE_CHOICE:1"), "prompt");
+        assertTrue(articlePrompt.contains("This _____ is red."), "已有文章句子时应继续优先使用文章句子");
+        assertTrue(!articlePrompt.contains("grows on the tree"), "文章句子存在时不得回退词典例句");
+
+        List<?> noSentenceDefinitions = buildDefinitions(createService(List.of(apple), List.of(), List.of()));
+        assertEquals(null, findDefinitionOrNull(noSentenceDefinitions, "SENTENCE_CHOICE:1"),
+                "文章句子和词典例句都不存在时不应生成句子题");
     }
 
     /** 验证句子填词题仅在熟悉度达到七时生成，且门槛不影响其他三类题。 */
@@ -466,7 +497,13 @@ public class EngStudyServiceImplTest {
      * 创建包含测试数据服务桩的学习业务；words 为文章单词，sentences 为文章句子，返回待测试服务。
      */
     private EngStudyServiceImpl createService(List<EngWordVo> words, List<EngSentence> sentences) {
-        return createService(words, sentences, proxy(EngWrongWordMapper.class, Map.of()));
+        return createService(words, sentences, List.of());
+    }
+
+    /** 创建包含指定词典例句的学习业务测试桩。 */
+    private EngStudyServiceImpl createService(List<EngWordVo> words, List<EngSentence> sentences,
+            List<EngIcibaSentence> dictionarySentences) {
+        return createService(words, sentences, dictionarySentences, proxy(EngWrongWordMapper.class, Map.of()));
     }
 
     /**
@@ -474,14 +511,22 @@ public class EngStudyServiceImplTest {
      */
     private EngStudyServiceImpl createService(List<EngWordVo> words, List<EngSentence> sentences,
             EngWrongWordMapper wrongWordMapper) {
+        return createService(words, sentences, List.of(), wrongWordMapper);
+    }
+
+    /** 创建包含指定词典例句和错词 Mapper 的学习业务测试桩。 */
+    private EngStudyServiceImpl createService(List<EngWordVo> words, List<EngSentence> sentences,
+            List<EngIcibaSentence> dictionarySentences, EngWrongWordMapper wrongWordMapper) {
         IEngWordService wordService = proxy(IEngWordService.class, Map.of(
                 "selectWordListByArticle", words, "selectLowestFamiliarityWordsByArticle", words));
         IEngSentenceService sentenceService = proxy(IEngSentenceService.class,
                 Map.of("selectEngSentenceList", sentences));
+        IEngIcibaSentenceService dictionarySentenceService = proxy(IEngIcibaSentenceService.class,
+                Map.of("selectEngIcibaSentenceList", dictionarySentences));
         EngArticle article = new EngArticle();
         article.setId(ARTICLE_ID);
         return new EngStudyServiceImpl(proxy(IEngArticleService.class, Map.of("selectEngArticleById", article)),
-                sentenceService, wordService,
+                sentenceService, dictionarySentenceService, wordService,
                 proxy(EngStudyRecordMapper.class, Map.of()), proxy(EngArticleProgressMapper.class, Map.of()),
                 wrongWordMapper);
     }
@@ -505,7 +550,8 @@ public class EngStudyServiceImplTest {
         EngArticle article = new EngArticle();
         article.setId(ARTICLE_ID);
         return new EngStudyServiceImpl(proxy(IEngArticleService.class, Map.of("selectEngArticleById", article)),
-                sentenceService, wordService, countingProxy(EngStudyRecordMapper.class, calls),
+                sentenceService, proxy(IEngIcibaSentenceService.class, Map.of()), wordService,
+                countingProxy(EngStudyRecordMapper.class, calls),
                 countingProxy(EngArticleProgressMapper.class, calls), countingProxy(EngWrongWordMapper.class, calls));
     }
 
@@ -530,7 +576,8 @@ public class EngStudyServiceImplTest {
         EngArticle article = new EngArticle();
         article.setId(ARTICLE_ID);
         return new EngStudyServiceImpl(proxy(IEngArticleService.class, Map.of("selectEngArticleById", article)),
-                proxy(IEngSentenceService.class, Map.of("selectEngSentenceList", sentences)), wordService,
+                proxy(IEngSentenceService.class, Map.of("selectEngSentenceList", sentences)),
+                proxy(IEngIcibaSentenceService.class, Map.of()), wordService,
                 proxy(EngStudyRecordMapper.class, Map.of()), proxy(EngArticleProgressMapper.class, Map.of()),
                 proxy(EngWrongWordMapper.class, Map.of()));
     }
@@ -648,6 +695,16 @@ public class EngStudyServiceImplTest {
         sentence.setArticleId(ARTICLE_ID);
         sentence.setContent(content);
         sentence.setAcceptation(acceptation);
+        return sentence;
+    }
+
+    /** 根据输入字段构造词典例句。 */
+    private EngIcibaSentence dictionarySentence(Long id, String orig, String trans) {
+        EngIcibaSentence sentence = new EngIcibaSentence();
+        sentence.setId(id);
+        sentence.setWordId(1L);
+        sentence.setOrig(orig);
+        sentence.setTrans(trans);
         return sentence;
     }
 

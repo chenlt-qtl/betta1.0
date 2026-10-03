@@ -6,6 +6,7 @@
         正在学习
       </div>
       <div class="title-btn">
+        <el-button v-hasPermi="['eng:study:view']" @click="$router.push('/eng/study/index')">学习中心</el-button>
         <el-button @click="changeWordBook">更换词书</el-button>
       </div>
       <div v-if="article.id" class="text article">
@@ -233,6 +234,8 @@ export default {
       position: absolute;
       right: 40px;
       top: 42px;
+      display: flex;
+      gap: 10px;
     }
 
     .text {
