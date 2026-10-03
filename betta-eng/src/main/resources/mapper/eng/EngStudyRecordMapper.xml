@@ -10,12 +10,13 @@
         <result property="correctCount" column="correct_count"/>
         <result property="totalCount" column="total_count"/>
         <result property="passed" column="passed"/>
+        <result property="coinReward" column="coin_reward"/>
         <result property="createBy" column="create_by"/>
         <result property="createTime" column="create_time"/>
     </resultMap>
     <insert id="insertEngStudyRecord" parameterType="EngStudyRecord" useGeneratedKeys="true" keyProperty="id">
-        insert into eng_study_record(user_id,article_id,score,correct_count,total_count,passed,create_by,create_time)
-        values(#{userId},#{articleId},#{score},#{correctCount},#{totalCount},#{passed},#{createBy},now())
+        insert into eng_study_record(user_id,article_id,score,correct_count,total_count,passed,coin_reward,create_by,create_time)
+        values(#{userId},#{articleId},#{score},#{correctCount},#{totalCount},#{passed},#{coinReward},#{createBy},now())
     </insert>
     <select id="selectRecentByUserId" resultMap="RecordMap">
         select r.*,a.title article_title

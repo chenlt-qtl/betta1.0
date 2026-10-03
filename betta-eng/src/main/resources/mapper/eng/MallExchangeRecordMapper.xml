@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.betta.eng.mapper.MallExchangeRecordMapper">
+    <resultMap id="MallExchangeRecordMap" type="com.betta.eng.domain.mall.MallExchangeRecord">
+        <id property="id" column="id"/>
+        <result property="userId" column="user_id"/>
+        <result property="userName" column="user_name"/>
+        <result property="nickName" column="nick_name"/>
+        <result property="productId" column="product_id"/>
+        <result property="productName" column="product_name"/>
+        <result property="productImages" column="product_images"/>
+        <result property="coinPrice" column="coin_price"/>
+        <result property="createBy" column="create_by"/>
+        <result property="createTime" column="create_time"/>
+    </resultMap>
+
+    <insert id="insertExchangeRecord" parameterType="com.betta.eng.domain.mall.MallExchangeRecord"
+            useGeneratedKeys="true" keyProperty="id">
+        insert into mall_exchange_record(user_id,product_id,product_name,product_images,coin_price,create_by,create_time)
+        values(#{userId},#{productId},#{productName},#{productImages},#{coinPrice},#{createBy},now())
+    </insert>
+
+    <select id="selectExchangeRecordList" parameterType="com.betta.eng.domain.mall.MallExchangeRecord"
+            resultMap="MallExchangeRecordMap">
+        select r.id,r.user_id,u.user_name,u.nick_name,r.product_id,r.product_name,r.product_images,r.coin_price,
+               r.create_by,r.create_time
+        from mall_exchange_record r
+        left join sys_user u on u.user_id=r.user_id
+        <where>
+            <if test="userId!=null">
+                and r.user_id=#{userId}
+            </if>
+            <if test="userName!=null and userName!=''">
+                and u.user_name like concat('%',#{userName},'%')
+            </if>
+            <if test="productName!=null and productName!=''">
+                and r.product_name like concat('%',#{productName},'%')
+            </if>
+        </where>
+        order by r.id desc
+    </select>
+</mapper>

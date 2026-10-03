@@ -4,7 +4,7 @@ import java.util.List;
 import lombok.Data;
 
 /**
- * 闯关提交结果，返回计分、通关状态和逐题复盘信息。
+ * 闯关提交结果，返回计分、金币、通关状态和逐题复盘信息。
  */
 @Data
 public class EngChallengeResultVo {
@@ -16,6 +16,10 @@ public class EngChallengeResultVo {
     private Integer totalCount;
     /** 是否达到六十分通关线。 */
     private Boolean passed;
+    /** 本轮获得金币，包含基础金币和最高适用成绩档位奖励。 */
+    private Long coinReward;
+    /** 本轮奖励入账后的当前金币余额。 */
+    private Long coinBalance;
     /** 逐题判定结果。 */
     private List<ResultItem> results;
 

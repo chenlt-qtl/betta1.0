@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.betta.eng.mapper.EngCoinWalletMapper">
+    <select id="selectCoinBalance" resultType="long">
+        select coalesce((select coin_balance from eng_user_coin_wallet where user_id=#{userId}),0)
+    </select>
+    <insert id="increaseCoinBalance">
+        insert into eng_user_coin_wallet(user_id,coin_balance,create_by,create_time,update_by,update_time)
+        values(#{userId},#{coinReward},#{username},now(),#{username},now())
+        on duplicate key update
+            coin_balance=coin_balance+values(coin_balance),
+            update_by=values(update_by),
+            update_time=values(update_time)
+    </insert>
+    <update id="decreaseCoinBalance">
+        update eng_user_coin_wallet
+        set coin_balance=coin_balance-#{coinCost},update_by=#{username},update_time=now()
+        where user_id=#{userId} and coin_balance&gt;=#{coinCost}
+    </update>
+</mapper>
