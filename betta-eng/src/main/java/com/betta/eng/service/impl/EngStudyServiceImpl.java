@@ -5,6 +5,7 @@ import com.betta.common.utils.SecurityUtils;
 import com.betta.common.utils.StringUtils;
 import com.betta.eng.domain.EngArticle;
 import com.betta.eng.domain.EngArticleProgress;
+import com.betta.eng.domain.EngIcibaSentence;
 import com.betta.eng.domain.EngSentence;
 import com.betta.eng.domain.EngStudyRecord;
 import com.betta.eng.domain.EngWord;
@@ -21,6 +22,7 @@ import com.betta.eng.mapper.EngArticleProgressMapper;
 import com.betta.eng.mapper.EngStudyRecordMapper;
 import com.betta.eng.mapper.EngWrongWordMapper;
 import com.betta.eng.service.IEngArticleService;
+import com.betta.eng.service.IEngIcibaSentenceService;
 import com.betta.eng.service.IEngSentenceService;
 import com.betta.eng.service.IEngStudyService;
 import com.betta.eng.service.IEngWordService;
@@ -76,19 +78,22 @@ public class EngStudyServiceImpl implements IEngStudyService {
     private static final Pattern SENTENCE_FILL_WORD_PATTERN = Pattern.compile("[A-Za-z]+");
     private final IEngArticleService articleService;
     private final IEngSentenceService sentenceService;
+    private final IEngIcibaSentenceService dictionarySentenceService;
     private final IEngWordService wordService;
     private final EngStudyRecordMapper recordMapper;
     private final EngArticleProgressMapper progressMapper;
     private final EngWrongWordMapper wrongWordMapper;
 
     /**
-     * 注入学习业务依赖；参数依次用于文章、句子、单词、记录、进度和错词访问。
+     * 注入学习业务依赖；参数依次用于文章、文章句子、词典例句、单词、记录、进度和错词访问。
      */
     public EngStudyServiceImpl(IEngArticleService articleService, IEngSentenceService sentenceService,
-            IEngWordService wordService, EngStudyRecordMapper recordMapper,
+            IEngIcibaSentenceService dictionarySentenceService, IEngWordService wordService,
+            EngStudyRecordMapper recordMapper,
             EngArticleProgressMapper progressMapper, EngWrongWordMapper wrongWordMapper) {
         this.articleService = articleService;
         this.sentenceService = sentenceService;
+        this.dictionarySentenceService = dictionarySentenceService;
         this.wordService = wordService;
         this.recordMapper = recordMapper;
         this.progressMapper = progressMapper;
@@ -252,6 +257,9 @@ public class EngStudyServiceImpl implements IEngStudyService {
             definitions.add(buildCnToWordDefinition(word, validWords));
             // 两类句子题共用首个合格句子的挖空内容，并固定按选词、逐字填词顺序追加。
             SentenceQuestionContent sentenceContent = findSentenceQuestionContent(word, sentences);
+            if (sentenceContent == null) {
+                sentenceContent = findDictionarySentenceQuestionContent(word);
+            }
             if (sentenceContent != null) {
                 definitions.add(buildSentenceChoiceDefinition(word, validWords, sentenceContent));
                 if (canBuildSentenceFill(word)) {
@@ -437,27 +445,51 @@ public class EngStudyServiceImpl implements IEngStudyService {
         if (sentences == null || sentences.isEmpty()) {
             return null;
         }
-        Pattern wordPattern = buildWholeWordPattern(word.getWordName());
         for (EngSentence sentence : sentences) {
-            if (sentence == null || StringUtils.isEmpty(sentence.getContent())
-                    || sentence.getContent().startsWith("[NT]")) {
+            if (sentence == null) {
                 continue;
             }
-            Matcher matcher = wordPattern.matcher(sentence.getContent());
-            if (!matcher.find()) {
-                continue;
+            SentenceQuestionContent content = buildSentenceQuestionContent(
+                    word, sentence.getContent(), sentence.getAcceptation());
+            if (content != null) {
+                return content;
             }
-            String matchedWord = matcher.group();
-            String choiceBlankSentence = matcher.replaceFirst(Matcher.quoteReplacement(buildSentenceBlank(matchedWord)));
-            String fillBlankSentence = null;
-            if (isSentenceFillWord(word.getWordName())) {
-                String partialBlank = "_".repeat(SENTENCE_FILL_ANSWER_LENGTH)
-                        + matchedWord.substring(SENTENCE_FILL_ANSWER_LENGTH);
-                fillBlankSentence = matcher.replaceFirst(Matcher.quoteReplacement(partialBlank));
-            }
-            return new SentenceQuestionContent(choiceBlankSentence, fillBlankSentence, sentence.getAcceptation());
         }
         return null;
+    }
+
+    /** 文章没有对应句子时，使用按词条顺序返回的第一条词典例句构建测试句子。 */
+    private SentenceQuestionContent findDictionarySentenceQuestionContent(EngWordVo word) {
+        EngIcibaSentence condition = new EngIcibaSentence();
+        condition.setWordId(word.getId());
+        List<EngIcibaSentence> sentences = dictionarySentenceService.selectEngIcibaSentenceList(condition);
+        if (sentences == null || sentences.isEmpty()) {
+            return null;
+        }
+        EngIcibaSentence sentence = sentences.get(0);
+        return sentence == null ? null
+                : buildSentenceQuestionContent(word, sentence.getOrig(), sentence.getTrans());
+    }
+
+    /** 根据英文句子和中文释义构建挖空内容；句子为空、禁用或不含完整目标单词时返回 null。 */
+    private SentenceQuestionContent buildSentenceQuestionContent(EngWordVo word, String content,
+            String acceptation) {
+        if (StringUtils.isEmpty(content) || content.startsWith("[NT]")) {
+            return null;
+        }
+        Matcher matcher = buildWholeWordPattern(word.getWordName()).matcher(content);
+        if (!matcher.find()) {
+            return null;
+        }
+        String matchedWord = matcher.group();
+        String choiceBlankSentence = matcher.replaceFirst(Matcher.quoteReplacement(buildSentenceBlank(matchedWord)));
+        String fillBlankSentence = null;
+        if (isSentenceFillWord(word.getWordName())) {
+            String partialBlank = "_".repeat(SENTENCE_FILL_ANSWER_LENGTH)
+                    + matchedWord.substring(SENTENCE_FILL_ANSWER_LENGTH);
+            fillBlankSentence = matcher.replaceFirst(Matcher.quoteReplacement(partialBlank));
+        }
+        return new SentenceQuestionContent(choiceBlankSentence, fillBlankSentence, acceptation);
     }
 
     /**

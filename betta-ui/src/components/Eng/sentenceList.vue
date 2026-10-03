@@ -105,6 +105,7 @@
       :title="title"
       :visible.sync="openSentence"
       width="500px"
+      custom-class="sentence-edit-dialog"
       append-to-body
     >
       <el-form
@@ -458,3 +459,9 @@ export default {
   },
 };
 </script>
+
+<style>
+.sentence-edit-dialog {
+  max-width: calc(100vw - 32px);
+}
+</style>

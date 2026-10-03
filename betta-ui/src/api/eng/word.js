@@ -75,6 +75,15 @@ export function addWordByArticle(articleId, wordName) {
   })
 }
 
+// 批量新增文章对应的单词，响应数据为本地词典未收录的单词。
+export function batchAddWordByArticle(articleId, words) {
+  return request({
+    url: '/eng/word/' + articleId + '/batch',
+    method: 'post',
+    data: { words }
+  })
+}
+
 // 从API获取单词
 export function getWordFromApi(wordName) {
   return request({

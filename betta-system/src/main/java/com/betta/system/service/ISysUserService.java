@@ -44,6 +44,14 @@ public interface ISysUserService
     public SysUser selectUserByUserName(String userName);
 
     /**
+     * 通过用户昵称精确查询未删除用户
+     *
+     * @param nickName 用户昵称
+     * @return 用户对象集合，用于识别重复昵称
+     */
+    public List<SysUser> selectUsersByNickName(String nickName);
+
+    /**
      * 通过用户ID查询用户
      * 
      * @param userId 用户ID

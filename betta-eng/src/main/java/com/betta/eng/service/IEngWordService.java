@@ -30,4 +30,6 @@ public interface IEngWordService {
     void updateByArticle(List<String> words, Long articleId);
     /** 为 articleId 新增 wordName 关系。 */
     void addArticleWord(Long articleId, String wordName);
+    /** 批量新增文章单词，并返回规范化、去重后的未收录输入。 */
+    List<String> addArticleWords(Long articleId, List<String> words);
 }

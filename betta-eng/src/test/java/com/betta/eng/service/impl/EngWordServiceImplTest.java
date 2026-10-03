@@ -13,8 +13,11 @@ import com.betta.eng.service.IEngUserScoreService;
 import com.betta.eng.utils.dict.DictUtils;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Function;
 
 /** 单词数据库查询和正式词头关系处理的独立回归入口。 */
 public class EngWordServiceImplTest
@@ -32,6 +35,9 @@ public class EngWordServiceImplTest
         shouldPenalizeDuplicateArticleRelation();
         shouldKeepExistingCanonicalRelationWhenInputUsesAlias();
         shouldDeduplicateCanonicalAndAliasDuringArticleSync();
+        shouldSaveKnownBatchWordsAndReturnMissingWords();
+        shouldReturnAllMissingBatchWordsWithoutWritingRelations();
+        shouldApplyDuplicateArticlePenaltyOncePerCanonicalWord();
     }
 
     /** 查词应聚合数据库现有数据，不新增或刷新词条和例句。 */
@@ -52,7 +58,7 @@ public class EngWordServiceImplTest
     /** 未收录词应直接报错，且查询过程不得写数据库。 */
     private static void shouldRejectMissingWordWithoutWriting()
     {
-        Harness harness = new Harness(null);
+        Harness harness = new Harness((EngWord) null);
 
         assertMissing(() -> harness.service.getWordVo("missing"), "missing");
         assertNoDictionaryWrites(harness);
@@ -158,6 +164,53 @@ public class EngWordServiceImplTest
         assertEquals(0, harness.scoreUpdateCalls.get(), "批量同步不得触发扣分");
     }
 
+    /** 批量新增应保存已收录词，并按规范化输入返回去重后的未收录词。 */
+    private static void shouldSaveKnownBatchWordsAndReturnMissingWords()
+    {
+        EngWord apple = word("apple", "noun 苹果", 15L);
+        Harness harness = new Harness(Map.of("apple", apple));
+
+        List<String> inputs = new ArrayList<>(List.of(" Apple ", "MISSING", "missing", " "));
+        inputs.add(null);
+        List<String> missingWords = harness.service.addArticleWords(5L, inputs);
+
+        assertEquals(List.of("missing"), missingWords, "应返回规范化、去重后的未收录输入");
+        assertEquals(1, harness.relations.size(), "已收录词应正常加入文章");
+        assertEquals("apple", harness.relations.get(0).getWordName(), "文章关系应保存正式词头");
+        assertEquals(1, harness.relationInsertCalls.get(), "部分未收录不应影响有效词写入");
+    }
+
+    /** 全部输入均未收录时，应返回完整去重结果且不写入任何文章关系。 */
+    private static void shouldReturnAllMissingBatchWordsWithoutWritingRelations()
+    {
+        Harness harness = new Harness(Map.of());
+
+        List<String> missingWords = harness.service.addArticleWords(5L,
+                List.of(" MISSING ", "missing", "UNKNOWN", "unknown"));
+
+        assertEquals(List.of("missing", "unknown"), missingWords, "应返回全部规范化、去重后的未收录输入");
+        assertEquals(0, harness.relations.size(), "全部未收录时不得建立文章关系");
+        assertEquals(0, harness.relationInsertCalls.get(), "全部未收录时不得调用新增关系");
+    }
+
+    /** 正式词与别名混合重复输入时，每个正式词头最多触发一次原有扣分规则。 */
+    private static void shouldApplyDuplicateArticlePenaltyOncePerCanonicalWord()
+    {
+        EngWord color = word("color", "noun 颜色", 16L);
+        Map<String, EngWord> dictionary = new LinkedHashMap<>();
+        dictionary.put("color", color);
+        dictionary.put("colour", color);
+        Harness harness = new Harness(dictionary);
+        harness.relations.add(relation(36L, 5L, "color"));
+
+        List<String> missingWords = harness.service.addArticleWords(5L,
+                List.of("color", "COLOUR", "colour"));
+
+        assertEquals(List.of(), missingWords, "已收录正式词和别名不应报告未收录");
+        assertEquals(1, harness.relations.size(), "正式词和别名不得重复建立关系");
+        assertEquals(1, harness.scoreUpdateCalls.get(), "同一正式词头在批次内只能扣一次熟悉度");
+    }
+
     private static void assertMissing(Runnable action, String wordName)
     {
         try
@@ -217,7 +270,7 @@ public class EngWordServiceImplTest
     /** 为单词、例句和文章关系提供内存桩。 */
     private static final class Harness
     {
-        private final EngWord storedWord;
+        private final Function<String, EngWord> wordLookup;
         private final List<EngIcibaSentence> sentences = new ArrayList<>();
         private final List<EngArticleWordRel> relations = new ArrayList<>();
         private final AtomicInteger wordInsertCalls = new AtomicInteger();
@@ -230,7 +283,17 @@ public class EngWordServiceImplTest
 
         private Harness(EngWord storedWord)
         {
-            this.storedWord = storedWord;
+            this(ignored -> storedWord);
+        }
+
+        private Harness(Map<String, EngWord> storedWords)
+        {
+            this(storedWords::get);
+        }
+
+        private Harness(Function<String, EngWord> wordLookup)
+        {
+            this.wordLookup = wordLookup;
             EngWordMapper wordMapper = wordMapper();
             service = new EngWordServiceImpl(wordMapper, articleWordRelService(), userScoreService(),
                     sentenceService(), dictionarySentenceService(), new DictUtils(wordMapper));
@@ -241,7 +304,10 @@ public class EngWordServiceImplTest
             return (EngWordMapper) Proxy.newProxyInstance(EngWordMapper.class.getClassLoader(),
                     new Class<?>[] { EngWordMapper.class }, (proxy, method, args) -> switch (method.getName())
                     {
-                        case "selectEngWordByWordName" -> storedWord == null ? List.of() : List.of(storedWord);
+                        case "selectEngWordByWordName" -> {
+                            EngWord storedWord = wordLookup.apply((String) args[0]);
+                            yield storedWord == null ? List.of() : List.of(storedWord);
+                        }
                         case "insertEngWord" -> wordInsertCalls.incrementAndGet();
                         case "updateEngWord" -> wordUpdateCalls.incrementAndGet();
                         default -> defaultValue(method.getReturnType());

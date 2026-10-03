@@ -3,6 +3,7 @@ package com.betta.eng.service.impl;
 import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -197,7 +198,60 @@ public class EngWordServiceImpl implements IEngWordService
     {
         String normalized = normalize(wordName);
         EngWord resolvedWord = getOrCreate(normalized);
-        String canonicalWordName = resolvedWord.getWordName();
+        addResolvedArticleWord(articleId, normalize(resolvedWord.getWordName()));
+    }
+
+    @Override
+    @Transactional
+    public List<String> addArticleWords(Long articleId, List<String> words)
+    {
+        if (articleId == null || words == null)
+        {
+            throw new ServiceException("文章和单词列表不能为空");
+        }
+        Set<String> normalizedInputs = new LinkedHashSet<>();
+        for (String word : words)
+        {
+            if (StringUtils.isNotEmpty(word) && StringUtils.isNotEmpty(word.trim()))
+            {
+                normalizedInputs.add(normalize(word));
+            }
+        }
+        if (normalizedInputs.isEmpty())
+        {
+            throw new ServiceException("单词列表不能为空");
+        }
+
+        List<String> missingWords = new ArrayList<>();
+        Set<String> canonicalWordNames = new LinkedHashSet<>();
+        for (String normalizedInput : normalizedInputs)
+        {
+            try
+            {
+                EngWord resolvedWord = getOrCreate(normalizedInput);
+                String canonicalWordName = normalize(resolvedWord.getWordName());
+                canonicalWordNames.add(canonicalWordName);
+            }
+            catch (ServiceException exception)
+            {
+                // 未收录属于可跳过的业务结果；其他业务异常仍由事务统一回滚。
+                if (!isMissingDictionaryWord(exception, normalizedInput))
+                {
+                    throw exception;
+                }
+                missingWords.add(normalizedInput);
+            }
+        }
+        for (String canonicalWordName : canonicalWordNames)
+        {
+            addResolvedArticleWord(articleId, canonicalWordName);
+        }
+        return missingWords;
+    }
+
+    /** 按已解析的正式词头新增关系，确保批次内每个词头只执行一次原有规则。 */
+    private void addResolvedArticleWord(Long articleId, String canonicalWordName)
+    {
         EngArticleWordRel condition = new EngArticleWordRel();
         condition.setArticleId(articleId);
         condition.setWordName(canonicalWordName);
@@ -217,6 +271,12 @@ public class EngWordServiceImpl implements IEngWordService
             }
             scoreService.updateEngUserScore(canonicalWordName, -1);
         }
+    }
+
+    /** 判断本地词典查询异常是否仅表示 normalizedInput 未收录。 */
+    private boolean isMissingDictionaryWord(ServiceException exception, String normalizedInput)
+    {
+        return ("词典未查询到单词：" + normalizedInput).equals(exception.getMessage());
     }
 
     /** 将 value 规范化为小写非空单词。 */

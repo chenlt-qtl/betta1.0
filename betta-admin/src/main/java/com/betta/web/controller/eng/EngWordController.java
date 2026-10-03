@@ -94,6 +94,13 @@ public class EngWordController extends BaseController
         return success();
     }
 
+    /** 批量为 articleId 增加本地词典已收录单词，并返回未收录输入。 */
+    @PostMapping("/{articleId}/batch")
+    public AjaxResult addArticleWords(@PathVariable Long articleId, @RequestBody Map<String, List<String>> body)
+    {
+        return success(service.addArticleWords(articleId, body == null ? null : body.get("words")));
+    }
+
     /** 为 articleId 新增 wordName。 */
     @PostMapping("/{articleId}/{wordName}")
     public AjaxResult addArticleWord(@PathVariable Long articleId, @PathVariable String wordName)

@@ -44,18 +44,31 @@
       </el-table-column>
     </el-table>
     <!-- 添加对话框 -->
-    <el-dialog title="添加" :visible.sync="openAdd" width="500px" append-to-body>
+    <el-dialog
+      title="添加"
+      :visible.sync="openAdd"
+      width="500px"
+      custom-class="word-add-dialog"
+      append-to-body
+    >
       <el-form ref="form" :model="form" :rules="rules" label-width="80px" @submit.native.prevent>
         <el-form-item label="单词内容" prop="wordName">
-          <div style="display: flex; gap: 5px">
+          <el-input
+            v-if="batchAdd"
+            v-model="form.wordName"
+            type="textarea"
+            :rows="6"
+            placeholder="请输入单词，支持换行、空格、逗号或分号分隔"
+          />
+          <div v-else style="display: flex; gap: 5px">
             <el-input v-model="form.wordName" placeholder="请输入单词内容" @keyup.enter.native="searchWord"
               @input="(e) => (word = {})" /><el-button @click="searchWord">查詢</el-button>
           </div>
         </el-form-item>
-        <el-form-item label="原型" prop="prototype">
+        <el-form-item v-if="!batchAdd" label="原型" prop="prototype">
           <el-input v-model="form.prototype" placeholder="请输原型" />
         </el-form-item>
-        <el-form-item v-if="word.phonetics">
+        <el-form-item v-if="!batchAdd && word.phonetics">
           /{{ word.phonetics }}/
           <el-button type="text" @click="() => play(word.phMp3)">
             <svg-icon icon-class="sound" />
@@ -66,7 +79,13 @@
         </el-form-item>
       </el-form>
       <div slot="footer" class="dialog-footer">
-        <el-button v-if="acceptations && acceptations.length > 0" type="primary" @click="addWordSubmit">添加</el-button>
+        <el-button
+          v-if="batchAdd || (acceptations && acceptations.length > 0)"
+          type="primary"
+          :loading="addSubmitting"
+          :disabled="addSubmitting"
+          @click="addWordSubmit"
+        >添加</el-button>
         <el-button @click="() => (openAdd = false)">取 消</el-button>
       </div>
     </el-dialog>
@@ -117,6 +136,7 @@
 <script>
 import {
   addWordByArticle,
+  batchAddWordByArticle,
   getWord,
   updateWord,
   addWord
@@ -133,6 +153,8 @@ export default {
     // 单词管理等无需新增入口的页面可隐藏添加按钮。
     "hideAdd",
     "hideScore",
+    // 文章详情使用批量添加，其他页面保持原有单条交互。
+    "batchAdd",
   ],
   data() {
     return {
@@ -143,6 +165,7 @@ export default {
       relIds: [],
       form: {},
       word: {},
+      addSubmitting: false,
       // 保存当前编辑行，提交成功后立即同步表格展示内容。
       editingRow: null,
       // 表单校验
@@ -184,6 +207,7 @@ export default {
     //打开添加弹出框
     handleAddWord(manual) {
       this.editingRow = null;
+      this.addSubmitting = false;
       if (manual) {
         this.openEdit = true;
         this.isEdit = false;
@@ -206,6 +230,10 @@ export default {
     addWordSubmit() {
       this.$refs["form"].validate((valid) => {
         if (valid) {
+          if (this.batchAdd) {
+            this.batchAddWordSubmit();
+            return;
+          }
           addWordByArticle(this.articleId, this.form.wordName).then(() => {
             this.$modal.msgSuccess("添加成功");
             this.openAdd = false;
@@ -213,6 +241,46 @@ export default {
           });
         }
       });
+    },
+    /** 解析批量输入，并按首次出现顺序去除大小写重复项。 */
+    parseBatchWords(value) {
+      const words = String(value || "")
+        .split(/[\s,，;；]+/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+      const seen = new Set();
+      return words.filter((item) => {
+        const key = item.toLowerCase();
+        if (seen.has(key)) {
+          return false;
+        }
+        seen.add(key);
+        return true;
+      });
+    },
+    batchAddWordSubmit() {
+      const words = this.parseBatchWords(this.form.wordName);
+      if (words.length === 0) {
+        this.$modal.msgWarning("请输入至少一个单词");
+        return;
+      }
+      this.addSubmitting = true;
+      batchAddWordByArticle(this.articleId, words)
+        .then(({ data }) => {
+          const missingWords = Array.isArray(data) ? data : [];
+          this.openAdd = false;
+          this.getWordList();
+          if (missingWords.length > 0) {
+            this.$modal.msgWarning(
+              `以下单词未被本地词典收录：${missingWords.join("、")}`
+            );
+          } else {
+            this.$modal.msgSuccess("添加成功");
+          }
+        })
+        .finally(() => {
+          this.addSubmitting = false;
+        });
     },
     /** 修改按钮操作 */
     handleUpdate(row) {
@@ -249,3 +317,9 @@ export default {
 </script>
 
 <style scoped lang="scss"></style>
+
+<style>
+.word-add-dialog {
+  max-width: calc(100vw - 32px);
+}
+</style>
