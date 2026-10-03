@@ -600,17 +600,17 @@ public class EngStudyServiceImpl implements IEngStudyService {
         result.setCorrectCount(correctCount);
         result.setTotalCount(definitions.size());
         result.setPassed(score >= PASS_SCORE);
-        result.setCoinReward(calculateCoinReward(correctCount, score));
+        result.setCoinReward(calculateCoinReward(correctCount, definitions.size(), score));
         result.setResults(items);
         return result;
     }
 
     /**
-     * 计算本轮金币：答对题数为基础金币，成绩额外奖励仅取最高适用档位且不叠加。
+     * 计算本轮金币：答对题数为基础金币，仅全部答对时获得十五枚金币，其他成绩奖励取最高档且不叠加。
      */
-    private long calculateCoinReward(int correctCount, int score) {
+    private long calculateCoinReward(int correctCount, int totalCount, int score) {
         int bonus;
-        if (score == 100) {
+        if (totalCount > 0 && correctCount == totalCount) {
             bonus = 15;
         } else if (score >= 90) {
             bonus = 5;
