@@ -13,4 +13,6 @@ public interface IEngArticleWordRelService {
     int deleteEngArticleWordRelByIds(Long[] ids);
     /** 删除 articleId 的全部关系并返回影响行数。 */
     int deleteByArticle(Long articleId);
+    /** 按给定规范词顺序补充文章关系并永久分关。 */
+    int insertMissingByWordIds(Long articleId, List<Long> wordIds);
 }

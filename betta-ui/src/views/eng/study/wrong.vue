@@ -51,8 +51,8 @@
             >
               标记已掌握
             </el-button>
-            <el-button type="text" :disabled="!scope.row.articleId" @click="continueStudy(scope.row.articleId)">
-              继续学习
+            <el-button type="text" :disabled="!scope.row.wordId" @click="reviewWord(scope.row.wordId)">
+              复习这个词
             </el-button>
           </template>
         </el-table-column>
@@ -118,9 +118,12 @@ export default {
         this.masteringId = null
       })
     },
-    continueStudy(articleId) {
-      if (!articleId) return
-      this.$router.push('/eng/study/challenge/' + articleId)
+    reviewWord(wordId) {
+      if (!wordId) return
+      this.$router.push({
+        path: '/eng/study/review',
+        query: { wordIds: String(wordId) }
+      })
     },
     backToStudy() {
       this.$router.push('/eng/study/index')

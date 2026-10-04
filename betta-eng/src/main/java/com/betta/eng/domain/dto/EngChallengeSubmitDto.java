@@ -8,8 +8,11 @@ import lombok.Data;
  */
 @Data
 public class EngChallengeSubmitDto {
+    private String attemptId;
+    private String mode;
     /** 文章主键。 */
     private Long articleId;
+    private Integer levelNo;
     /** 本次提交的题目答案。 */
     private List<EngChallengeAnswerDto> answers;
 }

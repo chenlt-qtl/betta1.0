@@ -15,6 +15,12 @@ public class EngStudyRecord extends BaseEntity {
     private Long userId;
     /** 文章主键。 */
     private Long articleId;
+    /** 客户端一次测试的幂等标识。 */
+    private String attemptId;
+    /** 学习模式：NEW 或 REVIEW。 */
+    private String studyMode;
+    /** 新词关卡号，复习时为空。 */
+    private Integer levelNo;
     /** 本次得分。 */
     private Integer score;
     /** 正确题数。 */
@@ -23,6 +29,12 @@ public class EngStudyRecord extends BaseEntity {
     private Integer totalCount;
     /** 是否通关，零未通关、一已通关。 */
     private Integer passed;
+    /** 本轮星级。 */
+    private Integer stars;
+    /** 本轮新词里程碑金币。 */
+    private Long milestoneCoin;
+    /** 本轮复习金币。 */
+    private Long reviewCoin;
     /** 本轮获得金币，包含答对题数对应的基础金币和成绩档位奖励。 */
     private Long coinReward;
     /** 文章标题，仅用于联表查询展示。 */

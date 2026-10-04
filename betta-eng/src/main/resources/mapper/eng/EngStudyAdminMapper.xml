@@ -14,6 +14,9 @@
         <id property="id" column="id"/>
         <result property="userId" column="user_id"/>
         <result property="articleId" column="article_id"/>
+        <result property="attemptId" column="attempt_id"/><result property="studyMode" column="study_mode"/>
+        <result property="levelNo" column="level_no"/><result property="stars" column="stars"/>
+        <result property="milestoneCoin" column="milestone_coin"/><result property="reviewCoin" column="review_coin"/>
         <result property="articleTitle" column="article_title"/>
         <result property="score" column="score"/>
         <result property="correctCount" column="correct_count"/>
@@ -48,11 +51,17 @@
         select r.id,
                r.user_id,
                r.article_id,
+               r.attempt_id,
+               r.study_mode,
+               r.level_no,
                a.title article_title,
                r.score,
                r.correct_count,
                r.total_count,
                r.passed,
+               r.stars,
+               r.milestone_coin,
+               r.review_coin,
                r.coin_reward,
                r.create_by,
                r.create_time

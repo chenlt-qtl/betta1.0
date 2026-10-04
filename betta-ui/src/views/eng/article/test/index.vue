@@ -3,27 +3,20 @@
     <section :class="['test-container', { 'test-container--questions': step === 2 }]">
       <div v-if="challenge.title" class="test-title">
         <span>{{ challenge.title }}</span>
-        <span v-if="progress.bestTotalCount" class="best-score">
-          历史最佳 {{ progress.bestCorrectCount || 0 }}/{{ progress.bestTotalCount }} 题
-        </span>
+        <span class="challenge-mode">{{ isReview ? '单词复习' : `第 ${challenge.levelNo || levelNo} 关` }}</span>
       </div>
 
-      <el-empty
-        v-if="!loading && questionList.length === 0"
-        :description="emptyDescription"
-      >
-        <el-button type="primary" @click="backToStudy">选择其他文章</el-button>
+      <el-empty v-if="!loading && questionList.length === 0" :description="emptyDescription">
+        <el-button type="primary" @click="backToLearning">返回学习</el-button>
       </el-empty>
-
-      <step1
-        v-else-if="step === 1"
-        :word-list="wordList"
-        @next="toStep2"
-      />
+      <step1 v-else-if="step === 1" :word-list="wordList" @back="backToLearning" @next="toStep2" />
       <step2
         v-else-if="step === 2"
         :key="roundKey"
+        :attempt-id="challenge.attemptId"
+        :mode="mode"
         :article-id="articleId"
+        :level-no="levelNo"
         :question-list="questionList"
         @complete="submitAnswers"
       />
@@ -31,15 +24,18 @@
         v-else-if="step === 3"
         :result="result"
         @restart="restart"
-        @study="backToStudy"
+        @next="goNextLevel"
+        @study="backToLearning"
         @wrong="openWrongWords"
+        @review="openReview"
       />
     </section>
+
   </div>
 </template>
 
 <script>
-import { getArticleChallenge, submitArticleChallenge } from '@/api/eng/study'
+import { getStudyChallenge, submitArticleChallenge } from '@/api/eng/study'
 import Step1 from './step1.vue'
 import Step2 from './step2.vue'
 import Step3 from './step3.vue'
@@ -52,7 +48,6 @@ export default {
       loading: true,
       submitting: false,
       challenge: {},
-      progress: {},
       wordList: [],
       questionList: [],
       result: null,
@@ -61,83 +56,90 @@ export default {
     }
   },
   computed: {
+    mode() { return String(this.$route.query.mode || '').toUpperCase() },
+    isReview() { return this.mode === 'REVIEW' },
     articleId() {
+      if (this.isReview) return null
       return this.$route.params && this.$route.params.articleId
     },
+    levelNo() {
+      if (this.isReview) return null
+      const value = Number(this.$route.query.levelNo)
+      return Number.isInteger(value) && value > 0 ? value : null
+    },
+    wordIds() { return this.isReview ? String(this.$route.query.wordIds || '') : '' },
     emptyDescription() {
-      return this.challenge.dailyCompleted
-        ? '该文章今日学习任务已完成，明天再来'
-        : '该文章暂时没有可用题目'
+      return this.isReview ? '当前没有可复习的单词' : '本关没有需要学习的新词，请返回地图继续'
     }
   },
   created() {
+    if (!['NEW', 'REVIEW'].includes(this.mode)) {
+      const articleId = this.$route.params && this.$route.params.articleId
+      this.$router.replace(articleId ? '/eng/study/levels/' + articleId : '/eng/study/index')
+      return
+    }
     this.loadTest()
   },
   methods: {
-    /** 加载服务端本轮选中的单词及对应题目。 */
+    challengeQuery() {
+      const query = { mode: this.mode }
+      if (this.isReview) {
+        if (this.wordIds) query.wordIds = this.wordIds
+      } else {
+        query.articleId = this.articleId
+        query.levelNo = this.levelNo
+      }
+      return query
+    },
     loadTest() {
-      if (!this.articleId) {
-        this.$modal.msgError('请指定文章ID')
+      if (!this.isReview && (!this.articleId || !this.levelNo)) {
+        this.$modal.msgError('请指定文章和关卡')
         this.loading = false
         return
       }
       this.loading = true
-      getArticleChallenge(this.articleId).then(response => {
+      this.step = 0
+      getStudyChallenge(this.challengeQuery()).then(response => {
         this.challenge = response.data || {}
-        this.wordList = Array.isArray(this.challenge.words)
-          ? this.challenge.words.filter(word => word.wordName)
-          : []
-        this.progress = this.challenge.progress || {}
-        this.questionList = Array.isArray(this.challenge.questions)
-          ? this.challenge.questions
-          : []
-        this.step = this.questionList.length ? 1 : 0
-      }).finally(() => {
-        this.loading = false
-      })
+        this.wordList = Array.isArray(this.challenge.words) ? this.challenge.words.filter(word => word.wordName) : []
+        this.questionList = Array.isArray(this.challenge.questions) ? this.challenge.questions : []
+        this.result = null
+        this.roundKey++
+        if (!this.questionList.length) return
+        this.step = !this.isReview && this.wordList.length ? 1 : 2
+      }).finally(() => { this.loading = false })
     },
-    toStep2() {
-      this.step = 2
-    },
-    /** 统一交由服务端判分并维护学习记录、文章进度和错词。 */
+    toStep2() { this.step = 2 },
     submitAnswers(answers) {
       if (this.submitting) return
       this.submitting = true
       submitArticleChallenge({
-        // 路由参数保持字符串传递，避免雪花 ID 转 Number 后精度丢失。
+        attemptId: this.challenge.attemptId,
+        mode: this.mode,
         articleId: this.articleId,
+        levelNo: this.levelNo,
         answers
       }).then(response => {
         this.result = response.data || {}
         this.step = 3
-      }).finally(() => {
-        this.submitting = false
-      })
+      }).finally(() => { this.submitting = false })
     },
-    restart() {
-      this.loading = true
-      getArticleChallenge(this.articleId).then(response => {
-        this.challenge = response.data || {}
-        this.wordList = Array.isArray(this.challenge.words)
-          ? this.challenge.words.filter(word => word.wordName)
-          : []
-        this.progress = this.challenge.progress || {}
-        this.questionList = Array.isArray(this.challenge.questions)
-          ? this.challenge.questions
-          : []
-        this.result = null
-        this.roundKey++
-        this.step = this.questionList.length ? 2 : 0
-      }).finally(() => {
-        this.loading = false
-      })
+    restart() { this.loadTest() },
+    goNextLevel() {
+      if (this.isReview || !this.result || this.result.nextLevelUnlocked !== true || this.result.nextLevelNo == null) {
+        this.backToLearning()
+        return
+      }
+      this.$router.replace({
+        path: '/eng/study/challenge/' + this.articleId,
+        query: { mode: 'NEW', levelNo: String(this.result.nextLevelNo) }
+      }).then(() => this.loadTest())
     },
-    backToStudy() {
-      this.$router.push('/eng/study/index')
+    backToLearning() {
+      this.$router.push(this.isReview ? '/eng/study/review' : '/eng/study/levels/' + this.articleId)
     },
-    openWrongWords() {
-      this.$router.push('/eng/study/wrong')
-    }
+    openReview() { this.$router.push('/eng/study/review') },
+    openWrongWords() { this.$router.push('/eng/study/wrong') }
   }
 }
 </script>
@@ -147,95 +149,19 @@ export default {
   min-height: calc(100vh - 84px);
   padding: 24px;
   color: #333;
-  background: linear-gradient(135deg, #e8f3ff 0%, #f4ecff 55%, #fff6e5 100%);
+  background: linear-gradient(135deg, #e4f6dc 0%, #eef8e8 50%, #fff7df 100%);
 
-  .test-container {
-    position: relative;
-    width: 460px;
-    height: calc(100vh - 164px);
-    min-height: 560px;
-    margin: 16px auto;
-    padding: 20px;
-    overflow: hidden;
-    border: 1px solid rgba(255, 255, 255, 0.3);
-    border-right-color: rgba(255, 255, 255, 0.2);
-    border-bottom-color: rgba(255, 255, 255, 0.2);
-    border-radius: 10px;
-    background: rgba(255, 255, 255, 0.18);
-    box-shadow: 0 25px 45px rgba(0, 0, 0, 0.1);
-    backdrop-filter: blur(18px);
-  }
-
-  .test-container--questions {
-    display: flex;
-    flex-direction: column;
-    height: auto;
-    min-height: max(560px, calc(100vh - 164px));
-    overflow: visible;
-  }
-
-  .test-title {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    min-height: 28px;
-    margin-bottom: 12px;
-    font-weight: 600;
-  }
-
-  .best-score {
-    color: #909399;
-    font-size: 12px;
-    font-weight: normal;
-  }
-
-  .box-block {
-    width: 100%;
-    margin-top: 14px;
-    padding: 13px 18px;
-    border: 1px solid rgba(255, 255, 255, 0.3);
-    border-right-color: rgba(255, 255, 255, 0.2);
-    border-bottom-color: rgba(255, 255, 255, 0.2);
-    border-radius: 28px;
-    background: rgba(255, 255, 255, 0.3);
-    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
-    font-size: 14px;
-  }
-
-  .block-button {
-    min-width: 96px;
-    padding: 12px 18px;
-    border: 1px solid rgba(255, 255, 255, 0.3);
-    border-radius: 28px;
-    color: #333;
-    background: #fff;
-    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
-    font-weight: 600;
-    cursor: pointer;
-  }
-
-  .block-button:disabled {
-    color: #c0c4cc;
-    cursor: not-allowed;
-  }
-
-  .toolbar {
-    display: flex;
-    justify-content: center;
-    gap: 12px;
-    padding: 10px 0;
-  }
+  .test-container { position: relative; width: 460px; height: calc(100vh - 164px); min-height: 560px; margin: 16px auto; padding: 20px; overflow: hidden; border: 1px solid rgba(255, 255, 255, .7); border-radius: 12px; background: rgba(255, 255, 255, .55); box-shadow: 0 25px 45px rgba(53, 112, 52, .12); backdrop-filter: blur(18px); }
+  .test-container--questions { display: flex; flex-direction: column; height: auto; min-height: max(560px, calc(100vh - 164px)); overflow: visible; }
+  .test-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 28px; margin-bottom: 12px; font-weight: 600; }
+  .challenge-mode { color: #67a85d; font-size: 12px; font-weight: normal; }
+  .box-block { width: 100%; margin-top: 14px; padding: 13px 18px; border: 1px solid rgba(255, 255, 255, .7); border-radius: 28px; background: rgba(255, 255, 255, .7); box-shadow: 0 5px 15px rgba(0, 0, 0, .05); font-size: 14px; }
+  .block-button { min-width: 96px; padding: 12px 18px; border: 1px solid rgba(255, 255, 255, .7); border-radius: 28px; color: #333; background: #fff; box-shadow: 0 5px 15px rgba(0, 0, 0, .05); font-weight: 600; cursor: pointer; }
+  .block-button:disabled { color: #c0c4cc; cursor: not-allowed; }
+  .toolbar { display: flex; justify-content: center; gap: 12px; padding: 10px 0; }
 }
-
 @media (max-width: 600px) {
-  .test-article {
-    padding: 12px;
-
-    .test-container {
-      width: 100%;
-      min-height: calc(100vh - 132px);
-      margin: 0;
-    }
-  }
+  .test-article { min-height: calc(100vh - 50px); padding: 12px; overflow-x: hidden; }
+  .test-article .test-container { width: 100%; min-height: calc(100vh - 96px); margin: 0; padding: 16px; }
 }
 </style>

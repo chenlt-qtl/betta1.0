@@ -2,1218 +2,538 @@ package com.betta.eng.service.impl;
 
 import com.betta.common.core.domain.entity.SysUser;
 import com.betta.common.core.domain.model.LoginUser;
-import com.betta.common.exception.ServiceException;
-import com.betta.eng.domain.EngArticle;
-import com.betta.eng.domain.EngIcibaSentence;
-import com.betta.eng.domain.EngSentence;
-import com.betta.eng.domain.EngStudyRecord;
-import com.betta.eng.domain.EngWrongWord;
-import com.betta.eng.domain.dto.EngChallengeAnswerDto;
-import com.betta.eng.domain.dto.EngChallengeCheckDto;
-import com.betta.eng.domain.dto.EngChallengeSubmitDto;
-import com.betta.eng.domain.vo.EngChallengeVo;
-import com.betta.eng.domain.vo.EngChallengeQuestionVo;
-import com.betta.eng.domain.vo.EngChallengeResultVo;
-import com.betta.eng.domain.vo.EngWordVo;
-import com.betta.eng.mapper.EngArticleProgressMapper;
-import com.betta.eng.mapper.EngCoinWalletMapper;
-import com.betta.eng.mapper.EngDailyTestWordMapper;
-import com.betta.eng.mapper.EngStudyRecordMapper;
-import com.betta.eng.mapper.EngWrongWordMapper;
-import com.betta.eng.service.IEngArticleService;
-import com.betta.eng.service.IEngIcibaSentenceService;
-import com.betta.eng.service.IEngSentenceService;
-import com.betta.eng.service.IEngWordService;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
+import com.betta.eng.domain.*;
+import com.betta.eng.domain.dto.*;
+import com.betta.eng.domain.vo.*;
+import com.betta.eng.mapper.*;
+import com.betta.eng.service.*;
 import java.lang.reflect.Proxy;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.atomic.AtomicLong;
-import java.time.LocalDate;
-import com.betta.eng.domain.EngDailyTestWord;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.transaction.annotation.Transactional;
 
-/**
- * 英语闯关业务的无第三方依赖回归测试，通过 JDK 动态代理和反射验证题目构建、即时判题、最终判分及答案校验。
- */
-public class EngStudyServiceImplTest {
-    /** 固定用于测试的文章主键。 */
-    private static final Long ARTICLE_ID = 10L;
+/** 新词关卡、全局复习、金币与幂等规则的无数据库回归入口。 */
+public class EngStudyServiceImplTest
+{
+    private static final long USER_ID = 7L;
+    private static final long ARTICLE_ID = 10L;
 
-    /**
-     * 依次执行全部回归场景；args 为命令行参数且本测试不使用，无异常返回表示全部通过。
-     *
-     * @param args 命令行参数
-     * @throws Exception 反射调用或断言失败时抛出异常
-     */
-    public static void main(String[] args) throws Exception {
-        EngStudyServiceImplTest test = new EngStudyServiceImplTest();
-        test.shouldBuildSentenceChoiceAndExistingQuestionTypesWithoutLeakingAnswer();
-        test.shouldFallbackToFirstDictionarySentence();
-        test.shouldBuildSentenceFillOnlyAtRequiredFamiliarity();
-        test.shouldUseConciseMeaningAndFallbackToAcceptation();
-        test.shouldExposeAtMostFiveChallengeWords();
-        test.shouldShuffleChallengeQuestionsWithoutChangingQuestionContent();
-        test.shouldCheckSingleAnswerWithoutWritingStudyData();
-        test.shouldRejectInvalidSingleAnswerRequest();
-        test.shouldScoreAllFourQuestionTypesIgnoringCaseAndOuterWhitespace();
-        test.shouldRejectMissingDuplicateAndUnknownAnswers();
-        test.shouldUpdateWrongWordOnceWhenAnyQuestionIsWrong();
-        test.shouldMarkExistingWrongWordWhenAllQuestionsAreCorrect();
-        test.shouldSubmitFiveWordsAndUpdateFamiliarityOncePerWord();
-        test.shouldRejectIncompleteAndCrossArticleWordSets();
-        test.shouldApplyCoinRewardBoundariesWithoutStackingBonuses();
-        test.shouldCreditCoinsForEveryLegalSubmission();
-        test.shouldKeepWalletUnchangedForZeroReward();
-        test.shouldNotCreditCoinsForImmediateCheckOrInvalidSubmission();
-        test.shouldRejectPartialDuplicateBeforeAnyLaterSideEffect();
-        test.shouldReportDailyCompletedAfterFinalSubmission();
+    public static void main(String[] args) throws Exception
+    {
+        setTestLoginUser();
+        try
+        {
+            shouldExcludeWordsLearnedElsewhereButAllowFailedLevelRetry();
+            shouldAutoMasterLevelWhenEveryWordWasLearnedElsewhere();
+            shouldUseMatchedTextAndRewardMilestonesOnlyOnce();
+            shouldRewardEveryPerfectReviewWithoutMilestoneDuplication();
+            shouldStackReviewAndNewMilestoneCoin();
+            shouldUseCurrentReadAfterConcurrentAttemptConflict();
+            shouldRecordWrongNewWordWithoutExample();
+            shouldKeepRecordWordOwnershipInMapperSql();
+            shouldKeepAttemptCurrentReadInMapperSql();
+            shouldLockArticleBeforeFirstLevelProgressWrite();
+            shouldReturnOnlyNextEffectiveLevel();
+            shouldKeepNextLevelEmptyAtTerminalLevel();
+            shouldKeepHistoricalMigrationConsistent();
+            shouldExposeTransactionalMutationBoundary();
+        }
+        finally
+        {
+            SecurityContextHolder.clearContext();
+        }
     }
 
-    /** 部分占位成功后若发生重复键，必须在学习记录及其他后续副作用前失败。 */
-    private void shouldRejectPartialDuplicateBeforeAnyLaterSideEffect() throws Exception {
-        List<EngDailyTestWord> inserted = new ArrayList<>();
-        Map<String, Integer> sideEffects = new HashMap<>();
-        EngWordVo apple = word(1L, "apple", "苹果", null);
-        EngWordVo cat = word(2L, "cat", "猫", null);
-        apple.setReviewCategory("NEW");
-        cat.setReviewCategory("NEW");
-        IEngWordService wordService = (IEngWordService) Proxy.newProxyInstance(IEngWordService.class.getClassLoader(),
-                new Class<?>[] {IEngWordService.class}, (proxy, method, args) -> {
-                    if ("selectNextReviewWords".equals(method.getName())) {
-                        return List.of(apple, cat);
-                    }
-                    if ("updateFamiliarity".equals(method.getName())) {
-                        sideEffects.merge("familiarity", 1, Integer::sum);
-                    }
-                    return defaultValue(method.getReturnType());
-                });
-        EngDailyTestWordMapper dailyMapper = new EngDailyTestWordMapper() {
-            @Override public List<Long> selectCompletedWordIds(Long userId, LocalDate date) { return List.of(); }
-            @Override public int countNewWords(Long userId, Long articleId, LocalDate date) { return 0; }
-            @Override public int insertDailyTestWord(EngDailyTestWord item) {
-                if (!inserted.isEmpty()) {
-                    throw new DuplicateKeyException("duplicate after first placeholder");
+    /** 跨文章已学词不再作为新词，同一首次关卡低分后仍可重试。 */
+    private static void shouldExcludeWordsLearnedElsewhereButAllowFailedLevelRetry()
+    {
+        Harness harness = new Harness();
+        harness.progress.put(2L, progress(2L, 99L, 1, 1));
+        EngChallengeVo first = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null);
+        assertEquals(List.of(1L), first.getWords().stream().map(EngWordVo::getId).toList(),
+                "跨文章已学词必须从新词关卡排除");
+
+        harness.progress.put(1L, progress(1L, ARTICLE_ID, 1, 1));
+        EngChallengeVo retry = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null);
+        assertEquals(List.of(1L), retry.getWords().stream().map(EngWordVo::getId).toList(),
+                "首次在本关学习的词即使已标记 learned 也必须允许重试");
+    }
+
+    /** 本关所有词都已在其他文章学过时自动掌握，不伪造星级。 */
+    private static void shouldAutoMasterLevelWhenEveryWordWasLearnedElsewhere()
+    {
+        Harness harness = new Harness();
+        harness.progress.put(1L, progress(1L, 98L, 1, 1));
+        harness.progress.put(2L, progress(2L, 99L, 1, 1));
+        EngArticleLevelVo level = harness.service.getArticleLevels(ARTICLE_ID).getLevels().get(0);
+        assertTrue(level.getMasteredByExistingWords(), "全部词在其他文章已学时应自动掌握");
+        assertEquals(0, level.getHighestStars(), "自动掌握不得伪造星级");
+    }
+
+    /** 句子题保留实际词形，首次三星只发 1+2+3 的累计里程碑金币且 attempt 幂等。 */
+    private static void shouldUseMatchedTextAndRewardMilestonesOnlyOnce()
+    {
+        Harness harness = new Harness();
+        harness.progress.put(2L, progress(2L, 99L, 1, 1));
+        EngChallengeVo challenge = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null);
+        assertTrue(challenge.getQuestions().stream().anyMatch(item -> "SENTENCE_CHOICE:1".equals(item.getQuestionId())
+                && item.getOptions().contains("apples")), "句子选择题必须使用关系保存的实际词形");
+
+        EngChallengeSubmitDto request = request(challenge.getAttemptId(), "NEW", ARTICLE_ID, 1);
+        request.setAnswers(perfectAppleAnswers());
+        EngChallengeResultVo result = harness.service.submitChallenge(request);
+        assertEquals(3, result.getStars(), "100 分必须得到三星");
+        assertEquals(6L, result.getMilestoneCoin(), "首次三星应累计获得 6 金币");
+        assertEquals(0L, result.getReviewCoin(), "新词关不得发复习金币");
+        assertEquals(6L, harness.balance, "钱包应增加里程碑金币");
+        assertEquals(1, harness.details.size(), "测试记录必须保存规范词明细");
+        assertEquals(1, harness.detailWrites.get(), "首次提交只写一次明细");
+
+        EngChallengeResultVo duplicate = harness.service.submitChallenge(request);
+        assertEquals(6L, duplicate.getCoinReward(), "重复提交应返回原测试奖励");
+        assertEquals(6L, harness.balance, "相同 attemptId 不得重复发币");
+        assertEquals(1, harness.detailWrites.get(), "相同 attemptId 不得重复写明细");
+    }
+
+    /** 复习全对每轮每词固定奖励 1 金币，不受里程碑上限影响。 */
+    private static void shouldRewardEveryPerfectReviewWithoutMilestoneDuplication()
+    {
+        Harness harness = new Harness();
+        EngUserWordProgress mastered = progress(1L, ARTICLE_ID, 1, 1);
+        mastered.setHighestStars(3); mastered.setLatestStars(2); mastered.setRewardedStars(3);
+        mastered.setLatestTestTime(new Date(0)); harness.progress.put(1L, mastered);
+        for (int round = 0; round < 2; round++)
+        {
+            EngChallengeVo challenge = harness.service.getChallenge("REVIEW", null, null, List.of(1L));
+            EngChallengeSubmitDto request = request(challenge.getAttemptId(), "REVIEW", null, null);
+            request.setAnswers(perfectAppleAnswers());
+            EngChallengeResultVo result = harness.service.submitChallenge(request);
+            assertEquals(0L, result.getMilestoneCoin(), "已领满三星里程碑不得重复发放");
+            assertEquals(1L, result.getReviewCoin(), "每轮全对复习应发 1 金币");
+        }
+        assertEquals(2L, harness.balance, "复习金币不设累计上限");
+        assertEquals(2, harness.details.size(), "每轮复习均需保存单词明细");
+    }
+
+    /** 复习刷新未领的三星里程碑时，应与本轮复习金币叠加。 */
+    private static void shouldStackReviewAndNewMilestoneCoin()
+    {
+        Harness harness = new Harness();
+        EngUserWordProgress learned = progress(1L, ARTICLE_ID, 1, 1);
+        learned.setHighestStars(2); learned.setLatestStars(2); learned.setRewardedStars(2);
+        harness.progress.put(1L, learned);
+        harness.sentenceSourceArticleId = 999L;
+        EngChallengeVo challenge = harness.service.getChallenge("REVIEW", null, null, List.of(1L));
+        EngChallengeSubmitDto request = request(challenge.getAttemptId(), "REVIEW", null, null);
+        request.setAnswers(perfectAppleAnswers());
+        EngChallengeResultVo result = harness.service.submitChallenge(request);
+        assertEquals(3L, result.getMilestoneCoin(), "二星升三星应补3金币");
+        assertEquals(1L, result.getReviewCoin(), "复习全对应另1金币");
+        assertEquals(4L, result.getCoinReward(), "两类金币应叠加");
+        assertEquals(ARTICLE_ID, harness.details.get(0).getSourceArticleId(),
+                "REVIEW 明细必须归属首次学习文章，不受跨文章例句影响");
+        EngStudyRecord stored = harness.records.get(challenge.getAttemptId());
+        assertEquals(null, stored.getArticleId(), "REVIEW 学习记录 article_id 必须为空");
+    }
+
+    /** insert ignore 发现并发冲突后必须当前读原记录，不重复执行任何副作用。 */
+    private static void shouldUseCurrentReadAfterConcurrentAttemptConflict()
+    {
+        Harness harness = new Harness();
+        harness.progress.put(2L, progress(2L, 99L, 1, 1));
+        EngChallengeVo challenge = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null);
+        EngChallengeSubmitDto request = request(challenge.getAttemptId(), "NEW", ARTICLE_ID, 1);
+        request.setAnswers(perfectAppleAnswers());
+        harness.service.submitChallenge(request);
+        long balance = harness.balance; int detailWrites = harness.detailWrites.get();
+        harness.hideOrdinaryAttemptRead = true;
+        harness.service.submitChallenge(request);
+        assertEquals(1, harness.currentAttemptReads.get(), "冲突后应使用 select for update 当前读");
+        assertEquals(balance, harness.balance, "并发重复提交不得重复发币");
+        assertEquals(detailWrites, harness.detailWrites.get(), "并发重复提交不得重复写明细");
+    }
+
+    /** NEW 单词没有任何例句时，答错仍必须按当前文章记录明细和错词。 */
+    private static void shouldRecordWrongNewWordWithoutExample()
+    {
+        Harness harness = new Harness();
+        harness.progress.put(1L, progress(1L, 99L, 1, 1));
+        EngChallengeVo challenge = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null);
+        EngChallengeSubmitDto request = request(challenge.getAttemptId(), "NEW", ARTICLE_ID, 1);
+        request.setAnswers(List.of(answer("WORD_TO_CN:2", "错误"), answer("CN_TO_WORD:2", "cat")));
+        EngChallengeResultVo result = harness.service.submitChallenge(request);
+        assertEquals(0L, result.getCoinReward(), "低于一星不发金币");
+        assertEquals(ARTICLE_ID, harness.details.get(0).getSourceArticleId(), "NEW 明细必须固定归属当前文章");
+        assertEquals(ARTICLE_ID, harness.lastWrongArticleId, "无例句错词仍必须归属当前文章");
+        assertEquals(1, harness.wrongWrites.get(), "错词应写入一次");
+        assertEquals(-1, harness.familiarityDelta, "本轮未全对应扣减熟悉度");
+    }
+
+    /** 明细 Mapper 必须通过学习记录归属限定当前用户。 */
+    private static void shouldKeepRecordWordOwnershipInMapperSql() throws Exception
+    {
+        try (var input = EngStudyServiceImplTest.class.getClassLoader()
+                .getResourceAsStream("mapper/eng/EngStudyRecordWordMapper.xml"))
+        {
+            String xml = new String(Objects.requireNonNull(input).readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)
+                    .replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
+            assertTrue(xml.contains("join eng_study_record r on r.id=d.study_record_id"), "明细查询必须联结学习记录");
+            assertTrue(xml.contains("r.user_id=#{userid}"), "明细查询必须限定当前用户");
+        }
+    }
+
+    /** 幂等冲突后的 Mapper 查询必须是 select for update 当前读。 */
+    private static void shouldKeepAttemptCurrentReadInMapperSql() throws Exception
+    {
+        try (var input = EngStudyServiceImplTest.class.getClassLoader()
+                .getResourceAsStream("mapper/eng/EngStudyRecordMapper.xml"))
+        {
+            String xml = new String(Objects.requireNonNull(input).readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)
+                    .replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
+            assertTrue(xml.contains("selectbyuserandattemptforupdate"), "必须保留并发冲突当前读 Mapper");
+            assertTrue(xml.contains("attempt_id=#{attemptid} limit 1 for update"), "幂等记录当前读必须加锁");
+        }
+    }
+
+    /** NEW 首次写关卡进度前必须先锁定与文章词追加相同的 article 行。 */
+    private static void shouldLockArticleBeforeFirstLevelProgressWrite()
+    {
+        Harness harness = new Harness();
+        harness.progress.put(2L, progress(2L, 99L, 1, 1));
+        EngChallengeVo challenge = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null);
+        harness.lockOrder.clear();
+        EngChallengeSubmitDto request = request(challenge.getAttemptId(), "NEW", ARTICLE_ID, 1);
+        request.setAnswers(perfectAppleAnswers());
+        harness.service.submitChallenge(request);
+        int firstLock = harness.lockOrder.indexOf("articleLock");
+        int progressWrite = harness.lockOrder.indexOf("levelProgress");
+        assertTrue(firstLock >= 0 && progressWrite > firstLock, "文章行锁必须先于首次关卡进度写入");
+        try
+        {
+            assertTrue(EngStudyServiceImpl.class.getMethod("submitChallenge", EngChallengeSubmitDto.class)
+                    .isAnnotationPresent(Transactional.class), "文章锁和关卡进度必须共享提交事务");
+        }
+        catch (ReflectiveOperationException exception)
+        {
+            throw new AssertionError("事务结构检查失败", exception);
+        }
+    }
+
+    /** 下一关导航必须跳过已自动掌握关，指向下一个有真实新词的关卡。 */
+    private static void shouldReturnOnlyNextEffectiveLevel()
+    {
+        Harness harness = new Harness();
+        harness.levelWords.clear();
+        harness.levelWords.put(1, List.of("apple"));
+        harness.levelWords.put(2, List.of("cat"));
+        harness.levelWords.put(3, List.of("dog"));
+        harness.progress.put(2L, progress(2L, 99L, 1, 1));
+        EngChallengeVo challenge = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null);
+        EngChallengeSubmitDto request = request(challenge.getAttemptId(), "NEW", ARTICLE_ID, 1);
+        request.setAnswers(perfectAppleAnswers());
+        EngChallengeResultVo result = harness.service.submitChallenge(request);
+        assertEquals(3, result.getNextLevelNo(), "应跳过第2关自动掌握词");
+        assertTrue(result.getNextLevelUnlocked(), "存在下一有效新词关时应允许继续");
+    }
+
+    /** 末关通关后不得仅因为有星就返回可解锁。 */
+    private static void shouldKeepNextLevelEmptyAtTerminalLevel()
+    {
+        Harness harness = new Harness();
+        harness.progress.put(2L, progress(2L, 99L, 1, 1));
+        EngChallengeVo challenge = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null);
+        EngChallengeSubmitDto request = request(challenge.getAttemptId(), "NEW", ARTICLE_ID, 1);
+        request.setAnswers(perfectAppleAnswers());
+        EngChallengeResultVo result = harness.service.submitChallenge(request);
+        assertEquals(null, result.getNextLevelNo(), "末关不得返回虚假下一关");
+        assertTrue(!result.getNextLevelUnlocked(), "末关 nextLevelUnlocked 必须为 false");
+    }
+
+    /** 迁移应保护历史明细，并按旧成绩幂等回填星级而不补发金币。 */
+    private static void shouldKeepHistoricalMigrationConsistent() throws Exception
+    {
+        Path migration = Path.of("sql/1.0.25_eng_global_word_challenge.sql");
+        if (!Files.exists(migration)) migration = Path.of("../sql/1.0.25_eng_global_word_challenge.sql");
+        String sql = Files.readString(migration, StandardCharsets.UTF_8).replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
+        assertTrue(sql.contains("foreign key(word_id) references eng_word(id) on delete restrict"),
+                "历史学习明细到词条的外键必须禁止级联删除");
+        int start = sql.indexOf("update eng_study_record set stars=case");
+        int end = sql.indexOf("insert ignore into eng_article_level_progress", start);
+        assertTrue(start >= 0 && end > start, "迁移必须包含历史记录星级回填");
+        String backfill = sql.substring(start, end);
+        assertTrue(backfill.contains("score=100 then 3") && backfill.contains("score>=90 then 2")
+                && backfill.contains("score>=80 then 1") && backfill.contains("else 0"),
+                "历史星级回填必须使用正式阈值");
+        assertTrue(backfill.contains("attempt_id is null") && backfill.contains("stars<>case"),
+                "历史星级回填必须限定旧记录并保持幂等");
+        assertTrue(!backfill.contains("milestone_coin") && !backfill.contains("review_coin")
+                && !backfill.contains("coin_reward"), "历史回填不得补发金币");
+    }
+
+    private static void shouldExposeTransactionalMutationBoundary() throws Exception
+    {
+        assertTrue(EngStudyServiceImpl.class.getMethod("submitChallenge", EngChallengeSubmitDto.class)
+                .isAnnotationPresent(Transactional.class), "提交入口必须由事务包裹");
+        assertTrue(EngStudyServiceImpl.class.getMethod("getChallenge", String.class, Long.class, Integer.class, List.class)
+                .isAnnotationPresent(Transactional.class), "自动掌握关卡写入必须处于事务边界");
+    }
+
+    private static EngChallengeSubmitDto request(String attemptId, String mode, Long articleId, Integer levelNo)
+    {
+        EngChallengeSubmitDto request = new EngChallengeSubmitDto(); request.setAttemptId(attemptId);
+        request.setMode(mode); request.setArticleId(articleId); request.setLevelNo(levelNo); return request;
+    }
+
+    private static List<EngChallengeAnswerDto> perfectAppleAnswers()
+    {
+        return List.of(answer("WORD_TO_CN:1", "苹果"), answer("CN_TO_WORD:1", "apple"),
+                answer("SENTENCE_CHOICE:1", "apples"), answer("SENTENCE_FILL:1", "appl"));
+    }
+
+    private static EngChallengeAnswerDto answer(String questionId, String value)
+    {
+        EngChallengeAnswerDto answer = new EngChallengeAnswerDto(); answer.setQuestionId(questionId);
+        answer.setAnswer(value); return answer;
+    }
+
+    private static EngUserWordProgress progress(Long wordId, Long firstArticleId, Integer firstLevelNo, int learned)
+    {
+        EngUserWordProgress progress = new EngUserWordProgress(); progress.setId(wordId); progress.setUserId(USER_ID);
+        progress.setWordId(wordId); progress.setLearned(learned); progress.setHighestStars(0); progress.setLatestStars(0);
+        progress.setRewardedStars(0); progress.setFirstArticleId(firstArticleId); progress.setFirstLevelNo(firstLevelNo);
+        return progress;
+    }
+
+    /** 用内存状态模拟 Mapper，验证同一服务实例上的完整业务副作用。 */
+    private static class Harness
+    {
+        private final Map<Long, EngUserWordProgress> progress = new LinkedHashMap<>();
+        private final Map<Integer, EngArticleLevelProgress> levelProgress = new LinkedHashMap<>();
+        private final Map<String, EngStudyRecord> records = new HashMap<>();
+        private final List<EngStudyRecordWord> details = new ArrayList<>();
+        private final AtomicInteger detailWrites = new AtomicInteger();
+        private final AtomicInteger currentAttemptReads = new AtomicInteger();
+        private final AtomicInteger wrongWrites = new AtomicInteger();
+        private boolean hideOrdinaryAttemptRead;
+        private Long lastWrongArticleId;
+        private int familiarityDelta;
+        private Long sentenceSourceArticleId = ARTICLE_ID;
+        private final List<String> lockOrder = new ArrayList<>();
+        private long balance;
+        private long recordSequence = 100L;
+        private final EngWordVo apple = word(1L, "apple", "苹果");
+        private final EngWordVo cat = word(2L, "cat", "猫");
+        private final EngWordVo dog = word(3L, "dog", "狗");
+        private final Map<Integer, List<String>> levelWords = new LinkedHashMap<>();
+        private final EngStudyServiceImpl service;
+
+        Harness()
+        {
+            levelWords.put(1, List.of("apple", "cat"));
+            EngArticle article = new EngArticle(); article.setId(ARTICLE_ID); article.setTitle("测试文章");
+            IEngArticleService articleService = proxy(IEngArticleService.class, (method, args) ->
+                    "selectEngArticleById".equals(method) ? article : defaultValue(returnType(IEngArticleService.class, method)));
+            IEngSentenceService sentenceService = proxy(IEngSentenceService.class, (method, args) -> {
+                if ("selectFirstWordRelation".equals(method) && Long.valueOf(1L).equals(args[args.length - 1]))
+                {
+                    EngSentenceWordRel relation = new EngSentenceWordRel(); relation.setArticleId(sentenceSourceArticleId);
+                    relation.setWordId(1L); relation.setWordName("apple"); relation.setMatchedText("apples");
+                    relation.setSentenceContent("She likes apples every day."); relation.setSentenceAcceptation("她每天喜欢苹果。");
+                    return relation;
                 }
-                inserted.add(item);
-                return 1;
-            }
-            @Override public int bindStudyRecord(Long userId, Long articleId, LocalDate date,
-                    List<Long> ids, Long recordId) { sideEffects.merge("bind", 1, Integer::sum); return ids.size(); }
-        };
-        EngArticle article = new EngArticle();
-        article.setId(ARTICLE_ID);
-        EngStudyServiceImpl service = new EngStudyServiceImpl(
-                proxy(IEngArticleService.class, Map.of("selectEngArticleById", article)),
-                proxy(IEngSentenceService.class, Map.of("selectEngSentenceList", List.of())),
-                proxy(IEngIcibaSentenceService.class, Map.of()), wordService,
-                countingProxy(EngStudyRecordMapper.class, sideEffects),
-                countingProxy(EngCoinWalletMapper.class, sideEffects),
-                countingProxy(EngArticleProgressMapper.class, sideEffects),
-                countingProxy(EngWrongWordMapper.class, sideEffects), dailyMapper);
-        EngChallengeSubmitDto request = new EngChallengeSubmitDto();
-        request.setArticleId(ARTICLE_ID);
-        request.setAnswers(List.of(answer("WORD_TO_CN:1", "苹果"), answer("CN_TO_WORD:1", "apple"),
-                answer("WORD_TO_CN:2", "猫"), answer("CN_TO_WORD:2", "cat")));
-        setTestLoginUser();
-        try {
-            assertSubmitServiceException(service, request, "部分占位后重复提交必须失败");
-        } finally {
-            SecurityContextHolder.clearContext();
+                return defaultValue(returnType(IEngSentenceService.class, method));
+            });
+            IEngWordService wordService = proxy(IEngWordService.class, (method, args) -> {
+                if ("selectWordListByArticle".equals(method)) return List.of(apple, cat, dog);
+                if ("selectEngWordById".equals(method))
+                    return Long.valueOf(1L).equals(args[0]) ? toWord(apple)
+                            : Long.valueOf(2L).equals(args[0]) ? toWord(cat) : toWord(dog);
+                if ("updateFamiliarity".equals(method)) { familiarityDelta += (Integer) args[1]; return 1; }
+                return defaultValue(returnType(IEngWordService.class, method));
+            });
+            service = new EngStudyServiceImpl(articleService, sentenceService,
+                    proxy(IEngIcibaSentenceService.class, (method, args) -> List.of()), wordService,
+                    recordMapper(), recordWordMapper(), walletMapper(),
+                    wrongWordMapper(),
+                    wordProgressMapper(), levelProgressMapper(), articleWordMapper());
         }
-        assertEquals(1, inserted.size(), "冲突前应已模拟一条占位成功");
-        assertEquals(Map.of(), sideEffects, "重复键后不得调用学习记录、金币、进度、错词、绑定或熟悉度副作用");
-        Method submit = EngStudyServiceImpl.class.getMethod("submitChallenge", EngChallengeSubmitDto.class);
-        assertTrue(submit.isAnnotationPresent(Transactional.class), "提交入口必须保留事务注解以回滚已写占位");
-    }
 
-    /**
-     * 验证公开挑战接口会在每次获取时独立打乱题序，同时保持题目数量、标识、内容和选项顺序完整不变。
-     *
-     * @throws Exception 反射读取内部标准题目失败时抛出异常
-     */
-    private void shouldShuffleChallengeQuestionsWithoutChangingQuestionContent() throws Exception {
-        EngStudyServiceImpl service = createService(createWords(), createSentences());
-        List<?> definitions = buildDefinitions(service);
-        List<String> originalOrder = definitionQuestionIds(definitions);
-        Map<String, List<Object>> expectedContents = definitionContents(definitions);
-        Set<List<String>> observedOrders = new HashSet<>();
-        boolean observedNonOriginalOrder = false;
-
-        setTestLoginUser();
-        try {
-            // 连续获取多轮可覆盖每次请求重新洗牌，并将随机恰好保持原顺序造成误报的概率降至可忽略。
-            for (int round = 0; round < 32; round++) {
-                EngChallengeVo challenge = service.getChallenge(ARTICLE_ID);
-                List<EngChallengeQuestionVo> questions = challenge.getQuestions();
-                List<String> actualOrder = questionIds(questions);
-
-                assertEquals(definitions.size(), questions.size(), "洗牌后题目总数不得变化");
-                assertEquals(questions.size(), new HashSet<>(actualOrder).size(), "洗牌后题目标识不得重复");
-                assertEquals(expectedContents.keySet(), new HashSet<>(actualOrder), "洗牌后题目不得丢失或新增");
-                for (EngChallengeQuestionVo question : questions) {
-                    assertEquals(expectedContents.get(question.getQuestionId()), questionContent(question),
-                            "洗牌只能改变题目位置，不得改变题目内容或选项顺序");
+        private EngStudyRecordMapper recordMapper()
+        {
+            return proxy(EngStudyRecordMapper.class, (method, args) -> {
+                if ("selectByUserAndAttempt".equals(method))
+                    return hideOrdinaryAttemptRead ? null : records.get(((EngStudyRecord) args[0]).getAttemptId());
+                if ("selectByUserAndAttemptForUpdate".equals(method))
+                {
+                    currentAttemptReads.incrementAndGet();
+                    return records.get(((EngStudyRecord) args[0]).getAttemptId());
                 }
-                observedOrders.add(List.copyOf(actualOrder));
-                observedNonOriginalOrder |= !originalOrder.equals(actualOrder);
-            }
-        } finally {
-            // 清理线程认证信息，避免影响后续即时判题、计分和错词回归场景。
-            SecurityContextHolder.clearContext();
+                if ("insertIgnoreEngStudyRecord".equals(method))
+                {
+                    EngStudyRecord item = (EngStudyRecord) args[0];
+                    if (records.containsKey(item.getAttemptId())) return 0;
+                    item.setId(recordSequence++); records.put(item.getAttemptId(), item); return 1;
+                }
+                if ("updateOutcome".equals(method)) return 1;
+                return defaultValue(returnType(EngStudyRecordMapper.class, method));
+            });
         }
 
-        assertTrue(observedNonOriginalOrder, "多轮获取挑战时题序不应始终保持原始生成顺序");
-        assertTrue(observedOrders.size() > 1, "每次获取挑战应独立洗牌，不应始终返回同一题序");
-    }
-
-    /**
-     * 验证四类题固定顺序、句子选词选项、四字母挖空、首句选择及不泄露答案规则。
-     *
-     * @throws Exception 反射调用失败时抛出异常
-     */
-    private void shouldBuildSentenceChoiceAndExistingQuestionTypesWithoutLeakingAnswer() throws Exception {
-        EngStudyServiceImpl service = createService(createWords(), createSentences());
-        List<?> definitions = buildDefinitions(service);
-
-        // 四个有效单词各生成两道双向选择题，apple、cat、don't 生成句子选词，仅超过四字母的 apple 生成填词。
-        assertEquals(12, definitions.size(), "题目总数应包含八道双向选择题、三道句子选词和一道填词题");
-        assertEquals("WORD_TO_CN:1", definitionValue(definitions.get(0), "questionId"), "每个单词第一题应看词选中文");
-        assertEquals("CN_TO_WORD:1", definitionValue(definitions.get(1), "questionId"), "每个单词第二题应看中文选英文");
-        assertEquals("SENTENCE_CHOICE:1", definitionValue(definitions.get(2), "questionId"),
-                "每个有句子的单词第三题应为句子选词");
-        assertEquals("SENTENCE_FILL:1", definitionValue(definitions.get(3), "questionId"),
-                "超过四字母的纯字母单词第四题应为四字母填词");
-        assertEquals(1, countDefinitions(definitions, "WORD_TO_CN:1"), "重复单词关系只能生成一道看词选中文题");
-        assertEquals(1, countDefinitions(definitions, "CN_TO_WORD:1"), "重复单词关系只能生成一道看中文选英文题");
-        assertEquals(1, countDefinitions(definitions, "SENTENCE_CHOICE:1"), "重复单词关系只能生成一道句子选词题");
-        assertEquals(1, countDefinitions(definitions, "SENTENCE_FILL:1"), "重复单词关系只能生成一道句子填空题");
-        Object wordToCn = findDefinition(definitions, "WORD_TO_CN:1");
-        Object cnToWord = findDefinition(definitions, "CN_TO_WORD:1");
-        Object appleChoice = findDefinition(definitions, "SENTENCE_CHOICE:1");
-        Object catChoice = findDefinition(definitions, "SENTENCE_CHOICE:2");
-        Object appleFill = findDefinition(definitions, "SENTENCE_FILL:1");
-        assertEquals("WORD_TO_CN", definitionValue(wordToCn, "type"), "看词选中文题型错误");
-        assertEquals("CN_TO_WORD", definitionValue(cnToWord, "type"), "看中文选英文题型错误");
-        assertEquals("https://audio.example/apple.mp3", definitionValue(cnToWord, "audioUrl"),
-                "看中文选英文题应携带目标单词音频");
-        assertEquals("https://audio.example/apple.mp3", definitionValue(wordToCn, "audioUrl"),
-                "看词选中文题应携带目标单词音频");
-        assertEquals(null, definitionValue(findDefinition(definitions, "WORD_TO_CN:2"), "audioUrl"),
-                "目标单词没有音频时看词选中文题的发音地址应为空");
-        assertEquals("https://audio.example/apple.mp3", definitionValue(appleFill, "audioUrl"),
-                "句子填词题应携带目标单词音频");
-        assertEquals(4, definitionValue(appleFill, "answerLength"), "apple 填词题应固定填写四个字母");
-        assertEquals("appl", definitionValue(appleFill, "correctAnswer"), "填词题答案应为单词前四个字母");
-        assertEquals(null, findDefinitionOrNull(definitions, "SENTENCE_FILL:2"),
-                "长度不超过四个字母的单词不应生成填词题");
-        assertEquals(null, definitionValue(wordToCn, "answerLength"), "选择题不应返回填词答案长度");
-        assertEquals("https://audio.example/apple.mp3", definitionValue(appleChoice, "audioUrl"),
-                "句子选词题应携带目标单词音频");
-        assertEquals(null, definitionValue(catChoice, "audioUrl"), "目标单词没有音频时句子选词题的发音地址应为空");
-        assertEquals(null, definitionValue(appleChoice, "answerLength"), "句子选词题不应返回填词答案长度");
-        assertTrue(((List<?>) definitionValue(wordToCn, "options")).contains("苹果"), "中文选项应包含正确释义");
-        assertTrue(((List<?>) definitionValue(cnToWord, "options")).contains("apple"), "英文选项应包含正确单词");
-        List<?> sentenceOptions = (List<?>) definitionValue(appleChoice, "options");
-        assertTrue(sentenceOptions.contains("apple"), "句子选词选项必须包含正确英文单词");
-        assertTrue(sentenceOptions.size() <= 4, "句子选词选项不得超过四个");
-        assertEquals(sentenceOptions.size(), new HashSet<>(sentenceOptions).size(), "句子选词选项不得重复");
-        List<?> fillOptions = (List<?>) definitionValue(appleFill, "options");
-        assertEquals(10, fillOptions.size(), "句子填词题必须返回十个候选字母");
-        for (Object option : fillOptions) {
-            assertTrue(option instanceof String && ((String) option).length() == 1,
-                    "句子填词候选项必须是单个字母字符串");
+        private EngWrongWordMapper wrongWordMapper()
+        {
+            return proxy(EngWrongWordMapper.class, (method, args) -> {
+                if ("upsertWrongWord".equals(method))
+                {
+                    EngWrongWord item = (EngWrongWord) args[0]; lastWrongArticleId = item.getArticleId();
+                    wrongWrites.incrementAndGet(); return 1;
+                }
+                return defaultValue(returnType(EngWrongWordMapper.class, method));
+            });
         }
-        assertTrue(Collections.frequency(fillOptions, "a") >= 1, "候选字母必须包含答案中的 a");
-        assertTrue(Collections.frequency(fillOptions, "p") >= 2, "答案中的重复字母必须按出现次数保留");
-        assertTrue(Collections.frequency(fillOptions, "l") >= 1, "候选字母必须包含答案中的 l");
-        Object rebuiltAppleFill = findDefinition(buildDefinitions(service), "SENTENCE_FILL:1");
-        assertEquals(fillOptions, definitionValue(rebuiltAppleFill, "options"), "候选字母顺序必须可稳定重建");
 
-        // 两类句子题都应跳过 [NT] 和 Pineapple 子串，并共用随后首个完整匹配句子及中文提示。
-        String appleChoicePrompt = (String) definitionValue(appleChoice, "prompt");
-        String applePrompt = (String) definitionValue(appleFill, "prompt");
-        assertTrue(appleChoicePrompt.contains("_____ falls from the tree."), "句子选词应挖空首个完整匹配单词");
-        assertTrue(appleChoicePrompt.contains("一个苹果从树上掉下来。"), "句子选词应包含中文释义提示");
-        assertTrue(!appleChoicePrompt.contains("second"), "句子选词只能采用首个合格句子");
-        assertTrue(applePrompt.contains("____E falls from the tree."), "填词题只应挖空目标单词的前四个字母");
-        assertTrue(applePrompt.contains("一个苹果从树上掉下来。"), "填空题应包含中文释义提示");
-        assertTrue(!applePrompt.contains("second"), "每个单词只能采用首个合格句子");
-        String catChoicePrompt = (String) definitionValue(catChoice, "prompt");
-        assertTrue(catChoicePrompt.contains("A ___ sleeps."), "catapult 子串不得命中，句子选词仍应完整挖空 cat");
-        assertEquals(null, findDefinitionOrNull(definitions, "SENTENCE_FILL:3"),
-                "只出现在其他单词子串中的 app 不应生成填空题");
-        assertEquals(null, findDefinitionOrNull(definitions, "SENTENCE_CHOICE:3"),
-                "只出现在其他单词子串中的 app 不应生成句子选词题");
-        assertEquals(1, countDefinitions(definitions, "WORD_TO_CN:3"), "无合格句子的单词仍应生成看词选中文题");
-        assertEquals(1, countDefinitions(definitions, "CN_TO_WORD:3"), "无合格句子的单词仍应生成看中文选英文题");
-        assertEquals(1, countDefinitions(definitions, "WORD_TO_CN:4"), "含撇号单词仍应生成看词选中文题");
-        assertEquals(1, countDefinitions(definitions, "CN_TO_WORD:4"), "含撇号单词仍应生成看中文选英文题");
-        Object apostropheChoice = findDefinition(definitions, "SENTENCE_CHOICE:4");
-        assertEquals("SENTENCE_CHOICE", definitionValue(apostropheChoice, "type"), "含撇号单词应生成句子选词题");
-        assertTrue(((List<?>) definitionValue(apostropheChoice, "options")).contains("don't"),
-                "含撇号单词的句子选词选项应包含正确答案");
-        assertEquals(null, findDefinitionOrNull(definitions, "SENTENCE_FILL:4"),
-                "含撇号单词不能由候选字母填写，不应生成填词题");
-
-        // 对外题目 VO 不定义正确答案字段，确保获取挑战接口无法序列化服务端答案。
-        boolean exposesCorrectAnswer = false;
-        for (java.lang.reflect.Field field : EngChallengeQuestionVo.class.getDeclaredFields()) {
-            exposesCorrectAnswer |= "correctAnswer".equals(field.getName());
+        private EngStudyRecordWordMapper recordWordMapper()
+        {
+            return proxy(EngStudyRecordWordMapper.class, (method, args) -> {
+                if ("insertBatch".equals(method))
+                {
+                    @SuppressWarnings("unchecked") List<EngStudyRecordWord> items = (List<EngStudyRecordWord>) args[0];
+                    details.addAll(items); detailWrites.incrementAndGet(); return items.size();
+                }
+                if ("selectByRecordAndUser".equals(method))
+                    return details.stream().filter(item -> Objects.equals(item.getStudyRecordId(), args[0])).toList();
+                return defaultValue(returnType(EngStudyRecordWordMapper.class, method));
+            });
         }
-        assertTrue(!exposesCorrectAnswer, "挑战题展示对象不得包含正确答案字段");
-    }
 
-    /** 验证文章没有对应句子时回退第一条词典例句，已有文章句子时仍保持文章句子优先。 */
-    private void shouldFallbackToFirstDictionarySentence() throws Exception {
-        EngWordVo apple = word(1L, "apple", "苹果", null);
-        List<EngIcibaSentence> dictionarySentences = List.of(
-                dictionarySentence(1L, "An apple grows on the tree.", "苹果长在树上。"),
-                dictionarySentence(2L, "I ate an apple.", "我吃了一个苹果。"));
-
-        List<?> fallbackDefinitions = buildDefinitions(createService(
-                List.of(apple), List.of(), dictionarySentences));
-        String fallbackPrompt = (String) definitionValue(
-                findDefinition(fallbackDefinitions, "SENTENCE_CHOICE:1"), "prompt");
-        assertTrue(fallbackPrompt.contains("An _____ grows on the tree."), "无文章句子时应使用第一条词典例句");
-        assertTrue(fallbackPrompt.contains("苹果长在树上。"), "词典例句中文释义应作为句子提示");
-        assertTrue(!fallbackPrompt.contains("I ate"), "词典例句回退不得跳到第二条例句");
-
-        List<?> articleDefinitions = buildDefinitions(createService(
-                List.of(apple), List.of(sentence(10L, "This apple is red.", "这个苹果是红色的。")),
-                dictionarySentences));
-        String articlePrompt = (String) definitionValue(
-                findDefinition(articleDefinitions, "SENTENCE_CHOICE:1"), "prompt");
-        assertTrue(articlePrompt.contains("This _____ is red."), "已有文章句子时应继续优先使用文章句子");
-        assertTrue(!articlePrompt.contains("grows on the tree"), "文章句子存在时不得回退词典例句");
-
-        List<?> noSentenceDefinitions = buildDefinitions(createService(List.of(apple), List.of(), List.of()));
-        assertEquals(null, findDefinitionOrNull(noSentenceDefinitions, "SENTENCE_CHOICE:1"),
-                "文章句子和词典例句都不存在时不应生成句子题");
-    }
-
-    /** 验证句子填词题仅在熟悉度达到七时生成，且门槛不影响其他三类题。 */
-    private void shouldBuildSentenceFillOnlyAtRequiredFamiliarity() throws Exception {
-        EngWordVo familiaritySix = word(11L, "below", "低于门槛", null);
-        familiaritySix.setFamiliarity(6);
-        EngWordVo familiaritySeven = word(12L, "seven", "达到门槛", null);
-        familiaritySeven.setFamiliarity(7);
-        EngWordVo familiarityEight = word(13L, "higher", "超过门槛", null);
-        familiarityEight.setFamiliarity(8);
-        EngWordVo missingFamiliarity = word(14L, "missing", "没有熟悉度", null);
-        missingFamiliarity.setFamiliarity(null);
-        List<EngSentence> sentences = List.of(
-                sentence(11L, "Below the threshold.", "低于门槛。"),
-                sentence(12L, "Seven reaches the threshold.", "达到门槛。"),
-                sentence(13L, "Higher exceeds the threshold.", "超过门槛。"),
-                sentence(14L, "Missing familiarity is zero.", "没有熟悉度。"));
-        List<?> definitions = buildDefinitions(createService(
-                List.of(familiaritySix, familiaritySeven, familiarityEight, missingFamiliarity), sentences));
-
-        assertEquals(null, findDefinitionOrNull(definitions, "SENTENCE_FILL:11"),
-                "熟悉度六不能生成句子填词题");
-        assertTrue(findDefinitionOrNull(definitions, "SENTENCE_FILL:12") != null,
-                "熟悉度七应生成句子填词题");
-        assertTrue(findDefinitionOrNull(definitions, "SENTENCE_FILL:13") != null,
-                "熟悉度大于七应生成句子填词题");
-        assertEquals(null, findDefinitionOrNull(definitions, "SENTENCE_FILL:14"),
-                "熟悉度为空时应按零处理且不能生成句子填词题");
-        for (long wordId = 11L; wordId <= 14L; wordId++) {
-            assertTrue(findDefinitionOrNull(definitions, "WORD_TO_CN:" + wordId) != null,
-                    "熟悉度门槛不得影响看词选中文题");
-            assertTrue(findDefinitionOrNull(definitions, "CN_TO_WORD:" + wordId) != null,
-                    "熟悉度门槛不得影响看中文选英文题");
-            assertTrue(findDefinitionOrNull(definitions, "SENTENCE_CHOICE:" + wordId) != null,
-                    "熟悉度门槛不得影响句子选词题");
+        private EngCoinWalletMapper walletMapper()
+        {
+            return proxy(EngCoinWalletMapper.class, (method, args) -> {
+                if ("selectCoinBalance".equals(method)) return balance;
+                if ("increaseCoinBalance".equals(method)) { balance += (Long) args[1]; return 1; }
+                return defaultValue(returnType(EngCoinWalletMapper.class, method));
+            });
         }
-    }
 
-    /** 验证单词测试优先使用简明释义，未维护简明释义时回退完整释义。 */
-    private void shouldUseConciseMeaningAndFallbackToAcceptation() throws Exception {
-        EngWordVo apple = word(1L, "apple", "苹果；苹果树；苹果公司相关内容", null);
-        apple.setExchange("苹果");
-        EngWordVo cat = word(2L, "cat", "猫", null);
-        EngStudyServiceImpl service = createService(List.of(apple, cat), List.of());
-        List<?> definitions = buildDefinitions(service);
-
-        Object appleWordToCn = findDefinition(definitions, "WORD_TO_CN:1");
-        Object appleCnToWord = findDefinition(definitions, "CN_TO_WORD:1");
-        Object catWordToCn = findDefinition(definitions, "WORD_TO_CN:2");
-        assertEquals("苹果", definitionValue(appleWordToCn, "correctAnswer"), "看词选中文应以简明释义为答案");
-        assertTrue(((List<?>) definitionValue(appleWordToCn, "options")).contains("苹果"),
-                "中文选项应使用简明释义");
-        assertTrue(((String) definitionValue(appleCnToWord, "prompt")).contains("“苹果”"),
-                "看中文选英文题干应使用简明释义");
-        assertTrue(!((String) definitionValue(appleCnToWord, "prompt")).contains("苹果树"),
-                "看中文选英文题干不应包含完整释义");
-        assertEquals("猫", definitionValue(catWordToCn, "correctAnswer"), "简明释义为空时应回退完整释义");
-    }
-
-    /**
-     * 验证即时判题正确、错误、大小写和首尾空格规则，并确认该入口不写学习记录、进度或错词。
-     */
-    private void shouldCheckSingleAnswerWithoutWritingStudyData() {
-        Map<String, Integer> mapperCalls = new HashMap<>();
-        EngStudyServiceImpl service = createService(createWords(), createSentences(), mapperCalls);
-
-        EngChallengeResultVo.ResultItem correct = service.checkChallengeAnswer(
-                checkRequest(ARTICLE_ID, "SENTENCE_CHOICE:1", " Apple "));
-        assertEquals("SENTENCE_CHOICE:1", correct.getQuestionId(), "即时判题应返回句子选词题目标识");
-        assertEquals(Boolean.TRUE, correct.getCorrect(), "句子选词即时判题应忽略英文大小写和首尾空格");
-        assertEquals("apple", correct.getCorrectAnswer(), "即时判题应返回正确答案");
-
-        EngChallengeResultVo.ResultItem wrong = service.checkChallengeAnswer(
-                checkRequest(ARTICLE_ID, "SENTENCE_CHOICE:1", "cat"));
-        assertEquals(Boolean.FALSE, wrong.getCorrect(), "句子选词错误答案应被即时判定为错误");
-        assertEquals("apple", wrong.getCorrectAnswer(), "句子选词回答错误时应返回该题正确答案");
-        EngChallengeResultVo.ResultItem fillCorrect = service.checkChallengeAnswer(
-                checkRequest(ARTICLE_ID, "SENTENCE_FILL:1", " ApPl "));
-        assertEquals(Boolean.TRUE, fillCorrect.getCorrect(), "四字母填词答案应忽略大小写和首尾空格");
-        assertEquals("appl", fillCorrect.getCorrectAnswer(), "即时判题应仅返回被挖空的四个字母");
-        EngChallengeResultVo.ResultItem fillWrong = service.checkChallengeAnswer(
-                checkRequest(ARTICLE_ID, "SENTENCE_FILL:1", "apple"));
-        assertEquals(Boolean.FALSE, fillWrong.getCorrect(), "提交整个单词时不应判定为四字母填词答案正确");
-        assertEquals(0, mapperCalls.getOrDefault("insertEngStudyRecord", 0), "即时判题不得写入学习记录");
-        assertEquals(0, mapperCalls.getOrDefault("upsertBestProgress", 0), "即时判题不得写入文章进度");
-        assertEquals(0, mapperCalls.getOrDefault("upsertWrongWord", 0), "即时判题不得写入错词");
-    }
-
-    /**
-     * 验证即时判题拒绝空答案、空题目标识及不属于指定文章的题目标识。
-     */
-    private void shouldRejectInvalidSingleAnswerRequest() {
-        EngStudyServiceImpl service = createService(createWords(), createSentences());
-
-        assertCheckServiceException(service, checkRequest(null, "SENTENCE_FILL:1", "appl"),
-                "空文章主键应被即时判题拒绝");
-        assertCheckServiceException(service, checkRequest(ARTICLE_ID, "SENTENCE_FILL:1", " "),
-                "空答案应被即时判题拒绝");
-        assertCheckServiceException(service, checkRequest(ARTICLE_ID, " ", "apple"),
-                "空题目标识应被即时判题拒绝");
-        assertCheckServiceException(service, checkRequest(ARTICLE_ID, "WORD_TO_CN:999", "苹果"),
-                "不属于指定文章的题目标识应被即时判题拒绝");
-    }
-
-    /**
-     * 验证四类题均参与判分，新句子选词答错会进入总数和得分，其他答案保持忽略大小写及首尾空格。
-     *
-     * @throws Exception 反射调用失败时抛出异常
-     */
-    private void shouldScoreAllFourQuestionTypesIgnoringCaseAndOuterWhitespace() throws Exception {
-        EngStudyServiceImpl service = createService(createWords(), createSentences());
-        List<?> allDefinitions = buildDefinitions(service);
-        List<Object> definitions = List.of(
-                findDefinition(allDefinitions, "WORD_TO_CN:1"),
-                findDefinition(allDefinitions, "CN_TO_WORD:1"),
-                findDefinition(allDefinitions, "SENTENCE_CHOICE:1"),
-                findDefinition(allDefinitions, "SENTENCE_FILL:1"));
-        Map<String, String> answers = new HashMap<>();
-        answers.put("WORD_TO_CN:1", "  苹果  ");
-        answers.put("CN_TO_WORD:1", " APPLE ");
-        answers.put("SENTENCE_CHOICE:1", "cat");
-        answers.put("SENTENCE_FILL:1", " ApPl ");
-
-        EngChallengeResultVo result = calculateResult(service, definitions, answers);
-        assertEquals(3, result.getCorrectCount(), "四类题中应有三题正确");
-        assertEquals(4, result.getTotalCount(), "计分总数应包含新增句子选词题");
-        assertEquals(75, result.getScore(), "句子选词答错后四题应得到七十五分");
-        assertEquals(Boolean.TRUE, result.getPassed(), "七十五分应达到六十分通关线");
-    }
-
-    /**
-     * 验证缺失、重复和未知题目标识仍按既有提交规则拒绝。
-     *
-     * @throws Exception 反射调用失败时抛出异常
-     */
-    private void shouldRejectMissingDuplicateAndUnknownAnswers() throws Exception {
-        EngStudyServiceImpl service = createService(createWords(), createSentences());
-        List<?> allDefinitions = buildDefinitions(service);
-        List<Object> definitions = List.of(
-                findDefinition(allDefinitions, "WORD_TO_CN:1"),
-                findDefinition(allDefinitions, "CN_TO_WORD:1"));
-
-        assertServiceException(service, List.of(answer("WORD_TO_CN:1", "苹果")), definitions,
-                "缺失题目答案应被拒绝");
-        assertServiceException(service,
-                List.of(answer("WORD_TO_CN:1", "苹果"), answer("WORD_TO_CN:1", "苹果")), definitions,
-                "重复题目答案应被拒绝");
-        assertServiceException(service,
-                List.of(answer("WORD_TO_CN:1", "苹果"), answer("UNKNOWN:1", "apple")), definitions,
-                "未知题目标识应被拒绝");
-    }
-
-    /**
-     * 验证同一单词四类题存在多题答错时仍只累计一次错词，且不会在同轮标记为已掌握。
-     *
-     * @throws Exception 反射调用失败时抛出异常
-     */
-    private void shouldUpdateWrongWordOnceWhenAnyQuestionIsWrong() throws Exception {
-        Map<String, Integer> calls = new HashMap<>();
-        EngStudyServiceImpl service = createService(createWords(), createSentences(), wrongWordMapper(calls, null));
-        List<?> definitions = appleDefinitions(buildDefinitions(service));
-        Map<String, String> answers = new HashMap<>();
-        answers.put("WORD_TO_CN:1", "错误答案");
-        answers.put("CN_TO_WORD:1", "apple");
-        answers.put("SENTENCE_CHOICE:1", "错误答案");
-        answers.put("SENTENCE_FILL:1", "appl");
-        EngChallengeResultVo result = calculateResult(service, definitions, answers);
-
-        updateWrongWords(service, definitions, result);
-
-        assertEquals(1, calls.getOrDefault("upsertWrongWord", 0), "同一单词同轮存在错题时只应累计一次");
-        assertEquals(0, calls.getOrDefault("markMasteredByUserArticleWord", 0),
-                "同轮存在错题时不得标记为已掌握");
-    }
-
-    /**
-     * 验证同一单词四类题全部答对且已有未掌握错词时只标记一次掌握，不新增错误次数。
-     *
-     * @throws Exception 反射调用失败时抛出异常
-     */
-    private void shouldMarkExistingWrongWordWhenAllQuestionsAreCorrect() throws Exception {
-        Map<String, Integer> calls = new HashMap<>();
-        EngWrongWord existing = new EngWrongWord();
-        existing.setMastered(0);
-        EngStudyServiceImpl service = createService(createWords(), createSentences(), wrongWordMapper(calls, existing));
-        List<?> definitions = appleDefinitions(buildDefinitions(service));
-        Map<String, String> answers = new HashMap<>();
-        answers.put("WORD_TO_CN:1", "苹果");
-        answers.put("CN_TO_WORD:1", "apple");
-        answers.put("SENTENCE_CHOICE:1", "apple");
-        answers.put("SENTENCE_FILL:1", "appl");
-        EngChallengeResultVo result = calculateResult(service, definitions, answers);
-
-        updateWrongWords(service, definitions, result);
-
-        assertEquals(1, calls.getOrDefault("markMasteredByUserArticleWord", 0),
-                "全部答对时已有未掌握错词只应标记一次");
-        assertEquals(0, calls.getOrDefault("upsertWrongWord", 0), "全部答对时不得新增错误次数");
-    }
-
-    /** 验证挑战接口返回题目范围内的最多五个单词。 */
-    private void shouldExposeAtMostFiveChallengeWords() {
-        List<EngWordVo> words = createSixWords();
-        EngStudyServiceImpl service = createService(words, List.of());
-        setTestLoginUser();
-        try {
-            EngChallengeVo challenge = service.getChallenge(ARTICLE_ID);
-            assertEquals(Boolean.FALSE, challenge.getDailyCompleted(), "存在本轮单词时 GET 应返回未完成");
-            assertEquals(5, challenge.getWords().size(), "每轮挑战最多只能返回五个单词");
-            assertEquals(List.of(1L, 2L, 3L, 4L, 5L), wordIds(challenge.getWords()),
-                    "挑战单词应保留单词服务返回的熟悉度顺序");
-            Set<Long> questionWordIds = new HashSet<>();
-            for (EngChallengeQuestionVo question : challenge.getQuestions()) {
-                questionWordIds.add(Long.valueOf(question.getQuestionId().substring(question.getQuestionId().indexOf(':') + 1)));
-            }
-            assertEquals(new HashSet<>(List.of(1L, 2L, 3L, 4L, 5L)), questionWordIds,
-                    "题目只能围绕本轮返回的五个单词生成");
-            EngChallengeVo completed = createService(List.of(), List.of()).getChallenge(ARTICLE_ID);
-            assertEquals(Boolean.TRUE, completed.getDailyCompleted(), "没有下一轮单词时 GET 应返回今日完成");
-        } finally {
-            SecurityContextHolder.clearContext();
-        }
-    }
-
-    /** 验证完整五词提交后每词只更新一次熟悉度，全对加一、任一错减一。 */
-    private void shouldSubmitFiveWordsAndUpdateFamiliarityOncePerWord() throws Exception {
-        List<EngWordVo> words = createSixWords();
-        Map<String, List<Integer>> deltas = new HashMap<>();
-        EngStudyServiceImpl service = createFamiliarityService(words, List.of(), deltas);
-        List<?> definitions = buildDefinitions(service);
-        List<EngChallengeAnswerDto> answers = new ArrayList<>();
-        for (Object definition : definitions) {
-            String questionId = (String) definitionValue(definition, "questionId");
-            String correctAnswer = (String) definitionValue(definition, "correctAnswer");
-            answers.add(answer(questionId, "WORD_TO_CN:2".equals(questionId) ? "错误答案" : correctAnswer));
-        }
-        EngChallengeSubmitDto request = new EngChallengeSubmitDto();
-        request.setArticleId(ARTICLE_ID);
-        request.setAnswers(answers);
-        setTestLoginUser();
-        try {
-            EngChallengeResultVo result = service.submitChallenge(request);
-            assertEquals(Boolean.FALSE, result.getDailyCompleted(), "仍有下一轮单词时 POST 应返回未完成");
-        } finally {
-            SecurityContextHolder.clearContext();
-        }
-        assertEquals(List.of(1), deltas.get("word1"), "全部题型答对的单词应且只应加一次熟悉度");
-        assertEquals(List.of(-1), deltas.get("word2"), "任一题答错的单词应且只应减一次熟悉度");
-        assertEquals(List.of(1), deltas.get("word3"), "其他全对单词应加一次熟悉度");
-        assertEquals(List.of(1), deltas.get("word4"), "其他全对单词应加一次熟悉度");
-        assertEquals(List.of(1), deltas.get("word5"), "其他全对单词应加一次熟悉度");
-        assertEquals(null, deltas.get("word6"), "本轮未选中单词不得更新熟悉度");
-    }
-
-    /** 最后一轮提交后重新查询队列为空时，POST 应返回今日完成。 */
-    private void shouldReportDailyCompletedAfterFinalSubmission() {
-        EngWordVo apple = word(1L, "apple", "苹果", null);
-        AtomicLong queueCalls = new AtomicLong();
-        IEngWordService wordService = (IEngWordService) Proxy.newProxyInstance(IEngWordService.class.getClassLoader(),
-                new Class<?>[] {IEngWordService.class}, (proxy, method, args) -> {
-                    if ("selectNextReviewWords".equals(method.getName())) {
-                        return queueCalls.getAndIncrement() == 0 ? List.of(apple) : List.of();
+        private EngUserWordProgressMapper wordProgressMapper()
+        {
+            return proxy(EngUserWordProgressMapper.class, (method, args) -> {
+                if ("selectByUserAndWord".equals(method) || "selectForUpdate".equals(method)) return progress.get(args[1]);
+                if ("ensureProgress".equals(method))
+                {
+                    EngUserWordProgress item = (EngUserWordProgress) args[0];
+                    progress.computeIfAbsent(item.getWordId(), id -> progress(id, item.getFirstArticleId(), item.getFirstLevelNo(), 0));
+                    return 1;
+                }
+                if ("updateProgress".equals(method)) { progress.put(((EngUserWordProgress) args[0]).getWordId(), (EngUserWordProgress) args[0]); return 1; }
+                if ("selectLearnedWordIds".equals(method))
+                {
+                    @SuppressWarnings("unchecked") List<Long> ids = (List<Long>) args[1];
+                    return ids.stream().filter(id -> progress.containsKey(id) && progress.get(id).getLearned() == 1).toList();
+                }
+                if ("selectReviewWords".equals(method))
+                {
+                    List<EngReviewWordVo> result = new ArrayList<>();
+                    for (EngUserWordProgress item : progress.values()) if (item.getLearned() == 1)
+                    {
+                        EngReviewWordVo view = new EngReviewWordVo(); view.setWordId(item.getWordId());
+                        view.setWordName(item.getWordId() == 1L ? "apple" : "cat");
+                        view.setAcceptation(item.getWordId() == 1L ? "苹果" : "猫");
+                        view.setHighestStars(item.getHighestStars()); view.setLatestStars(item.getLatestStars());
+                        view.setLatestTestTime(item.getLatestTestTime()); view.setSourceArticleNames("测试文章"); result.add(view);
                     }
-                    return defaultValue(method.getReturnType());
-                });
-        EngArticle article = new EngArticle();
-        article.setId(ARTICLE_ID);
-        EngStudyServiceImpl service = new EngStudyServiceImpl(
-                proxy(IEngArticleService.class, Map.of("selectEngArticleById", article)),
-                proxy(IEngSentenceService.class, Map.of("selectEngSentenceList", List.of())),
-                proxy(IEngIcibaSentenceService.class, Map.of()), wordService,
-                proxy(EngStudyRecordMapper.class, Map.of()), proxy(EngCoinWalletMapper.class, Map.of()),
-                proxy(EngArticleProgressMapper.class, Map.of()), proxy(EngWrongWordMapper.class, Map.of()),
-                dailyTestWordMapper());
-        setTestLoginUser();
-        try {
-            EngChallengeResultVo result = service.submitChallenge(allCorrectTwoQuestionRequest());
-            assertEquals(Boolean.TRUE, result.getDailyCompleted(), "最后一轮提交后 POST 应返回今日完成");
-        } finally {
-            SecurityContextHolder.clearContext();
+                    return result;
+                }
+                return defaultValue(returnType(EngUserWordProgressMapper.class, method));
+            });
+        }
+
+        private EngArticleLevelProgressMapper levelProgressMapper()
+        {
+            return proxy(EngArticleLevelProgressMapper.class, (method, args) -> {
+                if ("selectByUserAndArticle".equals(method)) return new ArrayList<>(levelProgress.values());
+                if ("countAnyProgress".equals(method)) return 0;
+                if ("upsertBest".equals(method) || "upsertKnown".equals(method))
+                {
+                    EngArticleLevelProgress item = (EngArticleLevelProgress) args[0];
+                    EngArticleLevelProgress stored = levelProgress.computeIfAbsent(item.getLevelNo(), ignored -> item);
+                    stored.setBestScore(Math.max(intValue(stored.getBestScore()), intValue(item.getBestScore())));
+                    stored.setHighestStars(Math.max(intValue(stored.getHighestStars()), intValue(item.getHighestStars())));
+                    stored.setCompletedByKnownWords(Math.max(intValue(stored.getCompletedByKnownWords()),
+                            intValue(item.getCompletedByKnownWords())));
+                    lockOrder.add("levelProgress"); return 1;
+                }
+                return defaultValue(returnType(EngArticleLevelProgressMapper.class, method));
+            });
+        }
+
+        private EngArticleWordRelMapper articleWordMapper()
+        {
+            return proxy(EngArticleWordRelMapper.class, (method, args) -> {
+                if ("selectMaxLevelNo".equals(method)) return levelWords.keySet().stream().max(Integer::compareTo).orElse(0);
+                if ("lockArticle".equals(method)) { lockOrder.add("articleLock"); return ARTICLE_ID; }
+                if ("selectByArticleAndLevel".equals(method))
+                {
+                    Integer levelNo = (Integer) args[1];
+                    return levelWords.getOrDefault(levelNo, List.of()).stream().map(name -> {
+                        EngArticleWordRel relation = new EngArticleWordRel(); relation.setWordName(name);
+                        relation.setLevelNo(levelNo); return relation;
+                    }).toList();
+                }
+                return defaultValue(returnType(EngArticleWordRelMapper.class, method));
+            });
         }
     }
 
-    /** 验证文章超过五词时拒绝少词提交和跨文章单词。 */
-    private void shouldRejectIncompleteAndCrossArticleWordSets() {
-        List<EngWordVo> words = createSixWords();
-        EngStudyServiceImpl service = createService(words, List.of());
-        EngChallengeSubmitDto incomplete = new EngChallengeSubmitDto();
-        incomplete.setArticleId(ARTICLE_ID);
-        incomplete.setAnswers(List.of(answer("WORD_TO_CN:1", "释义1"), answer("CN_TO_WORD:1", "word1")));
-        assertSubmitServiceException(service, incomplete, "文章超过五词时少词提交应被拒绝");
-
-        EngChallengeSubmitDto crossArticle = new EngChallengeSubmitDto();
-        crossArticle.setArticleId(ARTICLE_ID);
-        crossArticle.setAnswers(List.of(answer("WORD_TO_CN:999", "越界"), answer("CN_TO_WORD:999", "other")));
-        assertSubmitServiceException(service, crossArticle, "跨文章单词题目应被拒绝");
+    private static EngWordVo word(Long id, String name, String meaning)
+    {
+        EngWordVo word = new EngWordVo(); word.setId(id); word.setWordName(name); word.setAcceptation(meaning); return word;
     }
 
-    /** 验证全部奖励分档边界只增加当前最高档奖励，不累计较低档奖励。 */
-    private void shouldApplyCoinRewardBoundariesWithoutStackingBonuses() throws Exception {
-        EngStudyServiceImpl service = createService(createWords(), createSentences());
-        assertEquals(59L, calculateCoinReward(service, 59, 100, 59), "五十九分不应获得额外奖励");
-        assertEquals(62L, calculateCoinReward(service, 60, 100, 60), "六十分应额外奖励两枚金币");
-        assertEquals(81L, calculateCoinReward(service, 79, 100, 79), "七十九分仍应只额外奖励两枚金币");
-        assertEquals(83L, calculateCoinReward(service, 80, 100, 80), "八十分应额外奖励三枚金币");
-        assertEquals(92L, calculateCoinReward(service, 89, 100, 89), "八十九分仍应只额外奖励三枚金币");
-        assertEquals(95L, calculateCoinReward(service, 90, 100, 90), "九十分应额外奖励五枚金币");
-        assertEquals(104L, calculateCoinReward(service, 99, 100, 99), "九十九分仍应只额外奖励五枚金币");
-        assertEquals(104L, calculateCoinReward(service, 99, 100, 100), "未全部答对时不得获得十五枚金币");
-        assertEquals(115L, calculateCoinReward(service, 100, 100, 100), "全部答对时应只额外奖励十五枚金币");
+    private static EngWord toWord(EngWordVo source)
+    {
+        EngWord word = new EngWord(); word.setId(source.getId()); word.setWordName(source.getWordName());
+        word.setAcceptation(source.getAcceptation()); return word;
     }
 
-    /** 验证每次合法完成整轮提交都会写入本轮奖励并原子增加钱包。 */
-    private void shouldCreditCoinsForEveryLegalSubmission() throws Exception {
-        List<EngStudyRecord> records = new ArrayList<>();
-        AtomicLong balance = new AtomicLong();
-        EngStudyServiceImpl service = createCoinSubmissionService(records, balance, new HashMap<>());
-        EngChallengeSubmitDto request = allCorrectTwoQuestionRequest();
-
-        setTestLoginUser();
-        try {
-            EngChallengeResultVo first = service.submitChallenge(request);
-            EngChallengeResultVo second = service.submitChallenge(request);
-            assertEquals(17L, first.getCoinReward(), "两题全对满分应获得两枚基础金币和十五枚额外金币");
-            assertEquals(17L, first.getCoinBalance(), "首次合法提交后余额应为十七");
-            assertEquals(17L, second.getCoinReward(), "重复完成同一闯关仍应获得完整奖励");
-            assertEquals(34L, second.getCoinBalance(), "第二次合法提交应继续累加余额");
-        } finally {
-            SecurityContextHolder.clearContext();
-        }
-
-        assertEquals(2, records.size(), "每次合法提交都应保存一条学习记录");
-        assertEquals(17L, records.get(0).getCoinReward(), "学习记录应保存首次实际金币奖励");
-        assertEquals(17L, records.get(1).getCoinReward(), "学习记录应保存重复提交实际金币奖励");
+    private static void setTestLoginUser()
+    {
+        SysUser user = new SysUser(); user.setUserId(USER_ID); user.setUserName("tester");
+        LoginUser loginUser = new LoginUser(); loginUser.setUser(user);
+        SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(loginUser, null, List.of()));
     }
 
-    /** 验证全错提交仍保存零奖励记录，但不创建或更新钱包。 */
-    private void shouldKeepWalletUnchangedForZeroReward() {
-        List<EngStudyRecord> records = new ArrayList<>();
-        AtomicLong balance = new AtomicLong(7L);
-        Map<String, Integer> walletCalls = new HashMap<>();
-        EngStudyServiceImpl service = createCoinSubmissionService(records, balance, walletCalls);
-        EngChallengeSubmitDto request = new EngChallengeSubmitDto();
-        request.setArticleId(ARTICLE_ID);
-        request.setAnswers(List.of(
-                answer("WORD_TO_CN:1", "错误释义"), answer("CN_TO_WORD:1", "wrong")));
-
-        setTestLoginUser();
-        try {
-            EngChallengeResultVo result = service.submitChallenge(request);
-            assertEquals(0L, result.getCoinReward(), "全错提交金币奖励应为零");
-            assertEquals(7L, result.getCoinBalance(), "零奖励提交不得改变已有钱包余额");
-        } finally {
-            SecurityContextHolder.clearContext();
-        }
-
-        assertEquals(1, records.size(), "全错合法提交仍应保存学习记录");
-        assertEquals(0L, records.get(0).getCoinReward(), "全错学习记录应保存零奖励");
-        assertEquals(0, walletCalls.getOrDefault("increaseCoinBalance", 0), "零奖励不得写入钱包");
-    }
-
-    /** 验证即时判题和非法整轮提交都不会触发金币入账。 */
-    private void shouldNotCreditCoinsForImmediateCheckOrInvalidSubmission() {
-        Map<String, Integer> calls = new HashMap<>();
-        EngStudyServiceImpl service = createService(createWords(), createSentences(), calls);
-
-        service.checkChallengeAnswer(checkRequest(ARTICLE_ID, "WORD_TO_CN:1", "苹果"));
-        EngChallengeSubmitDto invalid = new EngChallengeSubmitDto();
-        invalid.setArticleId(ARTICLE_ID);
-        invalid.setAnswers(List.of(answer("WORD_TO_CN:1", "苹果")));
-        assertSubmitServiceException(service, invalid, "答案缺失的非法提交应被拒绝");
-
-        assertEquals(0, calls.getOrDefault("increaseCoinBalance", 0), "即时判题和非法提交不得增加金币");
-        assertEquals(0, calls.getOrDefault("selectCoinBalance", 0), "即时判题和非法提交不得访问钱包余额");
-    }
-
-    /** 创建仅含一个单词两道选择题、可观察金币入账的提交服务。 */
-    private EngStudyServiceImpl createCoinSubmissionService(List<EngStudyRecord> records, AtomicLong balance,
-            Map<String, Integer> walletCalls) {
-        setTestLoginUser();
-        EngWordVo apple = word(1L, "apple", "苹果", null);
-        EngStudyRecordMapper recordMapper = (EngStudyRecordMapper) Proxy.newProxyInstance(
-                EngStudyRecordMapper.class.getClassLoader(), new Class<?>[] {EngStudyRecordMapper.class},
-                (proxy, method, args) -> {
-                    if ("insertEngStudyRecord".equals(method.getName())) {
-                        records.add((EngStudyRecord) args[0]);
-                        return 1;
-                    }
-                    return defaultValue(method.getReturnType());
-                });
-        EngCoinWalletMapper walletMapper = (EngCoinWalletMapper) Proxy.newProxyInstance(
-                EngCoinWalletMapper.class.getClassLoader(), new Class<?>[] {EngCoinWalletMapper.class},
-                (proxy, method, args) -> {
-                    walletCalls.merge(method.getName(), 1, Integer::sum);
-                    if ("increaseCoinBalance".equals(method.getName())) {
-                        balance.addAndGet((Long) args[1]);
-                        return 1;
-                    }
-                    if ("selectCoinBalance".equals(method.getName())) {
-                        return balance.get();
-                    }
-                    return defaultValue(method.getReturnType());
-                });
-        EngArticle article = new EngArticle();
-        article.setId(ARTICLE_ID);
-        IEngWordService wordService = proxy(IEngWordService.class, Map.of(
-                "selectWordListByArticle", List.of(apple),
-                "selectLowestFamiliarityWordsByArticle", List.of(apple),
-                "selectNextReviewWords", List.of(apple)));
-        return new EngStudyServiceImpl(proxy(IEngArticleService.class, Map.of("selectEngArticleById", article)),
-                proxy(IEngSentenceService.class, Map.of("selectEngSentenceList", List.of())),
-                proxy(IEngIcibaSentenceService.class, Map.of()), wordService, recordMapper, walletMapper,
-                proxy(EngArticleProgressMapper.class, Map.of()), proxy(EngWrongWordMapper.class, Map.of()),
-                dailyTestWordMapper());
-    }
-
-    /** 构造一个单词两道选择题全部答对的完整提交。 */
-    private EngChallengeSubmitDto allCorrectTwoQuestionRequest() {
-        EngChallengeSubmitDto request = new EngChallengeSubmitDto();
-        request.setArticleId(ARTICLE_ID);
-        request.setAnswers(List.of(
-                answer("WORD_TO_CN:1", "苹果"), answer("CN_TO_WORD:1", "apple")));
-        return request;
-    }
-
-    /**
-     * 创建包含测试数据服务桩的学习业务；words 为文章单词，sentences 为文章句子，返回待测试服务。
-     */
-    private EngStudyServiceImpl createService(List<EngWordVo> words, List<EngSentence> sentences) {
-        return createService(words, sentences, List.of());
-    }
-
-    /** 创建包含指定词典例句的学习业务测试桩。 */
-    private EngStudyServiceImpl createService(List<EngWordVo> words, List<EngSentence> sentences,
-            List<EngIcibaSentence> dictionarySentences) {
-        return createService(words, sentences, dictionarySentences, proxy(EngWrongWordMapper.class, Map.of()));
-    }
-
-    /**
-     * 创建包含指定错词 Mapper 的学习业务；words 为文章单词、sentences 为文章句子、wrongWordMapper 为错词桩。
-     */
-    private EngStudyServiceImpl createService(List<EngWordVo> words, List<EngSentence> sentences,
-            EngWrongWordMapper wrongWordMapper) {
-        return createService(words, sentences, List.of(), wrongWordMapper);
-    }
-
-    /** 创建包含指定词典例句和错词 Mapper 的学习业务测试桩。 */
-    private EngStudyServiceImpl createService(List<EngWordVo> words, List<EngSentence> sentences,
-            List<EngIcibaSentence> dictionarySentences, EngWrongWordMapper wrongWordMapper) {
-        setTestLoginUser();
-        IEngWordService wordService = proxy(IEngWordService.class, Map.of(
-                "selectWordListByArticle", words, "selectLowestFamiliarityWordsByArticle", words,
-                "selectNextReviewWords", words.subList(0, Math.min(5, words.size()))));
-        IEngSentenceService sentenceService = proxy(IEngSentenceService.class,
-                Map.of("selectEngSentenceList", sentences));
-        IEngIcibaSentenceService dictionarySentenceService = proxy(IEngIcibaSentenceService.class,
-                Map.of("selectEngIcibaSentenceList", dictionarySentences));
-        EngArticle article = new EngArticle();
-        article.setId(ARTICLE_ID);
-        return new EngStudyServiceImpl(proxy(IEngArticleService.class, Map.of("selectEngArticleById", article)),
-                sentenceService, dictionarySentenceService, wordService,
-                proxy(EngStudyRecordMapper.class, Map.of()), proxy(EngCoinWalletMapper.class, Map.of()),
-                proxy(EngArticleProgressMapper.class, Map.of()),
-                wrongWordMapper, dailyTestWordMapper());
-    }
-
-    /**
-     * 创建可记录数据库 Mapper 调用次数的学习业务；words 为文章单词、sentences 为文章句子、calls 为调用计数。
-     */
-    private EngStudyServiceImpl createService(List<EngWordVo> words, List<EngSentence> sentences,
-            Map<String, Integer> calls) {
-        setTestLoginUser();
-        IEngWordService wordService = (IEngWordService) Proxy.newProxyInstance(IEngWordService.class.getClassLoader(),
-                new Class<?>[] {IEngWordService.class}, (proxy, method, args) -> {
-                    calls.merge(method.getName(), 1, Integer::sum);
-                    if ("selectWordListByArticle".equals(method.getName())
-                            || "selectLowestFamiliarityWordsByArticle".equals(method.getName())
-                            || "selectNextReviewWords".equals(method.getName())) {
-                        return words;
-                    }
-                    return defaultValue(method.getReturnType());
-                });
-        IEngSentenceService sentenceService = proxy(IEngSentenceService.class,
-                Map.of("selectEngSentenceList", sentences));
-        EngArticle article = new EngArticle();
-        article.setId(ARTICLE_ID);
-        return new EngStudyServiceImpl(proxy(IEngArticleService.class, Map.of("selectEngArticleById", article)),
-                sentenceService, proxy(IEngIcibaSentenceService.class, Map.of()), wordService,
-                countingProxy(EngStudyRecordMapper.class, calls),
-                countingProxy(EngCoinWalletMapper.class, calls),
-                countingProxy(EngArticleProgressMapper.class, calls), countingProxy(EngWrongWordMapper.class, calls),
-                dailyTestWordMapper());
-    }
-
-    /**
-     * 创建可记录每个单词熟悉度增量的学习业务；words 为文章全量单词，deltas 用于保存调用。
-     */
-    private EngStudyServiceImpl createFamiliarityService(List<EngWordVo> words, List<EngSentence> sentences,
-            Map<String, List<Integer>> deltas) {
-        setTestLoginUser();
-        IEngWordService wordService = (IEngWordService) Proxy.newProxyInstance(IEngWordService.class.getClassLoader(),
-                new Class<?>[] {IEngWordService.class}, (proxy, method, args) -> {
-                    if ("selectWordListByArticle".equals(method.getName())) {
-                        return words;
-                    }
-                    if ("selectLowestFamiliarityWordsByArticle".equals(method.getName())) {
-                        return words.subList(0, Math.min(5, words.size()));
-                    }
-                    if ("selectNextReviewWords".equals(method.getName())) {
-                        return words.subList(0, Math.min(5, words.size()));
-                    }
-                    if ("updateFamiliarity".equals(method.getName())) {
-                        deltas.computeIfAbsent((String) args[0], key -> new ArrayList<>()).add((Integer) args[1]);
-                    }
-                    return defaultValue(method.getReturnType());
-                });
-        EngArticle article = new EngArticle();
-        article.setId(ARTICLE_ID);
-        return new EngStudyServiceImpl(proxy(IEngArticleService.class, Map.of("selectEngArticleById", article)),
-                proxy(IEngSentenceService.class, Map.of("selectEngSentenceList", sentences)),
-                proxy(IEngIcibaSentenceService.class, Map.of()), wordService,
-                proxy(EngStudyRecordMapper.class, Map.of()), proxy(EngCoinWalletMapper.class, Map.of()),
-                proxy(EngArticleProgressMapper.class, Map.of()),
-                proxy(EngWrongWordMapper.class, Map.of()), dailyTestWordMapper());
-    }
-
-    /** 不持久化完成记录的测试 Mapper。 */
-    private EngDailyTestWordMapper dailyTestWordMapper() {
-        return new EngDailyTestWordMapper() {
-            @Override
-            public List<Long> selectCompletedWordIds(Long userId, LocalDate studyDate) {
-                return List.of();
-            }
-
-            @Override
-            public int countNewWords(Long userId, Long articleId, LocalDate studyDate) {
-                return 0;
-            }
-
-            @Override
-            public int insertDailyTestWord(EngDailyTestWord dailyTestWord) {
-                return 1;
-            }
-
-            @Override
-            public int bindStudyRecord(Long userId, Long articleId, LocalDate studyDate,
-                    List<Long> wordIds, Long studyRecordId) {
-                return wordIds.size();
-            }
-        };
-    }
-
-    /**
-     * 创建记录全部方法调用次数的接口代理；type 为接口类型、calls 为调用计数，返回代理实例。
-     */
     @SuppressWarnings("unchecked")
-    private <T> T countingProxy(Class<T> type, Map<String, Integer> calls) {
-        return (T) Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[] {type}, (proxy, method, args) -> {
-            calls.merge(method.getName(), 1, Integer::sum);
-            return defaultValue(method.getReturnType());
-        });
-    }
-
-    /**
-     * 创建记录错词 Mapper 调用次数的动态代理；calls 为调用计数，existing 为查询时返回的已有错词。
-     */
-    private EngWrongWordMapper wrongWordMapper(Map<String, Integer> calls, EngWrongWord existing) {
-        return (EngWrongWordMapper) Proxy.newProxyInstance(EngWrongWordMapper.class.getClassLoader(),
-                new Class<?>[] {EngWrongWordMapper.class}, (proxy, method, args) -> {
-                    calls.merge(method.getName(), 1, Integer::sum);
-                    if ("selectByUserArticleWord".equals(method.getName())) {
-                        return existing;
-                    }
-                    return defaultValue(method.getReturnType());
-                });
-    }
-
-    /**
-     * 使用固定方法返回值创建接口动态代理；type 为接口类型，results 为方法名到返回值映射，返回代理实例。
-     */
-    @SuppressWarnings("unchecked")
-    private <T> T proxy(Class<T> type, Map<String, Object> results) {
+    private static <T> T proxy(Class<T> type, Invocation invocation)
+    {
         return (T) Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[] {type},
-                (proxy, method, args) -> results.getOrDefault(method.getName(), defaultValue(method.getReturnType())));
+                (proxy, method, args) -> invocation.invoke(method.getName(), args));
     }
 
-    /**
-     * 返回基本类型的动态代理默认值；type 为返回类型，返回对应零值，引用类型返回 null。
-     */
-    private Object defaultValue(Class<?> type) {
-        if (!type.isPrimitive()) {
-            return null;
-        }
-        if (type == boolean.class) {
-            return false;
-        }
-        if (type == char.class) {
-            return '\0';
-        }
-        if (type == long.class) {
-            return 0L;
-        }
-        if (type == double.class) {
-            return 0D;
-        }
-        if (type == float.class) {
-            return 0F;
-        }
-        if (type == byte.class) {
-            return (byte) 0;
-        }
-        if (type == short.class) {
-            return (short) 0;
-        }
+    private static Class<?> returnType(Class<?> type, String methodName)
+    {
+        for (var method : type.getMethods()) if (method.getName().equals(methodName)) return method.getReturnType();
+        return Object.class;
+    }
+
+    private static Object defaultValue(Class<?> type)
+    {
+        if (!type.isPrimitive()) return null;
+        if (type == boolean.class) return false;
+        if (type == long.class) return 0L;
         return 0;
     }
 
-    /** 构造文章测试单词并返回，其中无主键单词用于验证无效数据跳过。 */
-    private List<EngWordVo> createWords() {
-        List<EngWordVo> words = new ArrayList<>();
-        words.add(word(1L, "apple", "苹果", "https://audio.example/apple.mp3"));
-        words.add(word(2L, "cat", "猫", null));
-        words.add(word(3L, "app", "应用程序", null));
-        words.add(word(4L, "don't", "不要", null));
-        // 模拟文章单词关系查询返回同一个单词的重复行，正式逻辑应按主键保序去重。
-        words.add(word(1L, "apple", "苹果", "https://audio.example/apple.mp3"));
-        words.add(word(null, "invalid", "无效", null));
-        return words;
-    }
+    private static int intValue(Integer value) { return value == null ? 0 : value; }
 
-    /** 构造已按熟悉度、单词名和主键排序的六个文章单词。 */
-    private List<EngWordVo> createSixWords() {
-        List<EngWordVo> words = new ArrayList<>();
-        for (long id = 1; id <= 6; id++) {
-            EngWordVo word = word(id, "word" + id, "释义" + id, null);
-            word.setFamiliarity((int) id - 3);
-            words.add(word);
-        }
-        return words;
-    }
+    private static void assertTrue(boolean value, String message) { if (!value) throw new AssertionError(message); }
+    private static void assertEquals(Object expected, Object actual, String message)
+    { if (!Objects.equals(expected, actual)) throw new AssertionError(message + "，期望=" + expected + "，实际=" + actual); }
 
-    /** 按当前顺序提取单词主键。 */
-    private List<Long> wordIds(List<EngWordVo> words) {
-        List<Long> ids = new ArrayList<>();
-        for (EngWordVo word : words) {
-            ids.add(word.getId());
-        }
-        return ids;
-    }
-
-    /** 构造文章测试句子并返回，覆盖禁用标记、子串、大小写及首句选择。 */
-    private List<EngSentence> createSentences() {
-        return List.of(
-                sentence(1L, "[NT] Apple must be skipped.", "应跳过。"),
-                sentence(2L, "Pineapple tastes sweet.", "菠萝很甜。"),
-                sentence(3L, "APPLE falls from the tree.", "一个苹果从树上掉下来。"),
-                sentence(4L, "apple appears in the second valid sentence.", "第二个有效句子。"),
-                sentence(5L, "A catapult moves.", "投石器移动。"),
-                sentence(6L, "A CAT sleeps.", "一只猫在睡觉。"),
-                sentence(7L, "Don't stop learning.", "不要停止学习。"));
-    }
-
-    /** 根据输入字段构造单词；id 为主键、name 为英文、acceptation 为中文、audioUrl 为音频地址。 */
-    private EngWordVo word(Long id, String name, String acceptation, String audioUrl) {
-        EngWordVo word = new EngWordVo();
-        word.setId(id);
-        word.setWordName(name);
-        word.setAcceptation(acceptation);
-        word.setPhMp3(audioUrl);
-        word.setFamiliarity(7);
-        return word;
-    }
-
-    /** 根据输入字段构造句子；id 为主键、content 为英文内容、acceptation 为中文释义。 */
-    private EngSentence sentence(Long id, String content, String acceptation) {
-        EngSentence sentence = new EngSentence();
-        sentence.setId(id);
-        sentence.setArticleId(ARTICLE_ID);
-        sentence.setContent(content);
-        sentence.setAcceptation(acceptation);
-        return sentence;
-    }
-
-    /** 根据输入字段构造词典例句。 */
-    private EngIcibaSentence dictionarySentence(Long id, String orig, String trans) {
-        EngIcibaSentence sentence = new EngIcibaSentence();
-        sentence.setId(id);
-        sentence.setWordId(1L);
-        sentence.setOrig(orig);
-        sentence.setTrans(trans);
-        return sentence;
-    }
-
-    /** 调用私有题目构建方法；service 为待测试服务，返回内部标准题目列表。 */
-    @SuppressWarnings("unchecked")
-    private List<?> buildDefinitions(EngStudyServiceImpl service) throws Exception {
-        Method method = EngStudyServiceImpl.class.getDeclaredMethod("buildDefinitions", Long.class);
-        method.setAccessible(true);
-        return (List<?>) method.invoke(service, ARTICLE_ID);
-    }
-
-    /**
-     * 按内部标准题目的生成顺序提取题目标识；definitions 为标准题目集合，返回有序题目标识。
-     *
-     * @throws Exception 反射读取题目标识失败时抛出异常
-     */
-    private List<String> definitionQuestionIds(List<?> definitions) throws Exception {
-        List<String> questionIds = new ArrayList<>();
-        for (Object definition : definitions) {
-            questionIds.add((String) definitionValue(definition, "questionId"));
-        }
-        return questionIds;
-    }
-
-    /**
-     * 将内部标准题目转换为按题目标识索引的对外内容快照；definitions 为标准题目集合，返回内容映射。
-     *
-     * @throws Exception 反射读取题目字段失败时抛出异常
-     */
-    private Map<String, List<Object>> definitionContents(List<?> definitions) throws Exception {
-        Map<String, List<Object>> contents = new HashMap<>();
-        for (Object definition : definitions) {
-            String questionId = (String) definitionValue(definition, "questionId");
-            List<Object> content = new ArrayList<>();
-            content.add(definitionValue(definition, "type"));
-            content.add(definitionValue(definition, "prompt"));
-            content.add(definitionValue(definition, "options"));
-            content.add(definitionValue(definition, "audioUrl"));
-            content.add(definitionValue(definition, "answerLength"));
-            contents.put(questionId, content);
-        }
-        return contents;
-    }
-
-    /**
-     * 提取对外题目当前排列中的题目标识；questions 为接口返回题目，返回有序题目标识。
-     */
-    private List<String> questionIds(List<EngChallengeQuestionVo> questions) {
-        List<String> questionIds = new ArrayList<>();
-        for (EngChallengeQuestionVo question : questions) {
-            questionIds.add(question.getQuestionId());
-        }
-        return questionIds;
-    }
-
-    /**
-     * 提取对外题目除标识和位置之外的全部业务内容；question 为接口返回题目，返回内容快照。
-     */
-    private List<Object> questionContent(EngChallengeQuestionVo question) {
-        List<Object> content = new ArrayList<>();
-        content.add(question.getType());
-        content.add(question.getPrompt());
-        content.add(question.getOptions());
-        content.add(question.getAudioUrl());
-        content.add(question.getAnswerLength());
-        return content;
-    }
-
-    /**
-     * 为公开挑战接口设置固定测试登录用户；该方法无输入输出，认证信息由调用方在场景结束后清理。
-     */
-    private void setTestLoginUser() {
-        SysUser user = new SysUser();
-        user.setUserName("tester");
-        LoginUser loginUser = new LoginUser(20L, 30L, user, Set.of());
-        UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
-                loginUser, null, loginUser.getAuthorities());
-        SecurityContextHolder.getContext().setAuthentication(authentication);
-    }
-
-    /**
-     * 调用私有计分方法；service 为待测试服务、definitions 为题目定义、answers 为答案，返回计分结果。
-     */
-    private EngChallengeResultVo calculateResult(EngStudyServiceImpl service, List<?> definitions,
-            Map<String, String> answers) throws Exception {
-        Method method = EngStudyServiceImpl.class.getDeclaredMethod("calculateResult", List.class, Map.class);
-        method.setAccessible(true);
-        return (EngChallengeResultVo) method.invoke(service, definitions, answers);
-    }
-
-    /** 调用私有金币奖励计算方法，验证成绩分档边界。 */
-    private long calculateCoinReward(EngStudyServiceImpl service, int correctCount, int totalCount, int score)
-            throws Exception {
-        Method method = EngStudyServiceImpl.class.getDeclaredMethod("calculateCoinReward", int.class, int.class,
-                int.class);
-        method.setAccessible(true);
-        return (Long) method.invoke(service, correctCount, totalCount, score);
-    }
-
-    /** 从全部题目中筛选 apple 对应四类题；definitions 为全部定义，返回四题集合。 */
-    private List<?> appleDefinitions(List<?> definitions) throws Exception {
-        return List.of(
-                findDefinition(definitions, "WORD_TO_CN:1"),
-                findDefinition(definitions, "CN_TO_WORD:1"),
-                findDefinition(definitions, "SENTENCE_CHOICE:1"),
-                findDefinition(definitions, "SENTENCE_FILL:1"));
-    }
-
-    /**
-     * 调用私有错词维护方法；service 为服务、definitions 为题目、result 为判分结果。
-     */
-    private void updateWrongWords(EngStudyServiceImpl service, List<?> definitions, EngChallengeResultVo result)
-            throws Exception {
-        Method method = EngStudyServiceImpl.class.getDeclaredMethod("updateWrongWords", Long.class, String.class,
-                Long.class, List.class, EngChallengeResultVo.class);
-        method.setAccessible(true);
-        method.invoke(service, 20L, "tester", ARTICLE_ID, definitions, result);
-    }
-
-    /**
-     * 断言答案校验抛出业务异常；service 为待测试服务、answers 为提交答案、definitions 为标准题目。
-     */
-    private void assertServiceException(EngStudyServiceImpl service, List<EngChallengeAnswerDto> answers,
-            List<?> definitions, String message) throws Exception {
-        Method method = EngStudyServiceImpl.class.getDeclaredMethod("validateAnswers", List.class, List.class);
-        method.setAccessible(true);
-        try {
-            method.invoke(service, answers, definitions);
-            throw new AssertionError(message);
-        } catch (InvocationTargetException exception) {
-            assertTrue(exception.getCause() instanceof ServiceException, message);
-        }
-    }
-
-    /**
-     * 断言即时判题抛出业务异常；service 为待测试服务、request 为单题请求、message 为失败说明。
-     */
-    private void assertCheckServiceException(EngStudyServiceImpl service, EngChallengeCheckDto request,
-            String message) {
-        try {
-            service.checkChallengeAnswer(request);
-            throw new AssertionError(message);
-        } catch (ServiceException exception) {
-            // 捕获到业务异常即符合非法请求的预期。
-        }
-    }
-
-    /** 断言完整挑战提交抛出业务异常。 */
-    private void assertSubmitServiceException(EngStudyServiceImpl service, EngChallengeSubmitDto request,
-            String message) {
-        try {
-            service.submitChallenge(request);
-            throw new AssertionError(message);
-        } catch (ServiceException exception) {
-            // 捕获到业务异常即符合非法提交的预期。
-        }
-    }
-
-    /** 按题目标识查找内部定义；definitions 为定义集合、questionId 为标识，找不到时抛出断言异常。 */
-    private Object findDefinition(List<?> definitions, String questionId) throws Exception {
-        Object definition = findDefinitionOrNull(definitions, questionId);
-        if (definition == null) {
-            throw new AssertionError("未找到题目：" + questionId);
-        }
-        return definition;
-    }
-
-    /** 按题目标识查找内部定义；definitions 为定义集合、questionId 为标识，找不到时返回 null。 */
-    private Object findDefinitionOrNull(List<?> definitions, String questionId) throws Exception {
-        for (Object definition : definitions) {
-            if (questionId.equals(definitionValue(definition, "questionId"))) {
-                return definition;
-            }
-        }
-        return null;
-    }
-
-    /** 统计指定题目标识出现次数；definitions 为定义集合、questionId 为标识，返回出现次数。 */
-    private int countDefinitions(List<?> definitions, String questionId) throws Exception {
-        int count = 0;
-        for (Object definition : definitions) {
-            if (questionId.equals(definitionValue(definition, "questionId"))) {
-                count++;
-            }
-        }
-        return count;
-    }
-
-    /** 调用内部题目记录访问器；definition 为内部定义、name 为字段名，返回字段值。 */
-    private Object definitionValue(Object definition, String name) throws Exception {
-        Method method = definition.getClass().getDeclaredMethod(name);
-        method.setAccessible(true);
-        return method.invoke(definition);
-    }
-
-    /** 构造单题答案；questionId 为题目标识、value 为答案文本，返回提交对象。 */
-    private EngChallengeAnswerDto answer(String questionId, String value) {
-        EngChallengeAnswerDto answer = new EngChallengeAnswerDto();
-        answer.setQuestionId(questionId);
-        answer.setAnswer(value);
-        return answer;
-    }
-
-    /**
-     * 构造即时单题判题请求；articleId 为文章主键、questionId 为题目标识、value 为用户答案。
-     */
-    private EngChallengeCheckDto checkRequest(Long articleId, String questionId, String value) {
-        EngChallengeCheckDto request = new EngChallengeCheckDto();
-        request.setArticleId(articleId);
-        request.setQuestionId(questionId);
-        request.setAnswer(value);
-        return request;
-    }
-
-    /** 断言条件成立；condition 为判断结果、message 为失败说明。 */
-    private void assertTrue(boolean condition, String message) {
-        if (!condition) {
-            throw new AssertionError(message);
-        }
-    }
-
-    /** 断言期望值和实际值相等；expected 为期望、actual 为实际、message 为失败说明。 */
-    private void assertEquals(Object expected, Object actual, String message) {
-        if (expected == null ? actual != null : !expected.equals(actual)) {
-            throw new AssertionError(message + "，期望：" + expected + "，实际：" + actual);
-        }
-    }
+    @FunctionalInterface
+    private interface Invocation { Object invoke(String method, Object[] args); }
 }

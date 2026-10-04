@@ -14,10 +14,10 @@
           <img src="@/assets/shortcuts/书.svg" />{{ article.title }}
         </div>
         <div class="toolbar">
-          <a :href="'eng/article/test/' + article.id" class="btn">
+          <router-link :to="'/eng/study/levels/' + article.id" class="btn">
             <img src="@/assets/shortcuts/youxi.svg" />
-            开始测试
-          </a>
+            新词闯关
+          </router-link>
           <el-divider direction="vertical"></el-divider>
           <a :href="'eng/article-detail/' + article.id" class="btn">
             <img src="@/assets/shortcuts/编辑.svg" />

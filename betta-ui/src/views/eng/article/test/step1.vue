@@ -12,6 +12,7 @@
         </el-table-column>
       </el-table>
       <div class="toolbar">
+        <button class="block-button" @click="$emit('back')">返回地图</button>
         <button class="block-button" @click="startReview">
           {{ wordList.length ? '开始预习' : '直接测试' }}
         </button>

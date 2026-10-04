@@ -2,12 +2,10 @@ package com.betta.eng.service.impl;
 
 import com.betta.common.exception.ServiceException;
 import com.betta.eng.domain.EngArticleWordRel;
-import com.betta.eng.domain.EngDailyTestWord;
 import com.betta.eng.domain.EngIcibaSentence;
 import com.betta.eng.domain.EngWord;
 import com.betta.eng.domain.vo.EngWordVo;
 import com.betta.eng.mapper.EngWordMapper;
-import com.betta.eng.mapper.EngDailyTestWordMapper;
 import com.betta.eng.service.IEngArticleWordRelService;
 import com.betta.eng.service.IEngIcibaSentenceService;
 import com.betta.eng.service.IEngSentenceService;
@@ -18,17 +16,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
-import java.time.LocalDate;
-import java.util.Date;
-import com.betta.common.core.domain.entity.SysUser;
-import com.betta.common.core.domain.model.LoginUser;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.context.SecurityContextHolder;
 
 /** 单词数据库查询和正式词头关系处理的独立回归入口。 */
 public class EngWordServiceImplTest
@@ -43,197 +32,13 @@ public class EngWordServiceImplTest
         shouldNotTreatArticleRelationAsWordBookRelation();
         shouldUseCanonicalWordNameForArticleRelation();
         shouldKeepExistingWordBookRelationWithoutPenalty();
-        shouldPenalizeDuplicateArticleRelation();
+        shouldKeepDuplicateArticleRelationWithoutPenalty();
         shouldKeepExistingCanonicalRelationWhenInputUsesAlias();
         shouldDeduplicateCanonicalAndAliasDuringArticleSync();
         shouldSaveKnownBatchWordsAndReturnMissingWords();
         shouldReturnAllMissingBatchWordsWithoutWritingRelations();
-        shouldApplyDuplicateArticlePenaltyOncePerCanonicalWord();
-        shouldMixDailyReviewCategoriesInPriorityOrder();
-        shouldRespectDailyNewWordQuota();
-        shouldExcludeGloballyCompletedDailyWord();
-        shouldStopAfterTenNewWordRoundsAndResetNextDay();
-    }
-
-    /** 连续十轮完成五十个新词后第十一轮为空，次日则按已有成绩进入学习期。 */
-    private static void shouldStopAfterTenNewWordRoundsAndResetNextDay()
-    {
-        Date now = reviewNow();
-        LocalDate firstDay = LocalDate.of(2026, 10, 3);
-        LocalDate nextDay = firstDay.plusDays(1);
-        List<EngWordVo> words = new ArrayList<>();
-        for (long id = 1; id <= 55; id++)
-        {
-            words.add(reviewWord(id, id, "new" + id, 0, false, 0, now));
-        }
-        StatefulDailyMapper dailyMapper = new StatefulDailyMapper();
-        EngWordServiceImpl service = reviewService(words, dailyMapper);
-        for (int round = 0; round < 10; round++)
-        {
-            List<EngWordVo> selected = service.selectNextReviewWords(7L, 9L, firstDay, now);
-            assertEquals(5, selected.size(), "前十轮应各返回五个新词");
-            assertTrue(selected.stream().allMatch(word -> "NEW".equals(word.getReviewCategory())),
-                    "首日十轮应全部为新词");
-            dailyMapper.complete(firstDay, selected);
-        }
-        assertEquals(List.of(), service.selectNextReviewWords(7L, 9L, firstDay, now),
-                "首日完成五十个新词后第十一轮不应再返回新词");
-
-        for (int index = 0; index < 50; index++)
-        {
-            EngWordVo learned = words.get(index);
-            learned.setScoreExists(true);
-            learned.setBaseFamiliarity(1);
-            learned.setLastReviewTime(now);
-        }
-        List<EngWordVo> nextDayWords = service.selectNextReviewWords(7L, 9L, nextDay,
-                new Date(now.getTime() + 24L * 60L * 60L * 1000L));
-        assertEquals(5, nextDayWords.size(), "次日完成集合和新词计数应按日期重置");
-        assertTrue(nextDayWords.stream().allMatch(word -> "LEARNING".equals(word.getReviewCategory())),
-                "前日新词产生成绩后次日应优先进入学习期");
-    }
-
-    /** 每日队列应按学习期、到期复习和新词顺序混合补满五个。 */
-    private static void shouldMixDailyReviewCategoriesInPriorityOrder()
-    {
-        Date now = reviewNow();
-        List<EngWordVo> words = List.of(
-                reviewWord(1L, 3L, "review", 5, true, 20, now),
-                reviewWord(2L, 2L, "learning2", 2, true, 0, now),
-                reviewWord(3L, 1L, "learning1", 1, true, 0, now),
-                reviewWord(4L, 4L, "new1", 0, false, 0, now),
-                reviewWord(5L, 5L, "new2", 0, false, 0, now),
-                reviewWord(6L, 6L, "new3", 0, false, 0, now));
-        List<EngWordVo> result = reviewService(words, 0, List.of())
-                .selectNextReviewWords(7L, 9L, LocalDate.of(2026, 10, 3), now);
-        assertEquals(List.of(3L, 2L, 1L, 4L, 5L), reviewWordIds(result), "每日队列优先级错误");
-        assertEquals(List.of("LEARNING", "LEARNING", "REVIEW", "NEW", "NEW"),
-                result.stream().map(EngWordVo::getReviewCategory).toList(), "每日队列分类错误");
-    }
-
-    /** 新词达到五十个后不得继续加入，仅剩一个配额时也只能补一个。 */
-    private static void shouldRespectDailyNewWordQuota()
-    {
-        Date now = reviewNow();
-        List<EngWordVo> words = List.of(
-                reviewWord(1L, 1L, "learning", 1, true, 0, now),
-                reviewWord(2L, 2L, "new1", 0, false, 0, now),
-                reviewWord(3L, 3L, "new2", 0, false, 0, now));
-        assertEquals(List.of(1L), reviewWordIds(reviewService(words, 50, List.of())
-                .selectNextReviewWords(7L, 9L, LocalDate.of(2026, 10, 3), now)), "达到配额后不应返回新词");
-        assertEquals(List.of(1L, 2L), reviewWordIds(reviewService(words, 49, List.of())
-                .selectNextReviewWords(7L, 9L, LocalDate.of(2026, 10, 3), now)), "剩余配额必须准确限制新词数");
-    }
-
-    /** 同一单词在其他文章完成后当天全站不再出现。 */
-    private static void shouldExcludeGloballyCompletedDailyWord()
-    {
-        Date now = reviewNow();
-        List<EngWordVo> words = List.of(
-                reviewWord(1L, 1L, "done", 1, true, 0, now),
-                reviewWord(2L, 2L, "available", 1, true, 0, now));
-        assertEquals(List.of(2L), reviewWordIds(reviewService(words, 0, List.of(1L))
-                .selectNextReviewWords(7L, 99L, LocalDate.of(2026, 10, 3), now)), "已完成单词应全站日去重");
-    }
-
-    private static EngWordServiceImpl reviewService(List<EngWordVo> words, int newCount, List<Long> completed)
-    {
-        setTestLoginUser();
-        EngWordMapper wordMapper = (EngWordMapper) Proxy.newProxyInstance(EngWordMapper.class.getClassLoader(),
-                new Class<?>[] {EngWordMapper.class}, (proxy, method, args) ->
-                        "selectWordListByArticleId".equals(method.getName()) ? words : null);
-        EngDailyTestWordMapper dailyMapper = dailyTestWordMapper(newCount, completed);
-        return new EngWordServiceImpl(wordMapper, null, null, null, null, new DictUtils(wordMapper), dailyMapper);
-    }
-
-    private static EngWordServiceImpl reviewService(List<EngWordVo> words, EngDailyTestWordMapper dailyMapper)
-    {
-        setTestLoginUser();
-        EngWordMapper wordMapper = (EngWordMapper) Proxy.newProxyInstance(EngWordMapper.class.getClassLoader(),
-                new Class<?>[] {EngWordMapper.class}, (proxy, method, args) ->
-                        "selectWordListByArticleId".equals(method.getName()) ? words : null);
-        return new EngWordServiceImpl(wordMapper, null, null, null, null, new DictUtils(wordMapper), dailyMapper);
-    }
-
-    /** 按日期保存已完成集合和新词计数，用于连续多轮队列测试。 */
-    private static class StatefulDailyMapper implements EngDailyTestWordMapper
-    {
-        private final Map<LocalDate, Set<Long>> completedIds = new HashMap<>();
-        private final Map<LocalDate, Integer> newCounts = new HashMap<>();
-
-        private void complete(LocalDate studyDate, List<EngWordVo> words)
-        {
-            completedIds.computeIfAbsent(studyDate, key -> new HashSet<>())
-                    .addAll(words.stream().map(EngWordVo::getId).toList());
-            int newCount = (int) words.stream().filter(word -> "NEW".equals(word.getReviewCategory())).count();
-            newCounts.merge(studyDate, newCount, Integer::sum);
-        }
-
-        @Override
-        public List<Long> selectCompletedWordIds(Long userId, LocalDate studyDate)
-        {
-            return new ArrayList<>(completedIds.getOrDefault(studyDate, Set.of()));
-        }
-
-        @Override
-        public int countNewWords(Long userId, Long articleId, LocalDate studyDate)
-        {
-            return newCounts.getOrDefault(studyDate, 0);
-        }
-
-        @Override
-        public int insertDailyTestWord(EngDailyTestWord dailyTestWord) { return 1; }
-
-        @Override
-        public int bindStudyRecord(Long userId, Long articleId, LocalDate studyDate,
-                List<Long> wordIds, Long studyRecordId) { return wordIds.size(); }
-    }
-
-    private static EngDailyTestWordMapper dailyTestWordMapper(int newCount, List<Long> completed)
-    {
-        return new EngDailyTestWordMapper() {
-            @Override
-            public List<Long> selectCompletedWordIds(Long userId, LocalDate studyDate) { return completed; }
-            @Override
-            public int countNewWords(Long userId, Long articleId, LocalDate studyDate) { return newCount; }
-            @Override
-            public int insertDailyTestWord(EngDailyTestWord dailyTestWord) { return 1; }
-            @Override
-            public int bindStudyRecord(Long userId, Long articleId, LocalDate studyDate,
-                    List<Long> wordIds, Long studyRecordId) { return wordIds.size(); }
-        };
-    }
-
-    private static Date reviewNow() { return new Date(2_000L * 24L * 60L * 60L * 1000L); }
-
-    private static EngWordVo reviewWord(Long id, Long relId, String name, int familiarity,
-            boolean scoreExists, int elapsedDays, Date now)
-    {
-        EngWordVo word = new EngWordVo();
-        word.setId(id);
-        word.setRelId(relId);
-        word.setWordName(name);
-        word.setAcceptation("释义");
-        word.setBaseFamiliarity(familiarity);
-        word.setScoreExists(scoreExists);
-        word.setLastReviewTime(new Date(now.getTime() - elapsedDays * 24L * 60L * 60L * 1000L));
-        return word;
-    }
-
-    private static List<Long> reviewWordIds(List<EngWordVo> words)
-    {
-        return words.stream().map(EngWordVo::getId).toList();
-    }
-
-    private static void setTestLoginUser()
-    {
-        SysUser user = new SysUser();
-        user.setUserId(7L);
-        user.setUserName("tester");
-        LoginUser loginUser = new LoginUser();
-        loginUser.setUser(user);
-        SecurityContextHolder.getContext().setAuthentication(
-                new UsernamePasswordAuthenticationToken(loginUser, null, List.of()));
+        shouldKeepDuplicateAliasesIdempotent();
+        shouldRejectDeletingWordReferencedByStudyHistory();
     }
 
     /** 查词应聚合数据库现有数据，不新增或刷新词条和例句。 */
@@ -320,8 +125,8 @@ public class EngWordServiceImplTest
         assertEquals(0, harness.scoreUpdateCalls.get(), "重复收藏不得扣熟悉度");
     }
 
-    /** 真实文章重复添加单词时，保留原有扣熟悉度规则。 */
-    private static void shouldPenalizeDuplicateArticleRelation()
+    /** 真实文章重复添加单词也必须幂等，不再扣熟悉度。 */
+    private static void shouldKeepDuplicateArticleRelationWithoutPenalty()
     {
         Harness harness = new Harness(word("color", "noun 颜色", 14L));
         harness.relations.add(relation(35L, 5L, "color"));
@@ -330,7 +135,7 @@ public class EngWordServiceImplTest
 
         assertEquals(1, harness.relations.size(), "文章重复加词不得新增关系");
         assertEquals(0, harness.relationInsertCalls.get(), "文章重复加词不得调用新增关系");
-        assertEquals(1, harness.scoreUpdateCalls.get(), "文章重复加词仍应扣熟悉度");
+        assertEquals(0, harness.scoreUpdateCalls.get(), "文章重复加词不得扣熟悉度");
     }
 
     /** 已有正式词关系时，别名输入不得删除重建或触发重复加词扣分。 */
@@ -389,8 +194,8 @@ public class EngWordServiceImplTest
         assertEquals(0, harness.relationInsertCalls.get(), "全部未收录时不得调用新增关系");
     }
 
-    /** 正式词与别名混合重复输入时，每个正式词头最多触发一次原有扣分规则。 */
-    private static void shouldApplyDuplicateArticlePenaltyOncePerCanonicalWord()
+    /** 正式词与别名混合重复输入时应完全幂等。 */
+    private static void shouldKeepDuplicateAliasesIdempotent()
     {
         EngWord color = word("color", "noun 颜色", 16L);
         Map<String, EngWord> dictionary = new LinkedHashMap<>();
@@ -404,7 +209,26 @@ public class EngWordServiceImplTest
 
         assertEquals(List.of(), missingWords, "已收录正式词和别名不应报告未收录");
         assertEquals(1, harness.relations.size(), "正式词和别名不得重复建立关系");
-        assertEquals(1, harness.scoreUpdateCalls.get(), "同一正式词头在批次内只能扣一次熟悉度");
+        assertEquals(0, harness.scoreUpdateCalls.get(), "同一正式词头重复输入不得扣熟悉度");
+    }
+
+    /** 历史测试明细引用的词条必须保留，且异常发生在例句和词条删除之前。 */
+    private static void shouldRejectDeletingWordReferencedByStudyHistory()
+    {
+        Harness harness = new Harness(word("apple", "noun 苹果", 17L));
+        harness.historyReferenceCount = 1;
+
+        try
+        {
+            harness.service.deleteEngWordByIds(new Long[] { 17L });
+            throw new AssertionError("历史测试明细引用的词条应拒绝删除");
+        }
+        catch (ServiceException exception)
+        {
+            assertEquals("单词已被历史测试记录引用，不能删除", exception.getMessage(), "应返回明确的历史引用提示");
+        }
+        assertEquals(0, harness.dictionarySentenceDeleteCalls.get(), "拒绝删除后不得先删除词典例句");
+        assertEquals(0, harness.wordDeleteCalls.get(), "拒绝删除后不得删除词条");
     }
 
     private static void assertMissing(Runnable action, String wordName)
@@ -479,10 +303,13 @@ public class EngWordServiceImplTest
         private final List<EngArticleWordRel> relations = new ArrayList<>();
         private final AtomicInteger wordInsertCalls = new AtomicInteger();
         private final AtomicInteger wordUpdateCalls = new AtomicInteger();
+        private final AtomicInteger wordDeleteCalls = new AtomicInteger();
         private final AtomicInteger sentenceInsertCalls = new AtomicInteger();
+        private final AtomicInteger dictionarySentenceDeleteCalls = new AtomicInteger();
         private final AtomicInteger relationInsertCalls = new AtomicInteger();
         private final AtomicInteger relationDeleteCalls = new AtomicInteger();
         private final AtomicInteger scoreUpdateCalls = new AtomicInteger();
+        private int historyReferenceCount;
         private final EngWordServiceImpl service;
 
         private Harness(EngWord storedWord)
@@ -500,8 +327,7 @@ public class EngWordServiceImplTest
             this.wordLookup = wordLookup;
             EngWordMapper wordMapper = wordMapper();
             service = new EngWordServiceImpl(wordMapper, articleWordRelService(), userScoreService(),
-                    sentenceService(), dictionarySentenceService(), new DictUtils(wordMapper),
-                    dailyTestWordMapper(0, List.of()));
+                    sentenceService(), dictionarySentenceService(), new DictUtils(wordMapper));
         }
 
         private EngWordMapper wordMapper()
@@ -515,6 +341,8 @@ public class EngWordServiceImplTest
                         }
                         case "insertEngWord" -> wordInsertCalls.incrementAndGet();
                         case "updateEngWord" -> wordUpdateCalls.incrementAndGet();
+                        case "countStudyRecordWordRefs" -> historyReferenceCount;
+                        case "deleteEngWordById" -> wordDeleteCalls.incrementAndGet();
                         default -> defaultValue(method.getReturnType());
                     });
         }
@@ -531,6 +359,11 @@ public class EngWordServiceImplTest
                         if ("insertEngIcibaSentence".equals(method.getName()))
                         {
                             sentenceInsertCalls.incrementAndGet();
+                            return 1;
+                        }
+                        if ("deleteByWordId".equals(method.getName()))
+                        {
+                            dictionarySentenceDeleteCalls.incrementAndGet();
                             return 1;
                         }
                         return defaultValue(method.getReturnType());
@@ -559,6 +392,25 @@ public class EngWordServiceImplTest
                             relations.add(rel);
                             relationInsertCalls.incrementAndGet();
                             return 1;
+                        }
+                        if ("insertMissingByWordIds".equals(method.getName()))
+                        {
+                            Long articleId = (Long) args[0];
+                            @SuppressWarnings("unchecked") List<Long> ids = (List<Long>) args[1];
+                            int inserted = 0;
+                            for (Long id : ids)
+                            {
+                                EngWord resolved = List.of("color", "apple", "watermelon", "empty", "legacy").stream()
+                                        .map(wordLookup).filter(java.util.Objects::nonNull)
+                                        .filter(word -> id.equals(word.getId())).findFirst().orElse(null);
+                                if (resolved != null && relations.stream().noneMatch(rel -> articleId.equals(rel.getArticleId())
+                                        && resolved.getWordName().equals(rel.getWordName())))
+                                {
+                                    relations.add(relation((long) relations.size() + 1, articleId, resolved.getWordName()));
+                                    relationInsertCalls.incrementAndGet(); inserted++;
+                                }
+                            }
+                            return inserted;
                         }
                         if ("deleteEngArticleWordRelByIds".equals(method.getName()))
                         {

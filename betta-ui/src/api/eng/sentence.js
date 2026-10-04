@@ -27,6 +27,23 @@ export function getSentence(id) {
   })
 }
 
+// 查询句子分段及其关联的规范单词
+export function getSentenceWords(id) {
+  return request({
+    url: '/eng/sentence/' + id + '/words',
+    method: 'get'
+  })
+}
+
+// 保存句子关联的规范单词
+export function updateSentenceWords(id, data) {
+  return request({
+    url: '/eng/sentence/' + id + '/words',
+    method: 'put',
+    data: data
+  })
+}
+
 // 新增文章句子
 export function addSentence(data) {
   return request({

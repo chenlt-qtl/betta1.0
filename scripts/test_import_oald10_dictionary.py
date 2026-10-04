@@ -41,6 +41,23 @@ class ImportOald10DictionaryTest(unittest.TestCase):
         ]
         self.assertEqual("noun 水果|甜味", IMPORTER.format_acceptation(senses))
 
+    def test_word_row_uses_first_chinese_definition_as_default_exchange(self) -> None:
+        row = IMPORTER.to_word_row({
+            "lookup_key": "Apple",
+            "senses": [
+                {"pos": "noun", "definition": {"zh": "水果"}},
+                {"definition": {"zh": "苹果公司相关内容"}},
+            ],
+        })
+        self.assertEqual("noun 水果|苹果公司相关内容", row.acceptation)
+        self.assertEqual("noun 水果", row.exchange)
+
+        row_without_chinese_definition = IMPORTER.to_word_row({
+            "lookup_key": "fruit",
+            "senses": [{"pos": "verb", "definition": {"en": "to produce fruit"}}],
+        })
+        self.assertIsNone(row_without_chinese_definition.exchange)
+
     def test_alias_resolution_supports_chains_and_multiple_targets(self) -> None:
         entries = [
             {"lookup_key": "target-a", "aliases": []},
@@ -65,12 +82,14 @@ class ImportOald10DictionaryTest(unittest.TestCase):
         row = IMPORTER.WordRow(
             word_name="word", display_name="Word", phonetics=None, phonetics_uk=None,
             phonetics_us=None, ph_mp3=None, ph_mp3_uk=None, ph_mp3_us=None,
-            acceptation="释义｜definition", parts="noun", word_forms=None,
+            acceptation="释义｜definition", exchange="释义", parts="noun", word_forms=None,
             usage_labels=None, variants=None, grammar=None, dictionary_detail="[]",
         )
         sql = IMPORTER.word_batch_sql([row])
         self.assertIn("ON DUPLICATE KEY UPDATE", sql)
+        self.assertIn("acceptation,exchange,parts", sql)
         self.assertIn("acceptation=COALESCE(NULLIF(VALUES(acceptation),''),acceptation)", sql)
+        self.assertIn("exchange=COALESCE(NULLIF(exchange,''),VALUES(exchange))", sql)
         self.assertIn("START TRANSACTION", sql)
         self.assertIn("COMMIT", sql)
 

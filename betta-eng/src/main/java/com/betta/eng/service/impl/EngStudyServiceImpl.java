@@ -3,793 +3,700 @@ package com.betta.eng.service.impl;
 import com.betta.common.exception.ServiceException;
 import com.betta.common.utils.SecurityUtils;
 import com.betta.common.utils.StringUtils;
-import com.betta.eng.domain.EngArticle;
-import com.betta.eng.domain.EngArticleProgress;
-import com.betta.eng.domain.EngDailyTestWord;
-import com.betta.eng.domain.EngIcibaSentence;
-import com.betta.eng.domain.EngSentence;
-import com.betta.eng.domain.EngStudyRecord;
-import com.betta.eng.domain.EngWord;
-import com.betta.eng.domain.EngWrongWord;
-import com.betta.eng.domain.dto.EngChallengeAnswerDto;
-import com.betta.eng.domain.dto.EngChallengeCheckDto;
-import com.betta.eng.domain.dto.EngChallengeSubmitDto;
-import com.betta.eng.domain.vo.EngChallengeQuestionVo;
-import com.betta.eng.domain.vo.EngChallengeResultVo;
-import com.betta.eng.domain.vo.EngChallengeVo;
-import com.betta.eng.domain.vo.EngStudySummaryVo;
-import com.betta.eng.domain.vo.EngWordVo;
-import com.betta.eng.mapper.EngArticleProgressMapper;
-import com.betta.eng.mapper.EngCoinWalletMapper;
-import com.betta.eng.mapper.EngDailyTestWordMapper;
-import com.betta.eng.mapper.EngStudyRecordMapper;
-import com.betta.eng.mapper.EngWrongWordMapper;
-import com.betta.eng.service.IEngArticleService;
-import com.betta.eng.service.IEngIcibaSentenceService;
-import com.betta.eng.service.IEngSentenceService;
-import com.betta.eng.service.IEngStudyService;
-import com.betta.eng.service.IEngWordService;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Random;
-import java.util.Set;
+import com.betta.eng.domain.*;
+import com.betta.eng.domain.dto.*;
+import com.betta.eng.domain.vo.*;
+import com.betta.eng.mapper.*;
+import com.betta.eng.service.*;
+import com.betta.eng.utils.EngWordStarCalculator;
+import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.time.LocalDate;
-import org.springframework.dao.DuplicateKeyException;
+import java.util.stream.Collectors;
+import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/**
- * 游戏化学习业务实现，统一负责题目构建、提交校验、计分、进度与错词维护。
- */
+/** 新词关卡与全局复习统一学习服务。 */
 @Service
-public class EngStudyServiceImpl implements IEngStudyService {
-    /** 闯关通过所需的最低百分制分数。 */
-    private static final int PASS_SCORE = 60;
-    /** 看词选中文题目标识前缀。 */
-    private static final String WORD_TO_CN_PREFIX = "WORD_TO_CN:";
-    /** 看中文选英文题目标识前缀。 */
-    private static final String CN_TO_WORD_PREFIX = "CN_TO_WORD:";
-    /** 句子挖空选词题目标识前缀。 */
-    private static final String SENTENCE_CHOICE_PREFIX = "SENTENCE_CHOICE:";
-    /** 句子挖空填词题目标识前缀。 */
-    private static final String SENTENCE_FILL_PREFIX = "SENTENCE_FILL:";
-    /** 看词选中文题型。 */
-    private static final String WORD_TO_CN_TYPE = "WORD_TO_CN";
-    /** 看中文选英文题型。 */
-    private static final String CN_TO_WORD_TYPE = "CN_TO_WORD";
-    /** 句子挖空选词题型。 */
-    private static final String SENTENCE_CHOICE_TYPE = "SENTENCE_CHOICE";
-    /** 句子挖空填词题型。 */
-    private static final String SENTENCE_FILL_TYPE = "SENTENCE_FILL";
-    /** 每轮挑战最多选取的单词数。 */
-    private static final int CHALLENGE_WORD_LIMIT = 5;
-    /** 句子填词题固定挖空的字母数。 */
-    private static final int SENTENCE_FILL_ANSWER_LENGTH = 4;
-    /** 句子填词题固定提供的候选字母数。 */
-    private static final int SENTENCE_FILL_OPTION_COUNT = 10;
-    /** 生成句子填词题所需的最低熟悉度。 */
-    private static final int SENTENCE_FILL_MIN_FAMILIARITY = 7;
-    /** 填词候选区用于生成干扰项的字母表。 */
-    private static final String SENTENCE_FILL_ALPHABET = "abcdefghijklmnopqrstuvwxyz";
-    /** 填词候选区仅支持单个 ASCII 字母，因此填词题答案必须是纯英文字母。 */
-    private static final Pattern SENTENCE_FILL_WORD_PATTERN = Pattern.compile("[A-Za-z]+");
+public class EngStudyServiceImpl implements IEngStudyService
+{
+    private static final String NEW = "NEW";
+    private static final String REVIEW = "REVIEW";
+    private static final List<String> PREFIXES = List.of("WORD_TO_CN:", "CN_TO_WORD:",
+            "SENTENCE_CHOICE:", "SENTENCE_FILL:");
+    private static final int REVIEW_WORD_LIMIT = 5;
+    private static final int FILL_LENGTH = 4;
+    private static final String ALPHABET = "abcdefghijklmnopqrstuvwxyz";
+    private static final Pattern ASCII_WORD = Pattern.compile("[A-Za-z]+");
+
     private final IEngArticleService articleService;
     private final IEngSentenceService sentenceService;
     private final IEngIcibaSentenceService dictionarySentenceService;
     private final IEngWordService wordService;
     private final EngStudyRecordMapper recordMapper;
+    private final EngStudyRecordWordMapper recordWordMapper;
     private final EngCoinWalletMapper coinWalletMapper;
-    private final EngArticleProgressMapper progressMapper;
     private final EngWrongWordMapper wrongWordMapper;
-    private final EngDailyTestWordMapper dailyTestWordMapper;
+    private final EngUserWordProgressMapper wordProgressMapper;
+    private final EngArticleLevelProgressMapper levelProgressMapper;
+    private final EngArticleWordRelMapper articleWordRelMapper;
 
-    /**
-     * 注入学习业务依赖；参数依次用于文章、句子、词典例句、单词、记录、金币、进度、错词、每日队列和完成记录。
-     */
+    /** 注入学习、进度、记录和奖励依赖。 */
     public EngStudyServiceImpl(IEngArticleService articleService, IEngSentenceService sentenceService,
             IEngIcibaSentenceService dictionarySentenceService, IEngWordService wordService,
-            EngStudyRecordMapper recordMapper, EngCoinWalletMapper coinWalletMapper,
-            EngArticleProgressMapper progressMapper, EngWrongWordMapper wrongWordMapper,
-            EngDailyTestWordMapper dailyTestWordMapper) {
+            EngStudyRecordMapper recordMapper, EngStudyRecordWordMapper recordWordMapper,
+            EngCoinWalletMapper coinWalletMapper, EngWrongWordMapper wrongWordMapper,
+            EngUserWordProgressMapper wordProgressMapper, EngArticleLevelProgressMapper levelProgressMapper,
+            EngArticleWordRelMapper articleWordRelMapper)
+    {
         this.articleService = articleService;
         this.sentenceService = sentenceService;
         this.dictionarySentenceService = dictionarySentenceService;
         this.wordService = wordService;
         this.recordMapper = recordMapper;
+        this.recordWordMapper = recordWordMapper;
         this.coinWalletMapper = coinWalletMapper;
-        this.progressMapper = progressMapper;
         this.wrongWordMapper = wrongWordMapper;
-        this.dailyTestWordMapper = dailyTestWordMapper;
+        this.wordProgressMapper = wordProgressMapper;
+        this.levelProgressMapper = levelProgressMapper;
+        this.articleWordRelMapper = articleWordRelMapper;
     }
 
-    /** {@inheritDoc} */
     @Override
-    public EngStudySummaryVo getSummary() {
+    public EngStudySummaryVo getSummary()
+    {
         Long userId = SecurityUtils.getUserId();
         EngStudySummaryVo summary = new EngStudySummaryVo();
         summary.setTotalScore(recordMapper.sumScoreByUserId(userId));
         summary.setCoinBalance(coinWalletMapper.selectCoinBalance(userId));
         summary.setStudyCount(recordMapper.countByUserId(userId));
-        summary.setCompletedArticleCount(progressMapper.countCompletedByUserId(userId));
+        summary.setCompletedArticleCount(levelProgressMapper.countCompletedArticles(userId, SecurityUtils.getUsername()));
         summary.setWrongWordCount(wrongWordMapper.countByUserAndMastered(userId, 0));
         summary.setMasteredWrongWordCount(wrongWordMapper.countByUserAndMastered(userId, 1));
         summary.setRecentRecords(recordMapper.selectRecentByUserId(userId));
         return summary;
     }
 
-    /** {@inheritDoc} */
     @Override
-    public EngArticleProgress getProgress(Long articleId) {
-        requireArticle(articleId);
-        EngArticleProgress condition = progressCondition(SecurityUtils.getUserId(), articleId);
-        EngArticleProgress progress = progressMapper.selectByUserAndArticle(condition);
-        if (progress == null) {
-            progress = condition;
-            progress.setBestScore(0);
-            progress.setBestCorrectCount(0);
-            progress.setBestTotalCount(0);
-            progress.setCompleted(0);
+    @Transactional
+    public EngArticleLevelMapVo getArticleLevels(Long articleId)
+    {
+        EngArticle article = requireArticle(articleId);
+        Long userId = SecurityUtils.getUserId();
+        String username = SecurityUtils.getUsername();
+        if (articleWordRelMapper.lockArticle(articleId, username) == null)
+            throw new ServiceException("文章不存在或无权操作");
+        Map<Integer, EngArticleLevelProgress> progressMap = levelProgressMapper
+                .selectByUserAndArticle(userId, articleId).stream()
+                .collect(Collectors.toMap(EngArticleLevelProgress::getLevelNo, item -> item));
+        int maxLevel = value(articleWordRelMapper.selectMaxLevelNo(articleId));
+        List<EngArticleLevelVo> levels = new ArrayList<>();
+        boolean priorCompleted = true;
+        int completed = 0;
+        for (int levelNo = 1; levelNo <= maxLevel; levelNo++)
+        {
+            List<EngWordVo> words = wordsForLevel(articleId, levelNo);
+            if (words.isEmpty()) continue;
+            List<Long> ids = words.stream().map(EngWordVo::getId).toList();
+            Set<Long> learned = new HashSet<>(wordProgressMapper.selectLearnedWordIds(userId, ids));
+            EngArticleLevelProgress progress = progressMap.get(levelNo);
+            boolean allLearnedElsewhere = learned.size() == ids.size();
+            if (allLearnedElsewhere)
+            {
+                for (Long wordId : ids)
+                {
+                    EngUserWordProgress wordProgress = wordProgressMapper.selectByUserAndWord(userId, wordId);
+                    if (wordProgress == null || (articleId.equals(wordProgress.getFirstArticleId())
+                            && Integer.valueOf(levelNo).equals(wordProgress.getFirstLevelNo())))
+                    {
+                        allLearnedElsewhere = false;
+                        break;
+                    }
+                }
+            }
+            if (allLearnedElsewhere && (progress == null || value(progress.getCompletedByKnownWords()) == 0))
+            {
+                if (progress == null) progress = levelProgress(userId, articleId, levelNo, username);
+                progress.setCompletedByKnownWords(1);
+                levelProgressMapper.upsertKnown(progress);
+                progressMap.put(levelNo, progress);
+            }
+            EngArticleLevelVo level = new EngArticleLevelVo();
+            level.setLevelNo(levelNo);
+            level.setTotalWordCount(ids.size());
+            level.setLearnedWordCount(learned.size());
+            level.setNewWordCount(ids.size() - learned.size());
+            level.setUnlocked(levels.isEmpty() || priorCompleted);
+            level.setMasteredByExistingWords(progress != null && value(progress.getCompletedByKnownWords()) == 1);
+            level.setBestScore(progress == null ? 0 : value(progress.getBestScore()));
+            level.setHighestStars(progress == null ? 0 : value(progress.getHighestStars()));
+            priorCompleted = level.getHighestStars() >= 1 || Boolean.TRUE.equals(level.getMasteredByExistingWords());
+            if (priorCompleted) completed++;
+            levels.add(level);
         }
-        // 进度更新时间即最近一次更新最好成绩的时间；最近提交仍保留在学习记录中。
-        return progress;
+        EngArticleLevelMapVo map = new EngArticleLevelMapVo();
+        map.setArticleId(articleId); map.setTitle(article.getTitle()); map.setTotalLevels(levels.size());
+        map.setCompletedLevels(completed); map.setLevels(levels);
+        return map;
     }
 
-    /** {@inheritDoc} */
     @Override
-    public EngChallengeVo getChallenge(Long articleId) {
-        EngArticle article = requireArticle(articleId);
-        List<EngWordVo> words = selectChallengeWords(articleId);
-        List<QuestionDefinition> definitions = buildDefinitions(articleId, words);
-        EngChallengeVo challenge = new EngChallengeVo();
-        challenge.setArticleId(articleId);
-        challenge.setTitle(article.getTitle());
-        challenge.setProgress(getProgress(articleId));
-        challenge.setWords(words);
-        List<EngChallengeQuestionVo> questions = new ArrayList<>();
-        for (QuestionDefinition definition : definitions) {
-            EngChallengeQuestionVo question = new EngChallengeQuestionVo();
-            question.setQuestionId(definition.questionId());
-            question.setType(definition.type());
-            question.setPrompt(definition.prompt());
-            question.setOptions(definition.options());
-            question.setAudioUrl(definition.audioUrl());
-            question.setAnswerLength(definition.answerLength());
-            questions.add(question);
+    public EngReviewOverviewVo getReviewOverview()
+    {
+        Date now = new Date();
+        List<EngReviewWordVo> words = wordProgressMapper.selectReviewWords(SecurityUtils.getUserId());
+        for (EngReviewWordVo word : words)
+        {
+            int current = EngWordStarCalculator.currentStars(word.getLatestStars(), word.getLatestTestTime(), now);
+            word.setCurrentStars(current);
+            word.setRecommended(current < value(word.getHighestStars()));
+            word.setSourceArticles(StringUtils.isEmpty(word.getSourceArticleNames()) ? List.of()
+                    : List.of(word.getSourceArticleNames().split(",")));
         }
-        // 每次获取挑战都独立打乱完整题集；仅调整题目位置，不改变题目标识、内容及选择题选项顺序。
-        Collections.shuffle(questions);
-        challenge.setQuestions(questions);
-        challenge.setDailyCompleted(words.isEmpty());
+        words.sort(Comparator.comparing((EngReviewWordVo word) -> !Boolean.TRUE.equals(word.getRecommended()))
+                .thenComparing(EngReviewWordVo::getCurrentStars)
+                .thenComparing(EngReviewWordVo::getLatestTestTime, Comparator.nullsFirst(Comparator.naturalOrder()))
+                .thenComparing(EngReviewWordVo::getWordId));
+        EngReviewOverviewVo overview = new EngReviewOverviewVo();
+        overview.setLearnedWordCount(words.size());
+        overview.setRecommendedCount((int) words.stream().filter(EngReviewWordVo::getRecommended).count());
+        overview.setWords(words);
+        return overview;
+    }
+
+    @Override
+    @Transactional
+    public EngChallengeVo getChallenge(String mode, Long articleId, Integer levelNo, List<Long> wordIds)
+    {
+        String actualMode = requireMode(mode);
+        List<EngWordVo> words = NEW.equals(actualMode) ? newWordsForLevel(articleId, levelNo, true)
+                : reviewWords(wordIds);
+        if (words.isEmpty()) throw new ServiceException(NEW.equals(actualMode) ? "本关新词已全部掌握" : "暂无可复习单词");
+        List<QuestionDefinition> definitions = buildDefinitions(actualMode, articleId, words);
+        EngChallengeVo challenge = new EngChallengeVo();
+        challenge.setAttemptId(UUID.randomUUID().toString()); challenge.setMode(actualMode);
+        challenge.setArticleId(articleId); challenge.setLevelNo(levelNo);
+        challenge.setTitle(NEW.equals(actualMode) ? requireArticle(articleId).getTitle() : "单词复习");
+        challenge.setWords(words);
+        List<EngChallengeQuestionVo> questions = definitions.stream().map(this::questionVo)
+                .collect(Collectors.toCollection(ArrayList::new));
+        Collections.shuffle(questions); challenge.setQuestions(questions);
         return challenge;
     }
 
-    /** {@inheritDoc} */
-    @Override
-    public EngChallengeResultVo.ResultItem checkChallengeAnswer(EngChallengeCheckDto request) {
-        if (request == null || request.getArticleId() == null) {
-            throw new ServiceException("文章主键不能为空");
-        }
-        if (StringUtils.isEmpty(request.getQuestionId()) || request.getQuestionId().trim().isEmpty()) {
-            throw new ServiceException("题目标识不能为空");
-        }
-        if (request.getAnswer() == null || request.getAnswer().trim().isEmpty()) {
-            throw new ServiceException("答案不能为空");
-        }
-        // 先确认文章存在，再使用文章数据重建标准题目，避免接受其他文章的题目标识。
-        requireArticle(request.getArticleId());
-        List<QuestionDefinition> definitions = buildDefinitions(request.getArticleId());
-        QuestionDefinition definition = findQuestionDefinition(definitions, request.getQuestionId());
-        if (definition == null) {
-            throw new ServiceException("存在不属于当前文章的题目");
-        }
-        // 即时判题仅组装判定结果，不调用学习记录、进度或错词写入逻辑。
-        return buildResultItem(definition, request.getAnswer());
-    }
-
-    /** {@inheritDoc} */
     @Override
     @Transactional
-    public EngChallengeResultVo submitChallenge(EngChallengeSubmitDto request) {
-        if (request == null || request.getArticleId() == null || request.getAnswers() == null
-                || request.getAnswers().isEmpty()) {
-            throw new ServiceException("文章和答案不能为空");
-        }
-        requireArticle(request.getArticleId());
-        List<EngWordVo> submittedWords = resolveSubmittedWords(request.getArticleId(), request.getAnswers());
-        List<QuestionDefinition> definitions = buildDefinitions(request.getArticleId(), submittedWords);
-        if (definitions.isEmpty()) {
-            throw new ServiceException("当前文章暂无可提交的挑战题");
-        }
-        Map<String, String> answers = validateAnswers(request.getAnswers(), definitions);
-        EngChallengeResultVo result = calculateResult(definitions, answers);
+    public EngChallengeResultVo.ResultItem checkChallengeAnswer(EngChallengeCheckDto request)
+    {
+        if (request == null || StringUtils.isEmpty(request.getAttemptId())
+                || StringUtils.isEmpty(request.getQuestionId()) || StringUtils.isEmpty(request.getAnswer()))
+            throw new ServiceException("测试标识、题目标识和答案不能为空");
+        String mode = requireMode(request.getMode());
+        Long wordId = extractWordId(request.getQuestionId());
+        if (wordId == null) throw new ServiceException("题目标识无效");
+        List<EngWordVo> words = resolveSubmittedWords(mode, request.getArticleId(), request.getLevelNo(), Set.of(wordId), false);
+        QuestionDefinition definition = findDefinition(buildDefinitions(mode, request.getArticleId(), words),
+                request.getQuestionId());
+        if (definition == null) throw new ServiceException("题目不属于当前测试");
+        return resultItem(definition, request.getAnswer());
+    }
+
+    @Override
+    @Transactional
+    public EngChallengeResultVo submitChallenge(EngChallengeSubmitDto request)
+    {
+        validateSubmit(request);
         Long userId = SecurityUtils.getUserId();
         String username = SecurityUtils.getUsername();
-        LocalDate studyDate = LocalDate.now();
-        registerDailyCompletions(userId, username, request.getArticleId(), studyDate, submittedWords);
-        Long studyRecordId = saveStudyRecord(userId, username, request.getArticleId(), result);
-        dailyTestWordMapper.bindStudyRecord(userId, request.getArticleId(), studyDate,
-                submittedWords.stream().map(EngWordVo::getId).toList(), studyRecordId);
-        if (result.getCoinReward() > 0) {
-            coinWalletMapper.increaseCoinBalance(userId, result.getCoinReward(), username);
+        EngStudyRecord existing = findAttempt(userId, request.getAttemptId());
+        if (existing != null) return existingResult(existing);
+        String mode = requireMode(request.getMode());
+        if (NEW.equals(mode) && articleWordRelMapper.lockArticle(request.getArticleId(), username) == null)
+            throw new ServiceException("文章不存在或无权操作");
+        Set<Long> submittedIds = request.getAnswers().stream().map(item -> extractWordId(item.getQuestionId()))
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (submittedIds.contains(null)) throw new ServiceException("题目标识无效");
+        List<EngWordVo> words = resolveSubmittedWords(mode, request.getArticleId(), request.getLevelNo(), submittedIds, true);
+        List<QuestionDefinition> definitions = buildDefinitions(mode, request.getArticleId(), words);
+        Map<String, String> answers = validateAnswers(request.getAnswers(), definitions);
+        EngChallengeResultVo result = calculateResult(request, mode, definitions, answers);
+        EngStudyRecord record = recordHeader(userId, username, request, mode, result);
+        if (recordMapper.insertIgnoreEngStudyRecord(record) == 0)
+            return existingResult(findAttemptForUpdate(userId, request.getAttemptId()));
+
+        Map<Long, WordScore> scores = wordScores(definitions, result.getResults(), mode, result.getStars(),
+                request.getArticleId(), userId);
+        List<EngStudyRecordWord> details = new ArrayList<>();
+        long milestoneCoin = 0, reviewCoin = 0;
+        Date now = new Date();
+        for (EngWordVo word : words)
+        {
+            WordScore score = scores.get(word.getId());
+            EngUserWordProgress progress = lockProgress(userId, username, word.getId(), request.getArticleId(), request.getLevelNo());
+            int targetHighest = Math.max(value(progress.getHighestStars()), score.stars());
+            long wordMilestone = EngWordStarCalculator.milestoneCoin(value(progress.getRewardedStars()), targetHighest);
+            long wordReview = REVIEW.equals(mode) && score.allCorrect() ? 1 : 0;
+            progress.setLearned(1); progress.setHighestStars(targetHighest); progress.setLatestStars(score.stars());
+            progress.setLatestTestTime(now); progress.setRewardedStars(targetHighest); progress.setUpdateBy(username);
+            wordProgressMapper.updateProgress(progress);
+            milestoneCoin += wordMilestone; reviewCoin += wordReview;
+            details.add(detail(record.getId(), word, score, mode, wordMilestone, wordReview));
+            updateWrongWord(userId, username, word, score);
+            wordService.updateFamiliarity(word.getWordName(), score.allCorrect() ? 1 : -1);
         }
+        recordWordMapper.insertBatch(details);
+        if (NEW.equals(mode))
+        {
+            EngArticleLevelProgress level = levelProgress(userId, request.getArticleId(), request.getLevelNo(), username);
+            level.setBestScore(result.getScore()); level.setHighestStars(result.getStars());
+            levelProgressMapper.upsertBest(level);
+            applyNextLevel(result, request.getArticleId(), request.getLevelNo(), result.getStars());
+        }
+        result.setMilestoneCoin(milestoneCoin); result.setReviewCoin(reviewCoin);
+        result.setCoinReward(milestoneCoin + reviewCoin);
+        if (result.getCoinReward() > 0) coinWalletMapper.increaseCoinBalance(userId, result.getCoinReward(), username);
         result.setCoinBalance(coinWalletMapper.selectCoinBalance(userId));
-        saveBestProgress(userId, username, request.getArticleId(), result);
-        updateWrongWords(userId, username, request.getArticleId(), definitions, result);
-        updateFamiliarities(definitions, result);
-        result.setDailyCompleted(wordService.selectNextReviewWords(userId, request.getArticleId()).isEmpty());
+        record.setMilestoneCoin(milestoneCoin); record.setReviewCoin(reviewCoin); record.setCoinReward(result.getCoinReward());
+        recordMapper.updateOutcome(record);
+        result.setWordResults(buildWordResults(words, scores, userId, details));
         return result;
     }
 
-    /** {@inheritDoc} */
     @Override
-    public List<EngWrongWord> selectWrongWordList(EngWrongWord wrongWord) {
+    public List<EngWrongWord> selectWrongWordList(EngWrongWord wrongWord)
+    {
         EngWrongWord condition = wrongWord == null ? new EngWrongWord() : wrongWord;
-        condition.setUserId(SecurityUtils.getUserId());
-        return wrongWordMapper.selectEngWrongWordList(condition);
+        condition.setUserId(SecurityUtils.getUserId()); return wrongWordMapper.selectEngWrongWordList(condition);
     }
 
-    /** {@inheritDoc} */
     @Override
-    public int markWrongWordMastered(Long id) {
-        if (id == null) {
-            throw new ServiceException("错词主键不能为空");
-        }
+    public int markWrongWordMastered(Long id)
+    {
+        if (id == null) throw new ServiceException("错词主键不能为空");
         int rows = wrongWordMapper.markMastered(id, SecurityUtils.getUserId(), SecurityUtils.getUsername());
-        if (rows == 0) {
-            throw new ServiceException("错词不存在或无权操作");
-        }
-        return rows;
+        if (rows == 0) throw new ServiceException("错词不存在或无权操作"); return rows;
     }
 
-    /**
-     * 根据文章已有单词和句子重建服务端标准题目；articleId 为文章主键，返回题目定义。
-     */
-    private List<QuestionDefinition> buildDefinitions(Long articleId) {
-        return buildDefinitions(articleId, selectChallengeWords(articleId));
+    @Override
+    public List<EngStudyRecordWord> selectRecordWords(Long recordId)
+    {
+        if (recordId == null) throw new ServiceException("学习记录主键不能为空");
+        return recordWordMapper.selectByRecordAndUser(recordId, SecurityUtils.getUserId());
     }
 
-    /**
-     * 根据本轮选中单词和文章句子重建服务端标准题目；articleId 为文章主键，words 为本轮单词。
-     */
-    private List<QuestionDefinition> buildDefinitions(Long articleId, List<EngWordVo> words) {
-        List<QuestionDefinition> definitions = new ArrayList<>();
-        Map<Long, EngWordVo> validWordMap = new LinkedHashMap<>();
-        for (EngWordVo word : words == null ? Collections.<EngWordVo>emptyList() : words) {
-            if (isValidChallengeWord(word)) {
-                // 文章关系查询可能返回重复单词，按首次出现顺序去重以保证题目标识唯一且可完整提交。
-                validWordMap.putIfAbsent(word.getId(), word);
-            }
+    private List<EngWordVo> newWordsForLevel(Long articleId, Integer levelNo, boolean requireUnlocked)
+    {
+        if (articleId == null || levelNo == null || levelNo < 1) throw new ServiceException("文章和关卡不能为空");
+        requireArticle(articleId);
+        if (requireUnlocked)
+        {
+            EngArticleLevelVo level = getArticleLevels(articleId).getLevels().stream()
+                    .filter(item -> levelNo.equals(item.getLevelNo())).findFirst()
+                    .orElseThrow(() -> new ServiceException("关卡不存在"));
+            if (!Boolean.TRUE.equals(level.getUnlocked())) throw new ServiceException("请先通过上一关");
         }
-        List<EngWordVo> validWords = new ArrayList<>(validWordMap.values());
-        EngSentence condition = new EngSentence();
-        condition.setArticleId(articleId);
-        List<EngSentence> sentences = sentenceService.selectEngSentenceList(condition);
-        for (EngWordVo word : validWords) {
-            // 每个有效单词固定生成两道双向选择题，候选不足四项时返回实际唯一候选数。
-            definitions.add(buildWordToCnDefinition(word, validWords));
-            definitions.add(buildCnToWordDefinition(word, validWords));
-            // 两类句子题共用首个合格句子的挖空内容，并固定按选词、逐字填词顺序追加。
-            SentenceQuestionContent sentenceContent = findSentenceQuestionContent(word, sentences);
-            if (sentenceContent == null) {
-                sentenceContent = findDictionarySentenceQuestionContent(word);
-            }
-            if (sentenceContent != null) {
-                definitions.add(buildSentenceChoiceDefinition(word, validWords, sentenceContent));
-                if (canBuildSentenceFill(word)) {
-                    definitions.add(buildSentenceFillDefinition(word, sentenceContent));
-                }
-            }
+        List<EngWordVo> all = wordsForLevel(articleId, levelNo);
+        if (all.isEmpty()) throw new ServiceException("关卡不存在");
+        Long userId = SecurityUtils.getUserId();
+        List<EngWordVo> eligible = new ArrayList<>();
+        for (EngWordVo word : all)
+        {
+            EngUserWordProgress progress = wordProgressMapper.selectByUserAndWord(userId, word.getId());
+            if (progress == null || value(progress.getLearned()) == 0
+                    || (articleId.equals(progress.getFirstArticleId()) && levelNo.equals(progress.getFirstLevelNo())))
+                eligible.add(word);
         }
-        return definitions;
+        return eligible;
     }
 
-    /** 按每日队列规则查询当前用户下一轮最多五个有效文章单词。 */
-    private List<EngWordVo> selectChallengeWords(Long articleId) {
-        return wordService.selectNextReviewWords(SecurityUtils.getUserId(), articleId).stream()
-                .filter(this::isValidChallengeWord).limit(CHALLENGE_WORD_LIMIT).toList();
-    }
-
-    /**
-     * 从题目标识还原本轮单词，并校验单词归属文章且数量为文章可用数与五的较小值。
-     */
-    private List<EngWordVo> resolveSubmittedWords(Long articleId, List<EngChallengeAnswerDto> submitted) {
-        Set<Long> submittedWordIds = new HashSet<>();
-        for (EngChallengeAnswerDto answer : submitted) {
-            Long wordId = extractWordId(answer == null ? null : answer.getQuestionId());
-            if (wordId == null) {
-                throw new ServiceException("存在不属于当前文章的题目");
-            }
-            submittedWordIds.add(wordId);
-        }
-        Map<Long, EngWordVo> articleWords = new LinkedHashMap<>();
-        List<EngWordVo> words = selectChallengeWords(articleId);
-        for (EngWordVo word : words) {
-            if (isValidChallengeWord(word)) {
-                articleWords.putIfAbsent(word.getId(), word);
-            }
-        }
-        int expectedWordCount = articleWords.size();
-        if (submittedWordIds.size() != expectedWordCount || !articleWords.keySet().containsAll(submittedWordIds)) {
-            throw new ServiceException("存在不属于当前文章的题目或未完成本轮单词");
-        }
+    private List<EngWordVo> reviewWords(List<Long> requested)
+    {
+        EngReviewOverviewVo overview = getReviewOverview();
+        Map<Long, EngReviewWordVo> byId = overview.getWords().stream()
+                .collect(Collectors.toMap(EngReviewWordVo::getWordId, item -> item, (a, b) -> a, LinkedHashMap::new));
+        List<Long> ids = requested != null && !requested.isEmpty()
+                ? new ArrayList<>(new LinkedHashSet<>(requested))
+                : overview.getWords().stream().filter(EngReviewWordVo::getRecommended).limit(REVIEW_WORD_LIMIT)
+                        .map(EngReviewWordVo::getWordId).toList();
+        if (ids.size() > REVIEW_WORD_LIMIT) throw new ServiceException("每轮最多复习5个单词");
         List<EngWordVo> result = new ArrayList<>();
-        for (EngWordVo word : articleWords.values()) {
-            if (submittedWordIds.contains(word.getId())) {
-                result.add(word);
+        for (Long id : ids)
+        {
+            if (!byId.containsKey(id)) throw new ServiceException("只能复习已学单词");
+            EngWord word = wordService.selectEngWordById(id);
+            if (word == null) throw new ServiceException("复习单词不存在");
+            EngWordVo vo = new EngWordVo(); BeanUtils.copyProperties(word, vo); result.add(vo);
+        }
+        return result;
+    }
+
+    private List<EngWordVo> resolveSubmittedWords(String mode, Long articleId, Integer levelNo, Set<Long> ids,
+            boolean requireCompleteLevel)
+    {
+        List<EngWordVo> candidates = NEW.equals(mode) ? newWordsForLevel(articleId, levelNo, true)
+                : reviewWords(new ArrayList<>(ids));
+        Map<Long, EngWordVo> map = candidates.stream().collect(Collectors.toMap(EngWordVo::getId, item -> item,
+                (a, b) -> a, LinkedHashMap::new));
+        if (NEW.equals(mode) && requireCompleteLevel && !map.keySet().equals(ids))
+            throw new ServiceException("请完成本关全部新词");
+        if (!map.keySet().containsAll(ids)) throw new ServiceException("存在不属于当前测试的单词");
+        return map.values().stream().filter(word -> ids.contains(word.getId())).toList();
+    }
+
+    private List<EngWordVo> wordsForLevel(Long articleId, Integer levelNo)
+    {
+        List<EngArticleWordRel> relations = articleWordRelMapper.selectByArticleAndLevel(articleId, levelNo,
+                SecurityUtils.getUsername());
+        Map<String, EngWordVo> byName = new HashMap<>();
+        for (EngWordVo word : wordService.selectWordListByArticle(articleId))
+            byName.putIfAbsent(word.getWordName().toLowerCase(Locale.ROOT), word);
+        List<EngWordVo> result = new ArrayList<>(); Set<Long> ids = new HashSet<>();
+        for (EngArticleWordRel relation : relations)
+        {
+            EngWordVo word = byName.get(relation.getWordName().toLowerCase(Locale.ROOT));
+            if (validWord(word) && ids.add(word.getId())) result.add(word);
+        }
+        return result;
+    }
+
+    private List<QuestionDefinition> buildDefinitions(String mode, Long articleId, List<EngWordVo> words)
+    {
+        List<QuestionDefinition> result = new ArrayList<>();
+        for (EngWordVo word : words)
+        {
+            result.add(wordToCn(word, words)); result.add(cnToWord(word, words));
+            SentenceContent sentence = sentenceContent(mode, articleId, word);
+            if (sentence != null)
+            {
+                result.add(sentenceChoice(word, words, sentence));
+                if (sentence.answer().length() > FILL_LENGTH && ASCII_WORD.matcher(sentence.answer()).matches())
+                    result.add(sentenceFill(word, sentence));
             }
         }
         return result;
     }
 
-    /** 从四类题目标识中解析单词主键；标识非法时返回 null。 */
-    private Long extractWordId(String questionId) {
-        if (StringUtils.isEmpty(questionId)) {
-            return null;
+    private QuestionDefinition wordToCn(EngWordVo word, List<EngWordVo> words)
+    {
+        String answer = meaning(word);
+        return definition("WORD_TO_CN:", "WORD_TO_CN", "请选择单词 “" + word.getWordName() + "” 的正确释义",
+                answer, options(answer, words, false, word.getId()), word, null, null);
+    }
+
+    private QuestionDefinition cnToWord(EngWordVo word, List<EngWordVo> words)
+    {
+        return definition("CN_TO_WORD:", "CN_TO_WORD", "请选择释义 “" + meaning(word) + "” 对应的英文单词",
+                word.getWordName(), options(word.getWordName(), words, true, word.getId()), word, null, null);
+    }
+
+    private QuestionDefinition sentenceChoice(EngWordVo word, List<EngWordVo> words, SentenceContent sentence)
+    {
+        return definition("SENTENCE_CHOICE:", "SENTENCE_CHOICE",
+                sentencePrompt("请选择句子中的空缺单词", sentence.choiceBlank(), sentence.acceptation()),
+                sentence.answer(), options(sentence.answer(), words, true, word.getId()), word, null,
+                sentence.sourceArticleId());
+    }
+
+    private QuestionDefinition sentenceFill(EngWordVo word, SentenceContent sentence)
+    {
+        String answer = sentence.answer().substring(0, FILL_LENGTH).toLowerCase(Locale.ROOT);
+        List<String> options = new ArrayList<>(); for (char item : answer.toCharArray()) options.add(String.valueOf(item));
+        int start = Math.floorMod(word.getWordName().hashCode(), ALPHABET.length());
+        for (int offset = 0; options.size() < 10; offset++)
+        {
+            String item = String.valueOf(ALPHABET.charAt((start + offset) % ALPHABET.length()));
+            if (!answer.contains(item)) options.add(item);
         }
-        String[] prefixes = {WORD_TO_CN_PREFIX, CN_TO_WORD_PREFIX, SENTENCE_CHOICE_PREFIX, SENTENCE_FILL_PREFIX};
-        for (String prefix : prefixes) {
-            if (questionId.startsWith(prefix)) {
-                try {
-                    return Long.valueOf(questionId.substring(prefix.length()));
-                } catch (NumberFormatException exception) {
-                    return null;
-                }
-            }
+        Collections.shuffle(options, new Random(31L * word.getId() + word.getWordName().hashCode()));
+        return definition("SENTENCE_FILL:", "SENTENCE_FILL",
+                sentencePrompt("请选择句子中的空缺字母", sentence.fillBlank(), sentence.acceptation()),
+                answer, options, word, FILL_LENGTH, sentence.sourceArticleId());
+    }
+
+    private QuestionDefinition definition(String prefix, String type, String prompt, String answer,
+            List<String> options, EngWordVo word, Integer length, Long sourceArticleId)
+    {
+        return new QuestionDefinition(prefix + word.getId(), type, prompt, answer, options, word.getPhMp3(), length,
+                word, sourceArticleId);
+    }
+
+    private SentenceContent sentenceContent(String mode, Long articleId, EngWordVo word)
+    {
+        EngSentenceWordRel relation = NEW.equals(mode) ? sentenceService.selectFirstWordRelation(articleId, word.getId())
+                : sentenceService.selectFirstWordRelation(word.getId());
+        if (relation != null)
+        {
+            SentenceContent content = sentenceContent(relation.getSentenceContent(), relation.getSentenceAcceptation(),
+                    relation.getMatchedText(), relation.getArticleId());
+            if (content != null) return content;
         }
-        return null;
-    }
-
-    /**
-     * 判断单词是否具备生成闯关题所需的主键、英文文本和中文释义；word 为候选单词，返回是否有效。
-     */
-    private boolean isValidChallengeWord(EngWordVo word) {
-        return word != null && word.getId() != null && StringUtils.isNotEmpty(word.getWordName())
-                && StringUtils.isNotEmpty(word.getAcceptation());
-    }
-
-    /** 单词测试优先使用简明释义，未维护时回退完整释义。 */
-    private String getChallengeMeaning(EngWordVo word) {
-        return StringUtils.isNotEmpty(word.getExchange()) ? word.getExchange() : word.getAcceptation();
-    }
-
-    /**
-     * 构建看词选中文题；word 为目标单词，validWords 为文章全部有效单词，返回包含发音地址的标准题目定义。
-     */
-    private QuestionDefinition buildWordToCnDefinition(EngWordVo word, List<EngWordVo> validWords) {
-        String meaning = getChallengeMeaning(word);
-        List<String> options = buildOptions(meaning, validWords, false);
-        return new QuestionDefinition(WORD_TO_CN_PREFIX + word.getId(), WORD_TO_CN_TYPE,
-                "请选择单词 “" + word.getWordName() + "” 的正确释义", meaning, options,
-                word.getPhMp3(), null, word);
-    }
-
-    /**
-     * 构建看中文选英文题；word 为目标单词，validWords 为文章全部有效单词，返回包含发音地址的标准题目定义。
-     */
-    private QuestionDefinition buildCnToWordDefinition(EngWordVo word, List<EngWordVo> validWords) {
-        List<String> options = buildOptions(word.getWordName(), validWords, true);
-        return new QuestionDefinition(CN_TO_WORD_PREFIX + word.getId(), CN_TO_WORD_TYPE,
-                "请选择释义 “" + getChallengeMeaning(word) + "” 对应的英文单词", word.getWordName(), options,
-                word.getPhMp3(), null, word);
-    }
-
-    /**
-     * 构建唯一且稳定排序的选择题选项；correctAnswer 为正确答案，validWords 为候选单词，
-     * useWordName 表示候选值是否取英文单词，返回最多四个选项。
-     */
-    private List<String> buildOptions(String correctAnswer, List<EngWordVo> validWords, boolean useWordName) {
-        List<String> options = new ArrayList<>();
-        options.add(correctAnswer);
-        for (EngWordVo candidateWord : validWords) {
-            if (options.size() >= 4) {
-                break;
-            }
-            String candidate = useWordName ? candidateWord.getWordName() : getChallengeMeaning(candidateWord);
-            if (!options.contains(candidate)) {
-                options.add(candidate);
-            }
+        EngIcibaSentence condition = new EngIcibaSentence(); condition.setWordId(word.getId());
+        List<EngIcibaSentence> examples = dictionarySentenceService.selectEngIcibaSentenceList(condition);
+        Long fallbackArticleId = articleId;
+        if (REVIEW.equals(mode))
+        {
+            EngUserWordProgress progress = wordProgressMapper.selectByUserAndWord(SecurityUtils.getUserId(), word.getId());
+            fallbackArticleId = progress == null ? null : progress.getFirstArticleId();
         }
-        // 使用稳定排序，确保获取题目与提交答案时服务端能够重建相同选项。
-        Collections.sort(options);
-        return options;
+        return examples == null || examples.isEmpty() ? null
+                : sentenceContent(examples.get(0).getOrig(), examples.get(0).getTrans(), word.getWordName(), fallbackArticleId);
     }
 
-    /**
-     * 构建句子挖空选词题；word 为目标单词、validWords 为英文选项来源、sentenceContent 为共用句子内容，
-     * 返回携带目标单词音频且答案长度为空的标准题目定义。
-     */
-    private QuestionDefinition buildSentenceChoiceDefinition(EngWordVo word, List<EngWordVo> validWords,
-            SentenceQuestionContent sentenceContent) {
-        List<String> options = buildOptions(word.getWordName(), validWords, true);
-        String prompt = buildSentencePrompt("请选择句子中的空缺单词", sentenceContent.choiceBlankSentence(),
-                sentenceContent.acceptation());
-        return new QuestionDefinition(SENTENCE_CHOICE_PREFIX + word.getId(), SENTENCE_CHOICE_TYPE, prompt,
-                word.getWordName(), options, word.getPhMp3(), null, word);
+    private SentenceContent sentenceContent(String text, String acceptation, String matchedText, Long sourceArticleId)
+    {
+        if (StringUtils.isEmpty(text) || text.startsWith("[NT]") || StringUtils.isEmpty(matchedText)) return null;
+        Matcher matcher = wholeWord(matchedText).matcher(text); if (!matcher.find()) return null;
+        String actual = matcher.group();
+        String choice = matcher.replaceFirst(Matcher.quoteReplacement("_".repeat(actual.length())));
+        String fill = actual.length() > FILL_LENGTH
+                ? matcher.replaceFirst(Matcher.quoteReplacement("_".repeat(FILL_LENGTH) + actual.substring(FILL_LENGTH))) : null;
+        return new SentenceContent(choice, fill, acceptation, actual, sourceArticleId);
     }
 
-    /**
-     * 构建句子挖空填词题；仅以前四个字母为答案，并提供十个可稳定重建的候选字母。
-     */
-    private QuestionDefinition buildSentenceFillDefinition(EngWordVo word,
-            SentenceQuestionContent sentenceContent) {
-        String answer = word.getWordName().substring(0, SENTENCE_FILL_ANSWER_LENGTH).toLowerCase(Locale.ROOT);
-        String prompt = buildSentencePrompt("请选择句子中的空缺字母", sentenceContent.fillBlankSentence(),
-                sentenceContent.acceptation());
-        return new QuestionDefinition(SENTENCE_FILL_PREFIX + word.getId(), SENTENCE_FILL_TYPE, prompt,
-                answer, buildSentenceFillOptions(word, answer), word.getPhMp3(), SENTENCE_FILL_ANSWER_LENGTH, word);
-    }
-
-    /**
-     * 生成四个答案字母和六个干扰字母，并按单词主键与文本使用固定种子打乱，确保各入口重建结果一致。
-     */
-    private List<String> buildSentenceFillOptions(EngWordVo word, String answer) {
-        List<String> options = new ArrayList<>();
-        for (int index = 0; index < answer.length(); index++) {
-            options.add(String.valueOf(answer.charAt(index)));
-        }
-        String normalizedWord = word.getWordName().toLowerCase(Locale.ROOT);
-        int alphabetStart = Math.floorMod(normalizedWord.hashCode(), SENTENCE_FILL_ALPHABET.length());
-        for (int offset = 0; options.size() < SENTENCE_FILL_OPTION_COUNT; offset++) {
-            char candidate = SENTENCE_FILL_ALPHABET.charAt(
-                    (alphabetStart + offset) % SENTENCE_FILL_ALPHABET.length());
-            if (answer.indexOf(candidate) < 0) {
-                options.add(String.valueOf(candidate));
-            }
-        }
-        long shuffleSeed = 31L * word.getId() + normalizedWord.hashCode();
-        Collections.shuffle(options, new Random(shuffleSeed));
-        return options;
-    }
-
-    /**
-     * 查找目标单词在文章中的首个合格句子并生成共用挖空内容；word 为目标单词、sentences 为文章句子，
-     * 没有非空、非 [NT] 且完整匹配的句子时返回 null。
-     */
-    private SentenceQuestionContent findSentenceQuestionContent(EngWordVo word, List<EngSentence> sentences) {
-        if (sentences == null || sentences.isEmpty()) {
-            return null;
-        }
-        for (EngSentence sentence : sentences) {
-            if (sentence == null) {
-                continue;
-            }
-            SentenceQuestionContent content = buildSentenceQuestionContent(
-                    word, sentence.getContent(), sentence.getAcceptation());
-            if (content != null) {
-                return content;
-            }
-        }
-        return null;
-    }
-
-    /** 文章没有对应句子时，使用按词条顺序返回的第一条词典例句构建测试句子。 */
-    private SentenceQuestionContent findDictionarySentenceQuestionContent(EngWordVo word) {
-        EngIcibaSentence condition = new EngIcibaSentence();
-        condition.setWordId(word.getId());
-        List<EngIcibaSentence> sentences = dictionarySentenceService.selectEngIcibaSentenceList(condition);
-        if (sentences == null || sentences.isEmpty()) {
-            return null;
-        }
-        EngIcibaSentence sentence = sentences.get(0);
-        return sentence == null ? null
-                : buildSentenceQuestionContent(word, sentence.getOrig(), sentence.getTrans());
-    }
-
-    /** 根据英文句子和中文释义构建挖空内容；句子为空、禁用或不含完整目标单词时返回 null。 */
-    private SentenceQuestionContent buildSentenceQuestionContent(EngWordVo word, String content,
-            String acceptation) {
-        if (StringUtils.isEmpty(content) || content.startsWith("[NT]")) {
-            return null;
-        }
-        Matcher matcher = buildWholeWordPattern(word.getWordName()).matcher(content);
-        if (!matcher.find()) {
-            return null;
-        }
-        String matchedWord = matcher.group();
-        String choiceBlankSentence = matcher.replaceFirst(Matcher.quoteReplacement(buildSentenceBlank(matchedWord)));
-        String fillBlankSentence = null;
-        if (isSentenceFillWord(word.getWordName())) {
-            String partialBlank = "_".repeat(SENTENCE_FILL_ANSWER_LENGTH)
-                    + matchedWord.substring(SENTENCE_FILL_ANSWER_LENGTH);
-            fillBlankSentence = matcher.replaceFirst(Matcher.quoteReplacement(partialBlank));
-        }
-        return new SentenceQuestionContent(choiceBlankSentence, fillBlankSentence, acceptation);
-    }
-
-    /**
-     * 组装句子题统一提示文本；instruction 为题型操作说明、blankSentence 为挖空句子，返回完整题干。
-     */
-    private String buildSentencePrompt(String instruction, String blankSentence, String acceptation) {
-        String prompt = instruction + "：“" + blankSentence + "”";
-        if (StringUtils.isNotEmpty(acceptation)) {
-            prompt += "；中文提示：" + acceptation;
-        }
-        return prompt;
-    }
-
-    /**
-     * 判断单词能否生成只填写四个字母的题目；单词必须超过四个字符且仅包含 ASCII 字母。
-     */
-    private boolean isSentenceFillWord(String wordName) {
-        return wordName.length() > SENTENCE_FILL_ANSWER_LENGTH
-                && SENTENCE_FILL_WORD_PATTERN.matcher(wordName).matches();
-    }
-
-    /** 判断当前用户对单词的熟悉度和单词格式是否都满足句子填词题生成条件。 */
-    private boolean canBuildSentenceFill(EngWordVo word) {
-        return word.getFamiliarity() != null
-                && word.getFamiliarity() >= SENTENCE_FILL_MIN_FAMILIARITY
-                && isSentenceFillWord(word.getWordName());
-    }
-
-    /**
-     * 构建忽略大小写且不匹配英文单词子串的正则；wordName 为目标英文单词，返回可复用匹配器模式。
-     */
-    private Pattern buildWholeWordPattern(String wordName) {
-        String expression = "(?<![A-Za-z])" + Pattern.quote(wordName) + "(?![A-Za-z])";
-        return Pattern.compile(expression, Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
-    }
-
-    /**
-     * 按目标词条字符数构建句子空缺短线；wordName 为正确英文词条，返回等长下划线文本。
-     */
-    private String buildSentenceBlank(String wordName) {
-        return "_".repeat(wordName.length());
-    }
-
-    /**
-     * 按题目标识查找文章内标准题目；definitions 为文章题目，questionId 为待查标识，未找到时返回 null。
-     */
-    private QuestionDefinition findQuestionDefinition(List<QuestionDefinition> definitions, String questionId) {
-        for (QuestionDefinition definition : definitions) {
-            if (definition.questionId().equals(questionId)) {
-                return definition;
-            }
-        }
-        return null;
-    }
-
-    /**
-     * 校验提交题目标识完整且属于文章；submitted 为答案列表，definitions 为标准题目，返回答案映射。
-     */
-    private Map<String, String> validateAnswers(List<EngChallengeAnswerDto> submitted,
-            List<QuestionDefinition> definitions) {
-        Set<String> allowed = new HashSet<>();
-        for (QuestionDefinition definition : definitions) {
-            allowed.add(definition.questionId());
-        }
+    private Map<String, String> validateAnswers(List<EngChallengeAnswerDto> submitted, List<QuestionDefinition> definitions)
+    {
+        Set<String> allowed = definitions.stream().map(QuestionDefinition::id).collect(Collectors.toSet());
         Map<String, String> answers = new HashMap<>();
-        for (EngChallengeAnswerDto answer : submitted) {
-            if (answer == null || StringUtils.isEmpty(answer.getQuestionId()) || !allowed.contains(answer.getQuestionId())) {
-                throw new ServiceException("存在不属于当前文章的题目");
-            }
-            if (answer.getAnswer() == null || answer.getAnswer().trim().isEmpty()) {
-                throw new ServiceException("答案不能为空");
-            }
-            if (answers.put(answer.getQuestionId(), answer.getAnswer()) != null) {
-                throw new ServiceException("题目不能重复提交");
-            }
+        for (EngChallengeAnswerDto answer : submitted)
+        {
+            if (answer == null || !allowed.contains(answer.getQuestionId())) throw new ServiceException("存在不属于当前测试的题目");
+            if (StringUtils.isEmpty(answer.getAnswer())) throw new ServiceException("答案不能为空");
+            if (answers.put(answer.getQuestionId(), answer.getAnswer()) != null) throw new ServiceException("题目不能重复提交");
         }
-        if (answers.size() != definitions.size()) {
-            throw new ServiceException("请完成全部题目后再提交");
-        }
+        if (answers.size() != definitions.size()) throw new ServiceException("请完成全部题目后再提交");
         return answers;
     }
 
-    /**
-     * 对答案执行忽略首尾空白和大小写的比较；definitions 为标准题目、answers 为用户答案，返回计分结果。
-     */
-    private EngChallengeResultVo calculateResult(List<QuestionDefinition> definitions, Map<String, String> answers) {
-        int correctCount = 0;
-        List<EngChallengeResultVo.ResultItem> items = new ArrayList<>();
-        for (QuestionDefinition definition : definitions) {
-            // 最终提交复用即时判题的单题结果组装，保证两种入口的比较规则完全一致。
-            EngChallengeResultVo.ResultItem item = buildResultItem(definition, answers.get(definition.questionId()));
-            if (Boolean.TRUE.equals(item.getCorrect())) {
-                correctCount++;
-            }
-            items.add(item);
+    private EngChallengeResultVo calculateResult(EngChallengeSubmitDto request, String mode,
+            List<QuestionDefinition> definitions, Map<String, String> answers)
+    {
+        List<EngChallengeResultVo.ResultItem> items = new ArrayList<>(); int correct = 0;
+        for (QuestionDefinition definition : definitions)
+        {
+            var item = resultItem(definition, answers.get(definition.id()));
+            if (Boolean.TRUE.equals(item.getCorrect())) correct++; items.add(item);
         }
-        int score = correctCount * 100 / definitions.size();
+        int score = definitions.isEmpty() ? 0 : correct * 100 / definitions.size();
         EngChallengeResultVo result = new EngChallengeResultVo();
-        result.setScore(score);
-        result.setCorrectCount(correctCount);
-        result.setTotalCount(definitions.size());
-        result.setPassed(score >= PASS_SCORE);
-        result.setCoinReward(calculateCoinReward(correctCount, definitions.size(), score));
-        result.setResults(items);
+        result.setAttemptId(request.getAttemptId()); result.setMode(mode); result.setArticleId(request.getArticleId());
+        result.setLevelNo(request.getLevelNo()); result.setScore(score); result.setCorrectCount(correct);
+        result.setTotalCount(definitions.size()); result.setStars(EngWordStarCalculator.levelStars(score));
+        result.setPassed(result.getStars() >= 1); result.setResults(items); return result;
+    }
+
+    private Map<Long, WordScore> wordScores(List<QuestionDefinition> definitions,
+            List<EngChallengeResultVo.ResultItem> items, String mode, int levelStars,
+            Long articleId, Long userId)
+    {
+        Map<String, Boolean> correctness = items.stream().collect(Collectors.toMap(
+                EngChallengeResultVo.ResultItem::getQuestionId, EngChallengeResultVo.ResultItem::getCorrect));
+        Map<Long, int[]> counts = new LinkedHashMap<>();
+        for (QuestionDefinition definition : definitions)
+        {
+            int[] count = counts.computeIfAbsent(definition.word().getId(), ignored -> new int[2]); count[1]++;
+            if (Boolean.TRUE.equals(correctness.get(definition.id()))) count[0]++;
+        }
+        Map<Long, WordScore> scores = new LinkedHashMap<>();
+        for (var entry : counts.entrySet())
+        {
+            int correct = entry.getValue()[0], total = entry.getValue()[1];
+            int stars = NEW.equals(mode) ? levelStars : EngWordStarCalculator.reviewStars(correct, total);
+            Long sourceArticleId = articleId;
+            if (REVIEW.equals(mode))
+            {
+                EngUserWordProgress progress = wordProgressMapper.selectByUserAndWord(userId, entry.getKey());
+                sourceArticleId = progress == null ? null : progress.getFirstArticleId();
+            }
+            scores.put(entry.getKey(), new WordScore(correct, total, correct == total, stars, sourceArticleId));
+        }
+        return scores;
+    }
+
+    private EngUserWordProgress lockProgress(Long userId, String username, Long wordId, Long articleId, Integer levelNo)
+    {
+        EngUserWordProgress initial = new EngUserWordProgress(); initial.setUserId(userId); initial.setWordId(wordId);
+        initial.setFirstArticleId(articleId); initial.setFirstLevelNo(levelNo); initial.setCreateBy(username);
+        initial.setUpdateBy(username); wordProgressMapper.ensureProgress(initial);
+        return wordProgressMapper.selectForUpdate(userId, wordId);
+    }
+
+    private void updateWrongWord(Long userId, String username, EngWordVo word, WordScore score)
+    {
+        if (score.sourceArticleId() == null) return;
+        EngWrongWord condition = new EngWrongWord(); condition.setUserId(userId);
+        condition.setArticleId(score.sourceArticleId()); condition.setWordId(word.getId());
+        if (score.allCorrect())
+        {
+            EngWrongWord existing = wrongWordMapper.selectByUserArticleWord(condition);
+            if (existing != null && value(existing.getMastered()) == 0)
+                wrongWordMapper.markMasteredByUserArticleWord(userId, score.sourceArticleId(), word.getId(), username);
+        }
+        else
+        {
+            condition.setCreateBy(username); condition.setUpdateBy(username); wrongWordMapper.upsertWrongWord(condition);
+        }
+    }
+
+    private EngStudyRecordWord detail(Long recordId, EngWordVo word, WordScore score, String mode,
+            long milestoneCoin, long reviewCoin)
+    {
+        EngStudyRecordWord item = new EngStudyRecordWord(); item.setStudyRecordId(recordId); item.setWordId(word.getId());
+        item.setSourceArticleId(score.sourceArticleId()); item.setStudyMode(mode); item.setCorrectCount(score.correct());
+        item.setTotalCount(score.total()); item.setAllCorrect(score.allCorrect() ? 1 : 0); item.setStars(score.stars());
+        item.setMilestoneCoin(milestoneCoin); item.setReviewCoin(reviewCoin); return item;
+    }
+
+    private List<EngChallengeWordResultVo> buildWordResults(List<EngWordVo> words, Map<Long, WordScore> scores,
+            Long userId, List<EngStudyRecordWord> details)
+    {
+        Map<Long, EngStudyRecordWord> detailMap = details.stream().collect(Collectors.toMap(EngStudyRecordWord::getWordId, item -> item));
+        List<EngChallengeWordResultVo> result = new ArrayList<>(); Date now = new Date();
+        for (EngWordVo word : words)
+        {
+            WordScore score = scores.get(word.getId()); EngStudyRecordWord detail = detailMap.get(word.getId());
+            EngUserWordProgress progress = wordProgressMapper.selectByUserAndWord(userId, word.getId());
+            EngChallengeWordResultVo item = new EngChallengeWordResultVo(); item.setWordId(word.getId());
+            item.setWordName(word.getWordName()); item.setSourceArticleId(score.sourceArticleId());
+            item.setCorrectCount(score.correct()); item.setTotalCount(score.total()); item.setAllCorrect(score.allCorrect());
+            item.setStars(score.stars()); item.setHighestStars(value(progress.getHighestStars()));
+            item.setCurrentStars(EngWordStarCalculator.currentStars(progress.getLatestStars(), progress.getLatestTestTime(), now));
+            item.setMilestoneCoin(detail.getMilestoneCoin()); item.setReviewCoin(detail.getReviewCoin()); result.add(item);
+        }
         return result;
     }
 
-    /**
-     * 计算本轮金币：答对题数为基础金币，仅全部答对时获得十五枚金币，其他成绩奖励取最高档且不叠加。
-     */
-    private long calculateCoinReward(int correctCount, int totalCount, int score) {
-        int bonus;
-        if (totalCount > 0 && correctCount == totalCount) {
-            bonus = 15;
-        } else if (score >= 90) {
-            bonus = 5;
-        } else if (score >= 80) {
-            bonus = 3;
-        } else if (score >= 60) {
-            bonus = 2;
-        } else {
-            bonus = 0;
+    private EngChallengeResultVo existingResult(EngStudyRecord record)
+    {
+        if (record == null) throw new ServiceException("重复提交结果读取失败");
+        EngChallengeResultVo result = new EngChallengeResultVo(); result.setAttemptId(record.getAttemptId());
+        result.setMode(record.getStudyMode()); result.setArticleId(record.getArticleId()); result.setLevelNo(record.getLevelNo());
+        result.setScore(record.getScore()); result.setCorrectCount(record.getCorrectCount()); result.setTotalCount(record.getTotalCount());
+        result.setPassed(value(record.getPassed()) == 1); result.setStars(value(record.getStars()));
+        result.setMilestoneCoin(longValue(record.getMilestoneCoin())); result.setReviewCoin(longValue(record.getReviewCoin()));
+        result.setCoinReward(longValue(record.getCoinReward())); result.setCoinBalance(coinWalletMapper.selectCoinBalance(record.getUserId()));
+        applyNextLevel(result, record.getArticleId(), record.getLevelNo(), value(record.getStars()));
+        List<EngChallengeWordResultVo> wordResults = new ArrayList<>();
+        Date now = new Date();
+        for (EngStudyRecordWord detail : recordWordMapper.selectByRecordAndUser(record.getId(), record.getUserId()))
+        {
+            EngUserWordProgress progress = wordProgressMapper.selectByUserAndWord(record.getUserId(), detail.getWordId());
+            EngChallengeWordResultVo item = new EngChallengeWordResultVo(); item.setWordId(detail.getWordId());
+            item.setWordName(detail.getWordName()); item.setSourceArticleId(detail.getSourceArticleId());
+            item.setCorrectCount(detail.getCorrectCount()); item.setTotalCount(detail.getTotalCount());
+            item.setAllCorrect(value(detail.getAllCorrect()) == 1); item.setStars(detail.getStars());
+            item.setHighestStars(progress == null ? 0 : value(progress.getHighestStars()));
+            item.setCurrentStars(progress == null ? 0 : EngWordStarCalculator.currentStars(
+                    progress.getLatestStars(), progress.getLatestTestTime(), now));
+            item.setMilestoneCoin(detail.getMilestoneCoin()); item.setReviewCoin(detail.getReviewCoin());
+            wordResults.add(item);
         }
-        return (long) correctCount + bonus;
+        result.setWordResults(wordResults);
+        return result;
     }
 
-    /**
-     * 使用统一规则生成单题判定结果；definition 为标准题目，answer 为用户答案，返回正确状态和正确答案。
-     */
-    private EngChallengeResultVo.ResultItem buildResultItem(QuestionDefinition definition, String answer) {
-        boolean correct = normalizeAnswer(definition.correctAnswer()).equals(normalizeAnswer(answer));
-        EngChallengeResultVo.ResultItem item = new EngChallengeResultVo.ResultItem();
-        item.setQuestionId(definition.questionId());
-        item.setCorrect(correct);
-        item.setCorrectAnswer(definition.correctAnswer());
-        return item;
-    }
-
-    /** 将 answer 规范化用于答案比较并返回。 */
-    private String normalizeAnswer(String answer) {
-        return answer == null ? "" : answer.trim().toLowerCase(Locale.ROOT);
-    }
-
-    /** 保存本次学习记录；参数包含用户、文章和计分结果。 */
-    private Long saveStudyRecord(Long userId, String username, Long articleId, EngChallengeResultVo result) {
-        EngStudyRecord record = new EngStudyRecord();
-        record.setUserId(userId);
-        record.setArticleId(articleId);
-        record.setScore(result.getScore());
-        record.setCorrectCount(result.getCorrectCount());
-        record.setTotalCount(result.getTotalCount());
-        record.setPassed(Boolean.TRUE.equals(result.getPassed()) ? 1 : 0);
-        record.setCoinReward(result.getCoinReward());
-        record.setCreateBy(username);
-        recordMapper.insertEngStudyRecord(record);
-        return record.getId();
-    }
-
-    /**
-     * 在任何积分、进度和熟悉度副作用前登记本轮完成词；数据库唯一键负责阻止并发重复提交。
-     */
-    private void registerDailyCompletions(Long userId, String username, Long articleId, LocalDate studyDate,
-            List<EngWordVo> words) {
-        try {
-            for (EngWordVo word : words) {
-                EngDailyTestWord dailyTestWord = new EngDailyTestWord();
-                dailyTestWord.setUserId(userId);
-                dailyTestWord.setArticleId(articleId);
-                dailyTestWord.setWordId(word.getId());
-                dailyTestWord.setStudyDate(studyDate);
-                dailyTestWord.setCategory(word.getReviewCategory());
-                dailyTestWord.setCreateBy(username);
-                dailyTestWordMapper.insertDailyTestWord(dailyTestWord);
-            }
-        } catch (DuplicateKeyException exception) {
-            throw new ServiceException("本轮单词今日已完成，请重新获取学习内容");
-        }
-    }
-
-    /** 仅在首次或更高分时写入最好进度；参数包含用户、文章和计分结果。 */
-    private void saveBestProgress(Long userId, String username, Long articleId, EngChallengeResultVo result) {
-        EngArticleProgress progress = progressCondition(userId, articleId);
-        applyResult(progress, result);
-        progress.setCreateBy(username);
-        progress.setUpdateBy(username);
-        progressMapper.upsertBestProgress(progress);
-    }
-
-    /** 将 result 的最好成绩字段复制到 progress。 */
-    private void applyResult(EngArticleProgress progress, EngChallengeResultVo result) {
-        progress.setBestScore(result.getScore());
-        progress.setBestCorrectCount(result.getCorrectCount());
-        progress.setBestTotalCount(result.getTotalCount());
-        progress.setCompleted(Boolean.TRUE.equals(result.getPassed()) ? 1 : 0);
-    }
-
-    /**
-     * 对关联单词的多类题维护错词：任一题答错则累计并保持未掌握，同一单词全部答对才标记已掌握。
-     */
-    private void updateWrongWords(Long userId, String username, Long articleId,
-            List<QuestionDefinition> definitions, EngChallengeResultVo result) {
-        Map<String, Boolean> resultMap = new HashMap<>();
-        for (EngChallengeResultVo.ResultItem item : result.getResults()) {
-            resultMap.put(item.getQuestionId(), item.getCorrect());
-        }
-        Map<Long, EngWord> words = new HashMap<>();
-        Set<Long> wrongWordIds = new HashSet<>();
-        for (QuestionDefinition definition : definitions) {
-            EngWord word = definition.word();
-            if (word == null) {
-                continue;
-            }
-            words.put(word.getId(), word);
-            if (!Boolean.TRUE.equals(resultMap.get(definition.questionId()))) {
-                wrongWordIds.add(word.getId());
+    /** 通关后跳过空洞和自动掌握关，只返回真正可练习的下一关。 */
+    private void applyNextLevel(EngChallengeResultVo result, Long articleId, Integer currentLevelNo, int stars)
+    {
+        result.setNextLevelUnlocked(false);
+        result.setNextLevelNo(null);
+        if (!NEW.equals(result.getMode()) || stars < 1 || articleId == null || currentLevelNo == null) return;
+        for (EngArticleLevelVo level : getArticleLevels(articleId).getLevels())
+        {
+            if (level.getLevelNo() <= currentLevelNo || !Boolean.TRUE.equals(level.getUnlocked())
+                    || Boolean.TRUE.equals(level.getMasteredByExistingWords())) continue;
+            if (!newWordsForLevel(articleId, level.getLevelNo(), false).isEmpty())
+            {
+                result.setNextLevelNo(level.getLevelNo());
+                result.setNextLevelUnlocked(true);
+                return;
             }
         }
-        for (EngWord word : words.values()) {
-            EngWrongWord condition = new EngWrongWord();
-            condition.setUserId(userId);
-            condition.setArticleId(articleId);
-            condition.setWordId(word.getId());
-            if (!wrongWordIds.contains(word.getId())) {
-                EngWrongWord existing = wrongWordMapper.selectByUserArticleWord(condition);
-                if (existing != null && existing.getMastered() == 0) {
-                    // 使用原子状态更新，避免并发答错累计后被旧实体中的错误次数覆盖。
-                    wrongWordMapper.markMasteredByUserArticleWord(userId, articleId, word.getId(), username);
-                }
-                continue;
-            }
-            condition.setCreateBy(username);
-            condition.setUpdateBy(username);
-            // 同一轮多种题型答错只累计一次，保持原有按单词维护错误次数的业务口径。
-            wrongWordMapper.upsertWrongWord(condition);
-        }
     }
 
-    /**
-     * 按单词汇总本轮结果：所有适用题型全对熟悉度加一，任一题错则减一，每词每轮只更新一次。
-     */
-    private void updateFamiliarities(List<QuestionDefinition> definitions, EngChallengeResultVo result) {
-        Map<String, Boolean> resultMap = new HashMap<>();
-        for (EngChallengeResultVo.ResultItem item : result.getResults()) {
-            resultMap.put(item.getQuestionId(), item.getCorrect());
-        }
-        Map<Long, EngWord> words = new LinkedHashMap<>();
-        Map<Long, Boolean> allCorrect = new HashMap<>();
-        for (QuestionDefinition definition : definitions) {
-            EngWord word = definition.word();
-            words.putIfAbsent(word.getId(), word);
-            boolean correct = Boolean.TRUE.equals(resultMap.get(definition.questionId()));
-            allCorrect.merge(word.getId(), correct, (current, next) -> current && next);
-        }
-        for (EngWord word : words.values()) {
-            wordService.updateFamiliarity(word.getWordName(), Boolean.TRUE.equals(allCorrect.get(word.getId())) ? 1 : -1);
-        }
+    private EngStudyRecord recordHeader(Long userId, String username, EngChallengeSubmitDto request, String mode,
+            EngChallengeResultVo result)
+    {
+        EngStudyRecord record = new EngStudyRecord(); record.setUserId(userId);
+        record.setArticleId(NEW.equals(mode) ? request.getArticleId() : null); record.setAttemptId(request.getAttemptId());
+        record.setStudyMode(mode); record.setLevelNo(request.getLevelNo()); record.setScore(result.getScore());
+        record.setCorrectCount(result.getCorrectCount()); record.setTotalCount(result.getTotalCount());
+        record.setPassed(Boolean.TRUE.equals(result.getPassed()) ? 1 : 0); record.setStars(result.getStars());
+        record.setMilestoneCoin(0L); record.setReviewCoin(0L); record.setCoinReward(0L); record.setCreateBy(username); return record;
     }
 
-    /** 查询并校验 articleId 对应文章存在，返回文章。 */
-    private EngArticle requireArticle(Long articleId) {
-        if (articleId == null) {
-            throw new ServiceException("文章主键不能为空");
-        }
+    private EngStudyRecord findAttempt(Long userId, String attemptId)
+    {
+        EngStudyRecord condition = new EngStudyRecord(); condition.setUserId(userId); condition.setAttemptId(attemptId);
+        return recordMapper.selectByUserAndAttempt(condition);
+    }
+
+    /** 重复提交冲突后使用当前读，避免 RR 快照看不到并发已提交记录。 */
+    private EngStudyRecord findAttemptForUpdate(Long userId, String attemptId)
+    {
+        EngStudyRecord condition = new EngStudyRecord(); condition.setUserId(userId); condition.setAttemptId(attemptId);
+        return recordMapper.selectByUserAndAttemptForUpdate(condition);
+    }
+
+    private EngArticleLevelProgress levelProgress(Long userId, Long articleId, Integer levelNo, String username)
+    {
+        EngArticleLevelProgress progress = new EngArticleLevelProgress(); progress.setUserId(userId);
+        progress.setArticleId(articleId); progress.setLevelNo(levelNo); progress.setBestScore(0);
+        progress.setHighestStars(0); progress.setCompletedByKnownWords(0); progress.setCreateBy(username);
+        progress.setUpdateBy(username); return progress;
+    }
+
+    private void validateSubmit(EngChallengeSubmitDto request)
+    {
+        if (request == null || StringUtils.isEmpty(request.getAttemptId()) || request.getAnswers() == null
+                || request.getAnswers().isEmpty()) throw new ServiceException("测试标识和答案不能为空");
+    }
+
+    private String requireMode(String mode)
+    {
+        String value = mode == null ? "" : mode.trim().toUpperCase(Locale.ROOT);
+        if (!NEW.equals(value) && !REVIEW.equals(value)) throw new ServiceException("学习模式必须为 NEW 或 REVIEW");
+        return value;
+    }
+
+    private EngArticle requireArticle(Long articleId)
+    {
+        if (articleId == null) throw new ServiceException("文章主键不能为空");
         EngArticle article = articleService.selectEngArticleById(articleId);
-        if (article == null) {
-            throw new ServiceException("文章不存在");
+        if (article == null) throw new ServiceException("文章不存在或无权操作"); return article;
+    }
+
+    private List<String> options(String correct, List<EngWordVo> words, boolean names, Long excluded)
+    {
+        List<String> result = new ArrayList<>(); result.add(correct);
+        for (EngWordVo word : words)
+        {
+            if (result.size() >= 4) break; if (word.getId().equals(excluded)) continue;
+            String item = names ? word.getWordName() : meaning(word); if (!result.contains(item)) result.add(item);
         }
-        return article;
+        Collections.sort(result); return result;
     }
 
-    /** 构造用户文章组合查询条件并返回。 */
-    private EngArticleProgress progressCondition(Long userId, Long articleId) {
-        EngArticleProgress condition = new EngArticleProgress();
-        condition.setUserId(userId);
-        condition.setArticleId(articleId);
-        return condition;
-    }
+    private String meaning(EngWordVo word) { return StringUtils.isNotEmpty(word.getExchange()) ? word.getExchange() : word.getAcceptation(); }
+    private String sentencePrompt(String instruction, String sentence, String translation)
+    { return instruction + "：“" + sentence + "”" + (StringUtils.isEmpty(translation) ? "" : "；中文提示：" + translation); }
+    private Pattern wholeWord(String word) { return Pattern.compile("(?<![A-Za-z])" + Pattern.quote(word) + "(?![A-Za-z])", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE); }
+    private EngChallengeQuestionVo questionVo(QuestionDefinition item)
+    { EngChallengeQuestionVo vo = new EngChallengeQuestionVo(); vo.setQuestionId(item.id()); vo.setType(item.type()); vo.setPrompt(item.prompt()); vo.setOptions(item.options()); vo.setAudioUrl(item.audio()); vo.setAnswerLength(item.answerLength()); return vo; }
+    private EngChallengeResultVo.ResultItem resultItem(QuestionDefinition definition, String answer)
+    { var item = new EngChallengeResultVo.ResultItem(); item.setQuestionId(definition.id()); item.setCorrect(normalize(definition.answer()).equals(normalize(answer))); item.setCorrectAnswer(definition.answer()); return item; }
+    private QuestionDefinition findDefinition(List<QuestionDefinition> definitions, String id)
+    { return definitions.stream().filter(item -> item.id().equals(id)).findFirst().orElse(null); }
+    private Long extractWordId(String id)
+    { if (id == null) return null; for (String prefix : PREFIXES) if (id.startsWith(prefix)) try { return Long.valueOf(id.substring(prefix.length())); } catch (NumberFormatException ignored) { return null; } return null; }
+    private String normalize(String value) { return value == null ? "" : value.trim().toLowerCase(Locale.ROOT); }
+    private boolean validWord(EngWordVo word) { return word != null && word.getId() != null && StringUtils.isNotEmpty(word.getWordName()) && StringUtils.isNotEmpty(word.getAcceptation()); }
+    private int value(Integer value) { return value == null ? 0 : value; }
+    private long longValue(Long value) { return value == null ? 0L : value; }
 
-    /**
-     * 服务端内部题目定义，包含正确答案与关联单词，绝不由挑战获取接口序列化。
-     */
-    private record QuestionDefinition(String questionId, String type, String prompt, String correctAnswer,
-            List<String> options, String audioUrl, Integer answerLength, EngWord word) {
-    }
-
-    /**
-     * 两类句子题共用的内部内容，分别保存完整词挖空和四字母挖空句子，不对外序列化。
-     */
-    private record SentenceQuestionContent(String choiceBlankSentence, String fillBlankSentence, String acceptation) {
-    }
+    private record QuestionDefinition(String id, String type, String prompt, String answer, List<String> options,
+            String audio, Integer answerLength, EngWordVo word, Long sourceArticleId) {}
+    private record SentenceContent(String choiceBlank, String fillBlank, String acceptation, String answer,
+            Long sourceArticleId) {}
+    private record WordScore(int correct, int total, boolean allCorrect, int stars, Long sourceArticleId) {}
 }

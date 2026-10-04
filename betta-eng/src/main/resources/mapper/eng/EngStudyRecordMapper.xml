@@ -5,6 +5,9 @@
         <id property="id" column="id"/>
         <result property="userId" column="user_id"/>
         <result property="articleId" column="article_id"/>
+        <result property="attemptId" column="attempt_id"/><result property="studyMode" column="study_mode"/>
+        <result property="levelNo" column="level_no"/><result property="stars" column="stars"/>
+        <result property="milestoneCoin" column="milestone_coin"/><result property="reviewCoin" column="review_coin"/>
         <result property="articleTitle" column="article_title"/>
         <result property="score" column="score"/>
         <result property="correctCount" column="correct_count"/>
@@ -14,13 +17,15 @@
         <result property="createBy" column="create_by"/>
         <result property="createTime" column="create_time"/>
     </resultMap>
-    <insert id="insertEngStudyRecord" parameterType="EngStudyRecord" useGeneratedKeys="true" keyProperty="id">
-        insert into eng_study_record(user_id,article_id,score,correct_count,total_count,passed,coin_reward,create_by,create_time)
-        values(#{userId},#{articleId},#{score},#{correctCount},#{totalCount},#{passed},#{coinReward},#{createBy},now())
+    <insert id="insertIgnoreEngStudyRecord" parameterType="EngStudyRecord" useGeneratedKeys="true" keyProperty="id">
+        insert ignore into eng_study_record(user_id,article_id,attempt_id,study_mode,level_no,score,correct_count,total_count,
+          passed,stars,milestone_coin,review_coin,coin_reward,create_by,create_time)
+        values(#{userId},#{articleId},#{attemptId},#{studyMode},#{levelNo},#{score},#{correctCount},#{totalCount},
+          #{passed},#{stars},#{milestoneCoin},#{reviewCoin},#{coinReward},#{createBy},now())
     </insert>
     <select id="selectRecentByUserId" resultMap="RecordMap">
         select r.*,a.title article_title
-        from eng_study_record r join eng_article a on a.id=r.article_id
+        from eng_study_record r left join eng_article a on a.id=r.article_id
         where r.user_id=#{userId}
         order by r.create_time desc,r.id desc limit 10
     </select>
@@ -30,9 +35,16 @@
     <select id="sumScoreByUserId" resultType="long">
         select coalesce(sum(score),0) from eng_study_record where user_id=#{userId}
     </select>
-    <select id="selectLatestByUserAndArticle" parameterType="EngStudyRecord" resultMap="RecordMap">
-        select * from eng_study_record
-        where user_id=#{userId} and article_id=#{articleId}
-        order by create_time desc,id desc limit 1
+    <select id="selectByUserAndAttempt" parameterType="EngStudyRecord" resultMap="RecordMap">
+        select r.*,a.title article_title from eng_study_record r left join eng_article a on a.id=r.article_id
+        where r.user_id=#{userId} and r.attempt_id=#{attemptId} limit 1
     </select>
+    <select id="selectByUserAndAttemptForUpdate" parameterType="EngStudyRecord" resultMap="RecordMap">
+        select * from eng_study_record
+        where user_id=#{userId} and attempt_id=#{attemptId} limit 1 for update
+    </select>
+    <update id="updateOutcome" parameterType="EngStudyRecord">
+        update eng_study_record set stars=#{stars},milestone_coin=#{milestoneCoin},review_coin=#{reviewCoin},
+          coin_reward=#{coinReward} where id=#{id} and user_id=#{userId}
+    </update>
 </mapper>

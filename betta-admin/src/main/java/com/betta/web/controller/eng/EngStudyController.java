@@ -1,5 +1,7 @@
 package com.betta.web.controller.eng;
 
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -12,6 +14,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.betta.common.core.controller.BaseController;
 import com.betta.common.core.domain.AjaxResult;
 import com.betta.common.core.page.TableDataInfo;
+import com.betta.common.exception.ServiceException;
 import com.betta.eng.domain.EngWrongWord;
 import com.betta.eng.domain.dto.EngChallengeCheckDto;
 import com.betta.eng.domain.dto.EngChallengeSubmitDto;
@@ -43,18 +46,28 @@ public class EngStudyController extends BaseController
         return success(service.getSummary());
     }
 
-    /** 根据 articleId 查询当前用户文章最好进度。 */
-    @GetMapping("/progress/{articleId}")
-    public AjaxResult progress(@PathVariable Long articleId)
+    /** 查询文章永久关卡地图。 */
+    @GetMapping("/articles/{articleId}/levels")
+    public AjaxResult levels(@PathVariable Long articleId)
     {
-        return success(service.getProgress(articleId));
+        return success(service.getArticleLevels(articleId));
     }
 
-    /** 根据 articleId 获取不包含正确答案的文章挑战。 */
-    @GetMapping("/challenge/{articleId}")
-    public AjaxResult challenge(@PathVariable Long articleId)
+    /** 查询全局已学词和建议复习状态。 */
+    @GetMapping("/review")
+    public AjaxResult review()
     {
-        return success(service.getChallenge(articleId));
+        return success(service.getReviewOverview());
+    }
+
+    /** 按 NEW 或 REVIEW 模式获取不包含正确答案的固定词集挑战。 */
+    @GetMapping("/challenge")
+    public AjaxResult challenge(@RequestParam String mode,
+            @RequestParam(required = false) Long articleId,
+            @RequestParam(required = false) Integer levelNo,
+            @RequestParam(required = false) String wordIds)
+    {
+        return success(service.getChallenge(mode, articleId, levelNo, parseWordIds(wordIds)));
     }
 
     /**
@@ -101,5 +114,28 @@ public class EngStudyController extends BaseController
     public AjaxResult mastered(@PathVariable Long id)
     {
         return toAjax(service.markWrongWordMastered(id));
+    }
+
+    /** 查询当前用户一次测试对应的规范词明细。 */
+    @GetMapping("/records/{recordId}/words")
+    public AjaxResult recordWords(@PathVariable Long recordId)
+    {
+        return success(service.selectRecordWords(recordId));
+    }
+
+    /** 将 REVIEW 主动选择的逗号主键解析为有序去重集合。 */
+    private List<Long> parseWordIds(String value)
+    {
+        if (value == null || value.isBlank()) return List.of();
+        LinkedHashSet<Long> ids = new LinkedHashSet<>();
+        try
+        {
+            for (String item : value.split(",")) ids.add(Long.valueOf(item.trim()));
+        }
+        catch (NumberFormatException exception)
+        {
+            throw new ServiceException("复习单词主键格式错误");
+        }
+        return new ArrayList<>(ids);
     }
 }

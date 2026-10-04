@@ -32,6 +32,11 @@
         <result property="updateBy" column="update_by"/>
         <result property="updateTime" column="update_time"/>
     </resultMap>
+    <resultMap id="WordFormMatchMap" type="EngWordFormMatchVo">
+        <result property="lookupKey" column="lookup_key"/>
+        <result property="wordId" column="word_id"/>
+        <result property="wordName" column="word_name"/>
+    </resultMap>
     <sql id="columns">
         id,word_name,prototype,ph_mp3,phonetics,display_name,phonetics_uk,phonetics_us,
         ph_mp3_uk,ph_mp3_us,acceptation,exchange,parts,word_forms,usage_labels,variants,
@@ -40,6 +45,10 @@
     </sql>
     <select id="selectEngWordById" resultMap="WordMap">
         select <include refid="columns"/> from eng_word where id=#{id}
+    </select>
+    <select id="selectByIds" resultMap="WordMap">
+        select <include refid="columns"/> from eng_word where id in
+        <foreach item="id" collection="ids" open="(" separator="," close=")">#{id}</foreach>
     </select>
     <select id="selectEngWordList" parameterType="EngWord" resultMap="WordMap">
         select <include refid="columns"/> from eng_word
@@ -58,15 +67,58 @@
         from (
             select w.*, 0 match_priority, 0 alias_sort
             from eng_word w
-            where w.word_name=#{wordName}
+            where lower(w.word_name)=#{wordName}
             union all
             select w.*, 1 match_priority, a.sort_order alias_sort
             from eng_word_alias a
             join eng_word w on w.id=a.word_id
             where a.alias_key=#{wordName}
-              and not exists(select 1 from eng_word exact_word where exact_word.word_name=#{wordName})
+              and not exists(select 1 from eng_word exact_word where lower(exact_word.word_name)=#{wordName})
+            union all
+            select w.*, 2 match_priority, 0 alias_sort
+            from eng_word w
+            where lower(w.prototype)=#{wordName}
+              and not exists(select 1 from eng_word exact_word where lower(exact_word.word_name)=#{wordName})
+              and not exists(select 1 from eng_word_alias a where a.alias_key=#{wordName})
         ) matched
         order by matched.match_priority,matched.alias_sort,matched.id
+    </select>
+    <select id="selectWordFormMatches" resultMap="WordFormMatchMap">
+        select matched.lookup_key,matched.word_id,matched.word_name
+        from (
+            select lower(w.word_name) lookup_key,w.id word_id,w.word_name,
+                   0 match_priority,0 alias_sort
+            from eng_word w
+            where lower(w.word_name) in
+            <foreach item="form" collection="forms" open="(" separator="," close=")">
+                #{form}
+            </foreach>
+            union all
+            select a.alias_key,w.id,w.word_name,1 match_priority,a.sort_order alias_sort
+            from eng_word_alias a join eng_word w on w.id=a.word_id
+            where a.alias_key in
+            <foreach item="form" collection="forms" open="(" separator="," close=")">
+                #{form}
+            </foreach>
+              and not exists(
+                  select 1 from eng_word exact_word where lower(exact_word.word_name)=a.alias_key
+              )
+            union all
+            select lower(w.prototype),w.id,w.word_name,2 match_priority,0 alias_sort
+            from eng_word w
+            where lower(w.prototype) in
+            <foreach item="form" collection="forms" open="(" separator="," close=")">
+                #{form}
+            </foreach>
+              and not exists(
+                  select 1 from eng_word exact_word
+                  where lower(exact_word.word_name)=lower(w.prototype)
+              )
+              and not exists(
+                  select 1 from eng_word_alias a where a.alias_key=lower(w.prototype)
+              )
+        ) matched
+        order by matched.lookup_key,matched.match_priority,matched.alias_sort,matched.word_id
     </select>
     <select id="selectWordListByArticleId" resultMap="WordMap">
         select w.*,r.id rel_id,
@@ -82,28 +134,6 @@
         )
         where r.article_id=#{articleId}
         order by r.id,w.word_name,w.id
-    </select>
-    <select id="selectLowestFamiliarityWordsByArticleId" resultMap="WordMap">
-        select w.*,r.rel_id,
-               coalesce(s.familiarity,0) familiarity,
-               coalesce(s.familiarity,0) base_familiarity,
-               case when s.id is null then 0 else 1 end score_exists,
-               coalesce(s.update_time,s.create_time) last_review_time
-        from eng_word w
-        join (
-            select word_name,min(id) rel_id
-            from eng_article_word_rel
-            where article_id=#{articleId}
-            group by word_name
-        ) r on r.word_name=w.word_name
-        left join eng_user_score s on s.id=(
-            select s1.id from eng_user_score s1
-            where s1.word_name=w.word_name and s1.user=#{username}
-            order by s1.familiarity,s1.id limit 1
-        )
-        where w.word_name is not null and w.word_name!=''
-          and w.acceptation is not null and w.acceptation!=''
-        order by base_familiarity,w.word_name,w.id
     </select>
     <insert id="insertEngWord" parameterType="EngWord" useGeneratedKeys="true" keyProperty="id">
         insert into eng_word(word_name,prototype,ph_mp3,phonetics,display_name,phonetics_uk,phonetics_us,
@@ -127,6 +157,9 @@
     <delete id="deleteEngWordById">
         delete from eng_word where id=#{id}
     </delete>
+    <select id="countStudyRecordWordRefs" resultType="int">
+        select count(*) from eng_study_record_word where word_id=#{id}
+    </select>
     <select id="selectRelList" resultMap="WordMap">
         select w.* from eng_word w
         where exists(select 1 from eng_article_word_rel r where r.create_by=#{username} and r.word_name=w.word_name)
