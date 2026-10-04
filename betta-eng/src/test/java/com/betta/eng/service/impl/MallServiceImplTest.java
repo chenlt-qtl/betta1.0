@@ -124,11 +124,11 @@ public class MallServiceImplTest
         assertTrue(exchange.isAnnotationPresent(Transactional.class), "兑换方法必须由 Spring 事务代理统一回滚");
     }
 
-    /** 验证名称、描述、图片数量和价格边界。 */
+    /** 验证名称、可选描述、图片数量和价格边界。 */
     private void shouldValidateProductBoundaries()
     {
-        MallServiceImpl service = new MallServiceImpl(new TestProductMapper(null), new TestRecordMapper(),
-                new TestWalletMapper(0L));
+        TestProductMapper products = new TestProductMapper(null);
+        MallServiceImpl service = new MallServiceImpl(products, new TestRecordMapper(), new TestWalletMapper(0L));
         setTestLoginUser();
         try
         {
@@ -141,7 +141,14 @@ public class MallServiceImplTest
             assertServiceException(() -> service.insertProduct(noName), "商品名称不能为空");
             MallProduct noDescription = product(null, 1L);
             noDescription.setDescription(null);
-            assertServiceException(() -> service.insertProduct(noDescription), "商品描述不能为空");
+            service.insertProduct(noDescription);
+            assertEquals("", noDescription.getDescription(), "新增商品的空描述应规范化为空字符串");
+            assertEquals("", products.lastInsertedDescription, "新增商品进入 Mapper 前应完成描述规范化");
+            MallProduct blankDescription = product(2L, 1L);
+            blankDescription.setDescription("  ");
+            service.updateProduct(blankDescription);
+            assertEquals("", blankDescription.getDescription(), "更新商品的空白描述应规范化为空字符串");
+            assertEquals("", products.lastUpdatedDescription, "更新商品进入 Mapper 前应完成描述规范化");
             MallProduct zeroPrice = product(null, 0L);
             assertServiceException(() -> service.insertProduct(zeroPrice), "商品价格必须为正整数");
             MallProduct noImages = product(null, 1L);
@@ -225,6 +232,8 @@ public class MallServiceImplTest
     private static final class TestProductMapper implements MallProductMapper
     {
         private final MallProduct lockedProduct;
+        private String lastInsertedDescription;
+        private String lastUpdatedDescription;
 
         private TestProductMapper(MallProduct lockedProduct)
         {
@@ -238,9 +247,18 @@ public class MallServiceImplTest
         @Override
         public MallProduct selectProductByIdForUpdate(Long id) { return lockedProduct; }
         @Override
-        public int insertProduct(MallProduct product) { product.setId(1L); return 1; }
+        public int insertProduct(MallProduct product)
+        {
+            lastInsertedDescription = product.getDescription();
+            product.setId(1L);
+            return 1;
+        }
         @Override
-        public int updateProduct(MallProduct product) { return 1; }
+        public int updateProduct(MallProduct product)
+        {
+            lastUpdatedDescription = product.getDescription();
+            return 1;
+        }
         @Override
         public int deleteProductByIds(Long[] ids) { return ids.length; }
     }

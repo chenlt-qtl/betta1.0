@@ -144,9 +144,10 @@ public class MallServiceImpl implements IMallService
         {
             throw new ServiceException("商品名称不能为空");
         }
+        // 商品详情可选，空值统一落为空字符串以兼容数据库非空约束。
         if (isBlank(product.getDescription()))
         {
-            throw new ServiceException("商品描述不能为空");
+            product.setDescription("");
         }
         if (product.getCoinPrice() == null || product.getCoinPrice() <= 0)
         {

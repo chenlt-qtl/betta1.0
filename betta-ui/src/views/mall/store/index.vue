@@ -14,35 +14,41 @@
 
     <el-tabs v-model="activeTab" @tab-click="handleTabClick">
       <el-tab-pane label="商品" name="products">
-        <div v-loading="productLoading" class="product-grid">
-          <el-empty v-if="!productLoading && productList.length === 0" description="暂无可兑换商品" />
-          <el-card
-            v-for="product in productList"
-            :key="product.id"
-            class="product-card"
-            shadow="hover"
-            :body-style="{ padding: '0' }"
-            @click.native="openProduct(product)"
-          >
-            <el-image class="product-cover" :src="firstImage(product.images)" fit="cover">
-              <div slot="error" class="image-placeholder"><i class="el-icon-picture-outline" /></div>
-            </el-image>
-            <div class="product-summary">
-              <div class="product-name">{{ product.name }}</div>
-              <div class="product-footer">
-                <span class="price"><i class="el-icon-coin" /> {{ product.coinPrice }}</span>
-                <el-button type="primary" size="small" @click.stop="openProduct(product)">查看</el-button>
+        <div
+          v-infinite-scroll="loadMoreProducts"
+          infinite-scroll-disabled="productLoadDisabled"
+          infinite-scroll-distance="200"
+          infinite-scroll-immediate="false"
+        >
+          <div v-loading="productLoading" class="product-grid">
+            <el-empty v-if="!productLoading && productList.length === 0" description="暂无可兑换商品" />
+            <el-card
+              v-for="product in productList"
+              :key="product.id"
+              class="product-card"
+              shadow="hover"
+              :body-style="{ padding: '0' }"
+              @click.native="openProduct(product)"
+            >
+              <el-image class="product-cover" :src="firstImage(product.images)" fit="cover">
+                <div slot="error" class="image-placeholder"><i class="el-icon-picture-outline" /></div>
+              </el-image>
+              <div class="product-summary">
+                <div class="product-name">{{ product.name }}</div>
+                <div class="product-footer">
+                  <span class="price"><i class="el-icon-coin" /> {{ product.coinPrice }}</span>
+                  <el-button type="primary" size="small" @click.stop="openProduct(product)">查看</el-button>
+                </div>
               </div>
-            </div>
-          </el-card>
+            </el-card>
+          </div>
+          <div v-if="productLoadingMore" class="product-load-status">
+            <i class="el-icon-loading" /> 正在加载更多商品...
+          </div>
+          <div v-else-if="productList.length > 0 && !productHasMore" class="product-load-status">
+            已加载全部商品
+          </div>
         </div>
-        <pagination
-          v-show="productTotal > 0"
-          :total="productTotal"
-          :page.sync="productQuery.pageNum"
-          :limit.sync="productQuery.pageSize"
-          @pagination="loadProducts"
-        />
       </el-tab-pane>
 
       <el-tab-pane label="我的兑换记录" name="records">
@@ -126,9 +132,10 @@ export default {
       activeTab: 'products',
       coinBalance: 0,
       productLoading: false,
+      productLoadingMore: false,
       productList: [],
       productTotal: 0,
-      productQuery: { pageNum: 1, pageSize: 8 },
+      productQuery: { pageNum: 1, pageSize: 50 },
       recordLoading: false,
       recordLoaded: false,
       recordList: [],
@@ -146,6 +153,12 @@ export default {
     },
     currentImageUrls() {
       return this.currentImages.map(this.imageUrl)
+    },
+    productHasMore() {
+      return this.productList.length < this.productTotal
+    },
+    productLoadDisabled() {
+      return this.activeTab !== 'products' || this.productLoading || this.productLoadingMore || !this.productHasMore
     }
   },
   created() {
@@ -161,14 +174,34 @@ export default {
           : Number(data || 0)
       })
     },
-    loadProducts() {
-      this.productLoading = true
+    loadProducts(append = false) {
+      if (this.productLoading || this.productLoadingMore) return
+      if (append && !this.productHasMore) return
+
+      const previousPage = this.productQuery.pageNum
+      if (append) {
+        this.productQuery.pageNum += 1
+        this.productLoadingMore = true
+      } else {
+        this.productQuery.pageNum = 1
+        this.productLoading = true
+      }
       listStoreProducts(this.productQuery).then(response => {
-        this.productList = response.rows || []
+        const rows = response.rows || []
+        this.productList = append ? this.productList.concat(rows) : rows
         this.productTotal = response.total || 0
+      }).catch(() => {
+        if (append) {
+          // 追加失败时保留当前商品，回滚页码以便下次滚动重试。
+          this.productQuery.pageNum = previousPage
+        }
       }).finally(() => {
         this.productLoading = false
+        this.productLoadingMore = false
       })
+    },
+    loadMoreProducts() {
+      this.loadProducts(true)
     },
     loadRecords() {
       this.recordLoading = true
@@ -272,6 +305,13 @@ export default {
   min-height: 260px;
 
   > .el-empty { grid-column: 1 / -1; }
+}
+
+.product-load-status {
+  padding: 20px 0 4px;
+  color: #909399;
+  font-size: 14px;
+  text-align: center;
 }
 
 .product-card { cursor: pointer; }

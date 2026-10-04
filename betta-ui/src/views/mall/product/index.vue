@@ -107,7 +107,7 @@
           <image-upload v-model="form.images" :limit="5" />
           <div class="form-tip">请上传 1–5 张图片，拖动图片可调整展示顺序。</div>
         </el-form-item>
-        <el-form-item label="商品描述" prop="description">
+        <el-form-item label="详情(选填)" prop="description">
           <mall-markdown v-model="form.description" height="380px" />
         </el-form-item>
       </el-form>
@@ -135,13 +135,6 @@ export default {
         callback()
       }
     }
-    const validateDescription = (rule, value, callback) => {
-      if (!value || !value.trim()) {
-        callback(new Error('请输入商品描述'))
-      } else {
-        callback()
-      }
-    }
     return {
       loading: false,
       submitting: false,
@@ -162,7 +155,6 @@ export default {
       rules: {
         name: [{ required: true, message: '请输入商品名称', trigger: 'blur' }],
         images: [{ required: true, validator: validateImages, trigger: 'change' }],
-        description: [{ required: true, validator: validateDescription, trigger: 'change' }],
         coinPrice: [
           { required: true, message: '请输入金币价格', trigger: 'change' },
           { type: 'integer', min: 1, message: '金币价格必须为正整数', trigger: 'change' }
