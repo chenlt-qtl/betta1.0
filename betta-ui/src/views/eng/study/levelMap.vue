@@ -224,7 +224,7 @@ export default {
   position: relative;
   display: flex;
   align-items: center;
-  min-height: 120px;
+  min-height: 100px;
 }
 
 .level-card {
