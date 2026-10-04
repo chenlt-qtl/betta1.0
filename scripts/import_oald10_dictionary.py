@@ -33,6 +33,7 @@ class WordRow:
     ph_mp3_uk: str | None
     ph_mp3_us: str | None
     acceptation: str | None
+    exchange: str | None
     parts: str | None
     word_forms: str | None
     usage_labels: str | None
@@ -137,6 +138,7 @@ def to_word_row(entry: dict[str, object]) -> WordRow:
     us = text_value(entry.get("us"))
     uk_audio = profile_audio_path(entry.get("uk_audio_path"))
     us_audio = profile_audio_path(entry.get("us_audio_path"))
+    acceptation = format_acceptation(senses)
     return WordRow(
         word_name=word_name,
         display_name=text_value(entry.get("word")) or word_name,
@@ -146,7 +148,9 @@ def to_word_row(entry: dict[str, object]) -> WordRow:
         ph_mp3=us_audio or uk_audio,
         ph_mp3_uk=uk_audio,
         ph_mp3_us=us_audio,
-        acceptation=format_acceptation(senses),
+        acceptation=acceptation,
+        # 简明释义仅作为导入默认值，取完整释义中的第一个解释。
+        exchange=acceptation.split("|", 1)[0] if acceptation else None,
         parts=unique_parts(senses),
         word_forms=text_value(entry.get("word_forms")),
         usage_labels=text_value(entry.get("usage_labels")),
@@ -341,15 +345,15 @@ def execute_sql(args: argparse.Namespace, sql: str, capture: bool = False) -> st
 def word_batch_sql(rows: Sequence[WordRow]) -> str:
     columns = (
         "word_name,display_name,phonetics,phonetics_uk,phonetics_us,ph_mp3,ph_mp3_uk,ph_mp3_us,"
-        "acceptation,parts,word_forms,usage_labels,variants,grammar,dictionary_source,dictionary_detail,"
+        "acceptation,exchange,parts,word_forms,usage_labels,variants,grammar,dictionary_source,dictionary_detail,"
         "status,create_by,create_time"
     )
     values = []
     for row in rows:
         values.append("(" + ",".join(sql_literal(value) for value in (
             row.word_name, row.display_name, row.phonetics, row.phonetics_uk, row.phonetics_us,
-            row.ph_mp3, row.ph_mp3_uk, row.ph_mp3_us, row.acceptation, row.parts, row.word_forms,
-            row.usage_labels, row.variants, row.grammar, SOURCE, row.dictionary_detail, "0",
+            row.ph_mp3, row.ph_mp3_uk, row.ph_mp3_us, row.acceptation, row.exchange, row.parts,
+            row.word_forms, row.usage_labels, row.variants, row.grammar, SOURCE, row.dictionary_detail, "0",
             "oald10-import",)) + ",NOW())")
     preserve_if_empty = (
         "display_name", "phonetics", "phonetics_uk", "phonetics_us", "ph_mp3", "ph_mp3_uk",
@@ -357,6 +361,7 @@ def word_batch_sql(rows: Sequence[WordRow]) -> str:
     )
     assignments = [f"{column}=COALESCE(NULLIF(VALUES({column}),''),{column})" for column in preserve_if_empty]
     assignments.extend((
+        "exchange=COALESCE(NULLIF(exchange,''),VALUES(exchange))",
         "dictionary_source=VALUES(dictionary_source)",
         "dictionary_detail=VALUES(dictionary_detail)",
         "update_by='oald10-import'", "update_time=NOW()",

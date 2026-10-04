@@ -97,13 +97,10 @@
     </select>
     <select id="selectByWordTop10" resultMap="SentenceMap">
         select <include refid="columns"/>,a.title article_name
-        from eng_sentence s join eng_article a on a.id=s.article_id
-        where s.create_by=#{username}
-        and (s.content like concat('%',#{wordName},'%')
-        <if test="prototype!=null and prototype!=''">
-            or s.content like concat('%',#{prototype},'%')
-        </if>
-        )
-        order by s.idx limit 10
+        from eng_sentence_word_rel r
+        join eng_sentence s on s.id=r.sentence_id
+        join eng_article a on a.id=s.article_id
+        where r.word_id=#{wordId} and s.create_by=#{username}
+        order by a.id,s.idx,s.id limit 10
     </select>
 </mapper>

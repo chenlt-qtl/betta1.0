@@ -5,7 +5,7 @@
 <script>
 import ArticleTest from '@/views/eng/article/test/index.vue'
 
-/** 学习中心入口复用统一文章测试流程，避免维护第二套测试页面。 */
+/** 新词与复习入口复用统一测试流程，题目范围由路由模式和服务端 attemptId 固定。 */
 export default {
   name: 'EngStudyChallenge',
   components: { ArticleTest }

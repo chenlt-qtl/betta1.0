@@ -15,6 +15,8 @@ public class EngArticleWordRel extends BaseEntity {
     private Long articleId;
     /** 关联单词文本。 */
     private String wordName;
+    /** 永久关卡号；文章收藏 articleId=0 时为空。 */
+    private Integer levelNo;
     /** 关系状态。 */
     private String status;
 }

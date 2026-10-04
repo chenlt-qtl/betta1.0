@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.betta.eng.mapper.EngStudyRecordWordMapper">
+    <resultMap id="RecordWordMap" type="EngStudyRecordWord">
+        <id property="id" column="id"/><result property="studyRecordId" column="study_record_id"/>
+        <result property="wordId" column="word_id"/><result property="sourceArticleId" column="source_article_id"/>
+        <result property="studyMode" column="study_mode"/><result property="correctCount" column="correct_count"/>
+        <result property="totalCount" column="total_count"/><result property="allCorrect" column="all_correct"/>
+        <result property="stars" column="stars"/><result property="milestoneCoin" column="milestone_coin"/>
+        <result property="reviewCoin" column="review_coin"/><result property="wordName" column="word_name"/>
+        <result property="acceptation" column="acceptation"/><result property="sourceArticleTitle" column="source_article_title"/>
+        <result property="createTime" column="create_time"/>
+    </resultMap>
+    <insert id="insertBatch">
+        insert into eng_study_record_word(study_record_id,word_id,source_article_id,study_mode,correct_count,total_count,
+          all_correct,stars,milestone_coin,review_coin,create_time) values
+        <foreach item="item" collection="items" separator=",">
+          (#{item.studyRecordId},#{item.wordId},#{item.sourceArticleId},#{item.studyMode},#{item.correctCount},
+           #{item.totalCount},#{item.allCorrect},#{item.stars},#{item.milestoneCoin},#{item.reviewCoin},now())
+        </foreach>
+    </insert>
+    <select id="selectByRecordAndUser" resultMap="RecordWordMap">
+        select d.*,w.word_name,w.acceptation,a.title source_article_title
+        from eng_study_record_word d join eng_study_record r on r.id=d.study_record_id
+        join eng_word w on w.id=d.word_id left join eng_article a on a.id=d.source_article_id
+        where d.study_record_id=#{recordId} and r.user_id=#{userId} order by d.id
+    </select>
+</mapper>

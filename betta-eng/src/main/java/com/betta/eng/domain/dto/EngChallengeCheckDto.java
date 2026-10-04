@@ -7,8 +7,11 @@ import lombok.Data;
  */
 @Data
 public class EngChallengeCheckDto {
+    private String attemptId;
+    private String mode;
     /** 文章主键，用于限定题目必须属于当前文章。 */
     private Long articleId;
+    private Integer levelNo;
     /** 服务端下发的题目标识。 */
     private String questionId;
     /** 用户当前选择或填写的答案。 */

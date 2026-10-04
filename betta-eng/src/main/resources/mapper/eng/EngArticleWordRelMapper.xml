@@ -5,6 +5,7 @@
         <id property="id" column="id"/>
         <result property="articleId" column="article_id"/>
         <result property="wordName" column="word_name"/>
+        <result property="levelNo" column="level_no"/>
         <result property="status" column="status"/>
         <result property="createBy" column="create_by"/>
         <result property="createTime" column="create_time"/>
@@ -12,7 +13,7 @@
         <result property="updateTime" column="update_time"/>
     </resultMap>
     <sql id="columns">
-        id,article_id,word_name,status,create_by,create_time,update_by,update_time
+        id,article_id,word_name,level_no,status,create_by,create_time,update_by,update_time
     </sql>
     <select id="selectEngArticleWordRelById" resultMap="RelMap">
         select <include refid="columns"/> from eng_article_word_rel
@@ -33,9 +34,33 @@
         </where>
     </select>
     <insert id="insertEngArticleWordRel" parameterType="EngArticleWordRel" useGeneratedKeys="true" keyProperty="id">
-        insert into eng_article_word_rel(article_id,word_name,status,create_by,create_time)
-        values(#{articleId},#{wordName},#{status},#{createBy},now())
+        insert ignore into eng_article_word_rel(article_id,word_name,level_no,status,create_by,create_time)
+        values(#{articleId},#{wordName},#{levelNo},#{status},#{createBy},now())
     </insert>
+    <insert id="insertBatch">
+        insert ignore into eng_article_word_rel(article_id,word_name,level_no,status,create_by,create_time) values
+        <foreach item="item" collection="relations" separator=",">
+            (#{item.articleId},#{item.wordName},#{item.levelNo},#{item.status},#{item.createBy},now())
+        </foreach>
+    </insert>
+    <select id="selectExistingWordNames" resultType="string">
+        select word_name from eng_article_word_rel
+        where article_id=#{articleId} and create_by=#{username} and word_name in
+        <foreach item="wordName" collection="wordNames" open="(" separator="," close=")">#{wordName}</foreach>
+    </select>
+    <delete id="deleteUnusedByWordIds">
+        delete r from eng_article_word_rel r
+        join eng_word w on w.word_name=r.word_name
+        where r.article_id=#{articleId} and r.create_by=#{username} and w.id in
+        <foreach item="wordId" collection="wordIds" open="(" separator="," close=")">
+            #{wordId}
+        </foreach>
+          and not exists(
+              select 1
+              from eng_sentence_word_rel swr join eng_sentence s on s.id=swr.sentence_id
+              where s.article_id=#{articleId} and s.create_by=#{username} and swr.word_id=w.id
+          )
+    </delete>
     <delete id="deleteEngArticleWordRelByIds">
         delete from eng_article_word_rel where create_by=#{username} and id in
         <foreach item="id" collection="ids" open="(" separator="," close=")">
@@ -45,4 +70,17 @@
     <delete id="deleteByArticleId">
         delete from eng_article_word_rel where article_id=#{articleId} and create_by=#{username}
     </delete>
+    <select id="lockArticle" resultType="long">
+        select id from eng_article where id=#{articleId} and create_by=#{username} for update
+    </select>
+    <select id="selectMaxLevelNo" resultType="int">
+        select coalesce(max(level_no),0) from eng_article_word_rel where article_id=#{articleId}
+    </select>
+    <select id="countByArticleAndLevel" resultType="int">
+        select count(*) from eng_article_word_rel where article_id=#{articleId} and level_no=#{levelNo}
+    </select>
+    <select id="selectByArticleAndLevel" resultMap="RelMap">
+        select <include refid="columns"/> from eng_article_word_rel
+        where article_id=#{articleId} and level_no=#{levelNo} and create_by=#{username} order by id
+    </select>
 </mapper>

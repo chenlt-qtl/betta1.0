@@ -64,12 +64,19 @@
       :title="historyTitle"
       :visible.sync="historyOpen"
       width="900px"
+      custom-class="score-history-dialog"
       append-to-body
       @closed="resetHistory"
     >
       <el-table v-loading="historyLoading" :data="historyList">
+        <el-table-column label="类型" width="80" align="center">
+          <template slot-scope="scope">{{ recordMode(scope.row) === 'REVIEW' ? '复习' : '新词' }}</template>
+        </el-table-column>
         <el-table-column label="文章" min-width="180" show-overflow-tooltip>
-          <template slot-scope="scope">{{ scope.row.articleTitle || ('文章 #' + scope.row.articleId) }}</template>
+          <template slot-scope="scope">
+            {{ recordMode(scope.row) === 'REVIEW' ? '全局复习' : (scope.row.articleTitle || ('文章 #' + scope.row.articleId)) }}
+            <span v-if="scope.row.levelNo"> · 第 {{ scope.row.levelNo }} 关</span>
+          </template>
         </el-table-column>
         <el-table-column label="积分得分" align="center" prop="score" width="100">
           <template slot-scope="scope">{{ scope.row.score || 0 }}</template>
@@ -77,15 +84,16 @@
         <el-table-column label="答对/总数" align="center" width="110">
           <template slot-scope="scope">{{ scope.row.correctCount || 0 }}/{{ scope.row.totalCount || 0 }}</template>
         </el-table-column>
-        <el-table-column label="通关状态" align="center" width="100">
+        <el-table-column label="星级" align="center" width="100">
           <template slot-scope="scope">
-            <el-tag :type="isPassed(scope.row.passed) ? 'success' : 'info'" size="small">
-              {{ isPassed(scope.row.passed) ? '已通关' : '未通关' }}
-            </el-tag>
+            <span class="history-stars">{{ scope.row.stars || 0 }}★</span>
           </template>
         </el-table-column>
         <el-table-column label="金币奖励" align="center" prop="coinReward" width="100">
           <template slot-scope="scope">{{ scope.row.coinReward || 0 }}</template>
+        </el-table-column>
+        <el-table-column label="奖励明细" align="center" width="150">
+          <template slot-scope="scope">里程碑 {{ scope.row.milestoneCoin || 0 }} / 复习 {{ scope.row.reviewCoin || 0 }}</template>
         </el-table-column>
         <el-table-column label="学习时间" align="center" min-width="170">
           <template slot-scope="scope">{{ parseTime(scope.row.studyTime || scope.row.createTime) || '-' }}</template>
@@ -104,6 +112,7 @@
         <el-button @click="historyOpen = false">关 闭</el-button>
       </div>
     </el-dialog>
+
   </div>
 </template>
 
@@ -204,9 +213,15 @@ export default {
     formatStudyTime(row) {
       return this.parseTime(row.latestStudyTime || row.lastStudyTime) || '-'
     },
-    isPassed(passed) {
-      return passed === true || passed === 1 || passed === '1'
+    recordMode(record) {
+      return String(record.studyMode || record.mode || 'NEW').toUpperCase()
     }
   }
 }
 </script>
+
+<style>
+.score-history-dialog {
+  max-width: calc(100vw - 32px);
+}
+</style>

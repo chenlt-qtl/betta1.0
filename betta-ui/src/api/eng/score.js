@@ -44,13 +44,13 @@ export function delScore(id) {
     method: 'delete'
   })
 }
-// 根据文章查询生词
-export function listByArticle(articleId, withSentence, limit = 5, orderByColumn = "familiarity") {
+// 根据文章查询生词，可指定排序字段和方向
+export function listByArticle(articleId, withSentence, limit = 5, orderByColumn = "familiarity", isAsc = "ascending") {
   const query = {
     pageNum: 1,
     pageSize: limit,
     orderByColumn,
-    isAsc: "ascending",
+    isAsc,
     articleId,
     withSentence
   }

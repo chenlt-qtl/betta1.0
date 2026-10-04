@@ -19,6 +19,7 @@ import com.betta.common.enums.BusinessType;
 import com.betta.common.utils.poi.ExcelUtil;
 import com.betta.eng.domain.EngSentence;
 import com.betta.eng.domain.dojo.BatchAddSentences;
+import com.betta.eng.domain.dto.EngSentenceWordUpdateDto;
 import com.betta.eng.service.IEngSentenceService;
 
 /** 英语句子控制器，只负责参数、分页、服务调用和响应。 */
@@ -64,6 +65,23 @@ public class EngSentenceController extends BaseController
     public AjaxResult info(@PathVariable Long id)
     {
         return success(service.selectEngSentenceById(id));
+    }
+
+    /** 查询句子按原文顺序拆分的可选规范词及当前关系。 */
+    @GetMapping("/{sentenceId}/words")
+    public AjaxResult wordOptions(@PathVariable Long sentenceId)
+    {
+        return success(service.selectWordOptions(sentenceId));
+    }
+
+    /** 使用请求中的规范词集合替换当前句子关系。 */
+    @PreAuthorize("@ss.hasPermi('eng:sentence:edit')")
+    @Log(title = "句子单词关系", businessType = BusinessType.UPDATE)
+    @PutMapping("/{sentenceId}/words")
+    public AjaxResult updateWordOptions(@PathVariable Long sentenceId,
+            @RequestBody EngSentenceWordUpdateDto request)
+    {
+        return success(service.updateWordOptions(sentenceId, request));
     }
 
     /** 新增 sentence。 */

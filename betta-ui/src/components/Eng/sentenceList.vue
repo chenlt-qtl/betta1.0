@@ -175,26 +175,49 @@
       :title="title"
       :visible.sync="openWord"
       width="500px"
+      custom-class="sentence-word-dialog"
       append-to-body
     >
-      <div
-        style="display: inline-block"
-        v-for="({ text, isWord, style }, index) of splitWordList"
-        :key="index"
-      >
-        <el-button
-          v-if="isWord"
-          size="mini"
-          type="text"
-          :style="style"
-          @click="handleClickWord(text)"
-          >{{ text }}</el-button
-        >
-        <div :style="style" v-if="!isWord">{{ text }}</div>
+      <div v-loading="wordLoading" class="sentence-word-content">
+        <template v-for="(segment, index) in sentenceWordSegments">
+          <el-button
+            v-if="isSelectableWord(segment)"
+            :key="index"
+            size="mini"
+            type="text"
+            :class="[
+              'sentence-word-token',
+              { 'is-selected': isWordSelected(segment.wordId) },
+            ]"
+            :title="segment.wordName || segment.text"
+            @click="handleClickWord(segment.wordId)"
+            >{{ segment.text }}</el-button
+          >
+          <span
+            v-else
+            :key="index"
+            :class="{
+              'sentence-word-unavailable': isWordSegment(segment),
+            }"
+            :title="isWordSegment(segment) ? '本地词典未收录，暂不可选择' : ''"
+            >{{ segment.text }}</span
+          >
+        </template>
+        <el-empty
+          v-if="!wordLoading && sentenceWordSegments.length === 0"
+          description="暂无可关联的句子内容"
+          :image-size="72"
+        />
       </div>
 
       <div slot="footer" class="dialog-footer">
-        <el-button type="primary" @click="submitWord">确 定</el-button>
+        <el-button
+          type="primary"
+          :loading="wordSaving"
+          :disabled="wordLoading"
+          @click="submitWord"
+          >确 定</el-button
+        >
         <el-button @click="cancel">取 消</el-button>
       </div>
     </el-dialog>
@@ -210,40 +233,16 @@ import {
   delSentence,
   addSentence,
   updateSentence,
+  getSentenceWords,
+  updateSentenceWords,
 } from "@/api/eng/sentence";
 
-import { updateArticleWord } from "@/api/eng/word";
-
-import ArticleWordList from "@/components/Eng/wordList/articleWordList.vue";
 import BatchAddSentenceBtn from "@/components/Eng/btns/batchAddSentenceBtn.vue";
-
-const BR_REG = /[\n]+/;
-
-// 句子维护只需要英文分词，逻辑内聚在组件中，避免依赖参考项目缺失的工具文件。
-function splitSentenceWords(sentence) {
-  const words = [];
-  const pattern = /([a-z|'|-]+)/gi;
-  let match;
-  let index = 0;
-
-  while ((match = pattern.exec(sentence))) {
-    if (match.index > index) {
-      words.push({ text: sentence.slice(index, match.index).trim(), isWord: false });
-    }
-    words.push({ text: match[0], isWord: true });
-    index = match.index + match[0].length;
-  }
-  if (index < sentence.length) {
-    words.push({ text: sentence.slice(index).trim(), isWord: false });
-  }
-  return words;
-}
 
 export default {
   name: "sentenceList",
-  props: ["article", "play","wordList","getWordList"],
+  props: ["article", "play", "wordList", "getWordList"],
   components: {
-    ArticleWordList,
     viewArticleBtn,
     BatchAddSentenceBtn,
   },
@@ -276,10 +275,14 @@ export default {
       form: {},
       // 表单校验
       sentenceRules: {},
-      //句子对应的生词
-      sentenceWordList: [],
-      //句子切割后的单词
-      splitWordList: [],
+      // 当前维护关联的句子 ID
+      sentenceWordId: null,
+      // 后端按原句返回的文本与规范词分段
+      sentenceWordSegments: [],
+      // 当前选中的规范词 ID，同一规范词的多个词形位置共享选中状态
+      selectedWordIds: [],
+      wordLoading: false,
+      wordSaving: false,
     };
   },
   watch: {
@@ -287,9 +290,6 @@ export default {
       if (this.article.id) {
         this.getSentenceList();
       }
-    },
-    wordList(){
-      this.sentenceWordList = this.wordList.map((word) => word.wordName);
     }
   },
   methods: {
@@ -311,6 +311,7 @@ export default {
     cancel() {
       this.openSentence = false;
       this.openWord = false;
+      this.resetSentenceWords();
     },
     // 表单重置
     resetSentence() {
@@ -355,51 +356,59 @@ export default {
         this.title = "修改句子";
       });
     },
-    //修改生词时
+    // 修改句子关联单词时，以后端规范词映射为准，避免复数等词形无法回显。
     handleUpdateWord(row) {
-      this.form = row;
-      this.splitWordList = this.getSplitWordList();
+      this.resetSentenceWords();
+      this.sentenceWordId = row.id;
       this.openWord = true;
       this.title = "修改生词";
+      this.wordLoading = true;
+      getSentenceWords(row.id)
+        .then((response) => {
+          const data = response.data || {};
+          this.sentenceWordSegments = Array.isArray(data.segments)
+            ? data.segments
+            : [];
+          this.selectedWordIds = Array.from(
+            new Set(
+              this.sentenceWordSegments
+                .filter((segment) => segment.selected && segment.wordId != null)
+                .map((segment) => segment.wordId)
+            )
+          );
+        })
+        .finally(() => {
+          this.wordLoading = false;
+        });
     },
-    //根据句子获取单词
-    getSplitWordList() {
-      const content = this.form.content;
-      const sentence = (content || "").split(BR_REG).find(Boolean) || "";
-      const allWords = splitSentenceWords(sentence);
-      allWords.forEach((element) => {
-        if (
-          this.sentenceWordList.find(
-            (word) => word == element.text.toLowerCase()
-          )
-        ) {
-          element.style = {
-            padding: "5px",
-            margin: "0 5px",
-            backgroundColor: "rgba(241, 196, 15, 0.3)",
-            borderColor: "rgba(211, 84, 0, 0.5)",
-          };
-        } else if (element.isWord) {
-          element.style = {
-            display: "inline-block",
-            padding: "5px",
-            margin: "0 5px",
-          };
-        }
-      });
-      return allWords;
+    resetSentenceWords() {
+      this.sentenceWordId = null;
+      this.sentenceWordSegments = [];
+      this.selectedWordIds = [];
+      this.wordLoading = false;
+      this.wordSaving = false;
     },
-    /**点击单词时 */
-    handleClickWord(text) {
-      var index = this.sentenceWordList.indexOf(text.toLowerCase());
-      const newWordList = [...this.sentenceWordList];
+    isWordSegment(segment) {
+      return String(segment.type || "").toLowerCase() === "word";
+    },
+    isSelectableWord(segment) {
+      return this.isWordSegment(segment) && segment.selectable && segment.wordId != null;
+    },
+    isWordSelected(wordId) {
+      return this.selectedWordIds.some((id) => String(id) === String(wordId));
+    },
+    /** 按规范词 ID 切换，确保相同规范词的多个位置同步选中。 */
+    handleClickWord(wordId) {
+      const index = this.selectedWordIds.findIndex(
+        (id) => String(id) === String(wordId)
+      );
+      const newWordIds = [...this.selectedWordIds];
       if (index > -1) {
-        newWordList.splice(index, 1);
+        newWordIds.splice(index, 1);
       } else {
-        newWordList.push(text.toLowerCase());
+        newWordIds.push(wordId);
       }
-      this.sentenceWordList = newWordList;
-      this.splitWordList = this.getSplitWordList();
+      this.selectedWordIds = newWordIds;
     },
     /** 提交句子按钮 */
     submitForm() {
@@ -412,6 +421,9 @@ export default {
             this.$modal.msgSuccess("保存成功");
             this.openSentence = false;
             this.getSentenceList();
+            if (typeof this.getWordList === "function") {
+              this.getWordList();
+            }
           });
         }
       });
@@ -425,11 +437,25 @@ export default {
     },
     //提交生词
     submitWord() {
-      updateArticleWord(this.article.id, this.sentenceWordList).then(() => {
-        this.$modal.msgSuccess("修改成功");
-        this.openWord = false;
-        this.getWordList();
-      });
+      if (this.sentenceWordId == null) {
+        return;
+      }
+      this.wordSaving = true;
+      updateSentenceWords(this.sentenceWordId, {
+        wordIds: this.selectedWordIds,
+      })
+        .then(() => {
+          this.$modal.msgSuccess("修改成功");
+          this.openWord = false;
+          this.getSentenceList();
+          if (typeof this.getWordList === "function") {
+            this.getWordList();
+          }
+          this.resetSentenceWords();
+        })
+        .finally(() => {
+          this.wordSaving = false;
+        });
     },
     /** 删除按钮操作 */
     handleDeleteSentence(row) {
@@ -441,6 +467,9 @@ export default {
         })
         .then(() => {
           this.getSentenceList();
+          if (typeof this.getWordList === "function") {
+            this.getWordList();
+          }
           this.$modal.msgSuccess("删除成功");
         })
         .catch(() => {});
@@ -463,5 +492,47 @@ export default {
 <style>
 .sentence-edit-dialog {
   max-width: calc(100vw - 32px);
+}
+
+.sentence-word-dialog {
+  max-width: calc(100vw - 32px);
+}
+
+.sentence-word-content {
+  min-height: 96px;
+  max-width: 100%;
+  line-height: 40px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.sentence-word-token {
+  display: inline-block;
+  max-width: 100%;
+  margin: 2px;
+  padding: 5px 7px;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.sentence-word-token.is-selected {
+  color: #b85400;
+  background-color: rgba(241, 196, 15, 0.3);
+  border-color: rgba(211, 84, 0, 0.5);
+}
+
+.sentence-word-unavailable {
+  color: #909399;
+  cursor: not-allowed;
+}
+
+@media (max-width: 600px) {
+  .sentence-word-content {
+    line-height: 36px;
+  }
+
+  .sentence-word-dialog .el-dialog__body {
+    padding: 16px;
+  }
 }
 </style>

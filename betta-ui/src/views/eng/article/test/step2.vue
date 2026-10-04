@@ -94,9 +94,21 @@ const AUTO_ADVANCE_DELAY = 1000
 export default {
   name: 'EngArticleTestQuestions',
   props: {
-    articleId: {
+    attemptId: {
       type: [String, Number],
       required: true
+    },
+    mode: {
+      type: String,
+      required: true
+    },
+    articleId: {
+      type: [String, Number],
+      default: null
+    },
+    levelNo: {
+      type: [String, Number],
+      default: null
     },
     questionList: {
       type: Array,
@@ -239,7 +251,10 @@ export default {
         correctAnswer: ''
       })
       checkArticleChallengeAnswer({
+        attemptId: this.attemptId,
+        mode: this.mode,
         articleId: this.articleId,
+        levelNo: this.levelNo,
         questionId: question.questionId,
         answer
       }).then(response => {

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.betta.eng.mapper.EngArticleLevelProgressMapper">
+    <resultMap id="LevelProgressMap" type="EngArticleLevelProgress">
+        <id property="id" column="id"/><result property="userId" column="user_id"/>
+        <result property="articleId" column="article_id"/><result property="levelNo" column="level_no"/>
+        <result property="bestScore" column="best_score"/><result property="highestStars" column="highest_stars"/>
+        <result property="completedByKnownWords" column="completed_by_known_words"/>
+        <result property="createBy" column="create_by"/><result property="createTime" column="create_time"/>
+        <result property="updateBy" column="update_by"/><result property="updateTime" column="update_time"/>
+    </resultMap>
+    <select id="selectByUserArticleLevel" parameterType="EngArticleLevelProgress" resultMap="LevelProgressMap">
+        select * from eng_article_level_progress where user_id=#{userId} and article_id=#{articleId} and level_no=#{levelNo}
+    </select>
+    <select id="selectByUserAndArticle" resultMap="LevelProgressMap">
+        select * from eng_article_level_progress where user_id=#{userId} and article_id=#{articleId} order by level_no
+    </select>
+    <select id="countAnyProgress" resultType="int">
+        select count(*) from eng_article_level_progress where article_id=#{articleId} and level_no=#{levelNo}
+    </select>
+    <select id="selectMaxLevelNoByArticle" resultType="int">
+        select coalesce(max(level_no),0) from eng_article_level_progress where article_id=#{articleId}
+    </select>
+    <insert id="upsertBest" parameterType="EngArticleLevelProgress">
+        insert into eng_article_level_progress(user_id,article_id,level_no,best_score,highest_stars,completed_by_known_words,
+          create_by,create_time,update_by,update_time)
+        values(#{userId},#{articleId},#{levelNo},#{bestScore},#{highestStars},0,#{createBy},now(),#{updateBy},now())
+        on duplicate key update best_score=greatest(best_score,values(best_score)),
+          highest_stars=greatest(highest_stars,values(highest_stars)),update_by=values(update_by),update_time=now()
+    </insert>
+    <insert id="upsertKnown" parameterType="EngArticleLevelProgress">
+        insert into eng_article_level_progress(user_id,article_id,level_no,best_score,highest_stars,completed_by_known_words,
+          create_by,create_time,update_by,update_time)
+        values(#{userId},#{articleId},#{levelNo},0,0,1,#{createBy},now(),#{updateBy},now())
+        on duplicate key update completed_by_known_words=1,update_by=values(update_by),update_time=now()
+    </insert>
+    <select id="countCompletedArticles" resultType="long">
+        select count(*) from eng_article a where a.create_by=#{username}
+        and exists(select 1 from eng_article_word_rel r where r.article_id=a.id and r.level_no is not null)
+        and not exists(select 1 from (select distinct article_id,level_no from eng_article_word_rel where level_no is not null) levels
+          left join eng_article_level_progress p on p.article_id=levels.article_id and p.level_no=levels.level_no and p.user_id=#{userId}
+          where levels.article_id=a.id and coalesce(p.highest_stars,0)&lt;1 and coalesce(p.completed_by_known_words,0)=0)
+    </select>
+</mapper>

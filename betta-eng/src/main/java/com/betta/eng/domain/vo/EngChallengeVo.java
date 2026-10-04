@@ -1,6 +1,5 @@
 package com.betta.eng.domain.vo;
 
-import com.betta.eng.domain.EngArticleProgress;
 import java.util.List;
 import lombok.Data;
 
@@ -9,16 +8,15 @@ import lombok.Data;
  */
 @Data
 public class EngChallengeVo {
+    private String attemptId;
+    private String mode;
     /** 文章主键。 */
     private Long articleId;
+    private Integer levelNo;
     /** 文章标题。 */
     private String title;
-    /** 历史最好进度；没有记录时返回零值对象。 */
-    private EngArticleProgress progress;
     /** 本次挑战选中的最多五个单词，与题目范围一致。 */
     private List<EngWordVo> words;
     /** 本次挑战题目集合。 */
     private List<EngChallengeQuestionVo> questions;
-    /** 当前文章今日是否已无待学习或复习内容。 */
-    private Boolean dailyCompleted;
 }

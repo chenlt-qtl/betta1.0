@@ -24,7 +24,6 @@ public interface EngSentenceMapper {
     /** 查询播放列表句子；sentence 为筛选条件，idList 为包含或排除主键，include 控制包含关系，返回句子集合。 */
     List<SentenceVo> selectPlayList(@Param("sentence") EngSentence sentence, @Param("username") String username,
             @Param("idList") List<Long> idList, @Param("include") boolean include);
-    /** 查询包含单词的最多十个句子；wordName 与 prototype 为匹配词形，username 为用户，返回展示集合。 */
-    List<SentenceVo> selectByWordTop10(@Param("wordName") String wordName, @Param("prototype") String prototype,
-            @Param("username") String username);
+    /** 查询明确关联规范词的最多十个句子。 */
+    List<SentenceVo> selectByWordTop10(@Param("wordId") Long wordId, @Param("username") String username);
 }

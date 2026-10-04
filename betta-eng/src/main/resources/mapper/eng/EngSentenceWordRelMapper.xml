@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.betta.eng.mapper.EngSentenceWordRelMapper">
+    <resultMap id="RelationMap" type="EngSentenceWordRel">
+        <id property="id" column="id"/>
+        <result property="sentenceId" column="sentence_id"/>
+        <result property="wordId" column="word_id"/>
+        <result property="matchedText" column="matched_text"/>
+        <result property="articleId" column="article_id"/>
+        <result property="sentenceContent" column="sentence_content"/>
+        <result property="sentenceAcceptation" column="sentence_acceptation"/>
+        <result property="wordName" column="word_name"/>
+        <result property="createBy" column="create_by"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updateBy" column="update_by"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+
+    <sql id="relationColumns">
+        r.id,r.sentence_id,r.word_id,r.matched_text,r.create_by,r.create_time,r.update_by,r.update_time,
+        s.article_id,s.content sentence_content,s.acceptation sentence_acceptation,w.word_name
+    </sql>
+
+    <select id="selectBySentenceId" resultMap="RelationMap">
+        select <include refid="relationColumns"/>
+        from eng_sentence_word_rel r
+        join eng_sentence s on s.id=r.sentence_id
+        join eng_word w on w.id=r.word_id
+        where r.sentence_id=#{sentenceId} and s.create_by=#{username}
+        order by r.id
+    </select>
+
+    <select id="selectFirstByArticleAndWord" resultMap="RelationMap">
+        select <include refid="relationColumns"/>
+        from eng_sentence_word_rel r
+        join eng_sentence s on s.id=r.sentence_id
+        join eng_word w on w.id=r.word_id
+        where s.article_id=#{articleId} and r.word_id=#{wordId} and s.create_by=#{username}
+          and s.content is not null and s.content!='' and s.content not like '[NT]%'
+        order by s.idx,s.id,r.id limit 1
+    </select>
+    <select id="selectFirstByWord" resultMap="RelationMap">
+        select <include refid="relationColumns"/>
+        from eng_sentence_word_rel r join eng_sentence s on s.id=r.sentence_id join eng_word w on w.id=r.word_id
+        where r.word_id=#{wordId} and s.create_by=#{username}
+          and s.content is not null and s.content!='' and s.content not like '[NT]%'
+        order by s.article_id,s.idx,s.id,r.id limit 1
+    </select>
+
+    <select id="countByArticleAndWord" resultType="int">
+        select count(*)
+        from eng_sentence_word_rel r join eng_sentence s on s.id=r.sentence_id
+        where s.article_id=#{articleId} and r.word_id=#{wordId} and s.create_by=#{username}
+    </select>
+
+    <insert id="insert" parameterType="EngSentenceWordRel" useGeneratedKeys="true" keyProperty="id">
+        insert into eng_sentence_word_rel(sentence_id,word_id,matched_text,create_by,create_time)
+        values(#{sentenceId},#{wordId},#{matchedText},#{createBy},now())
+    </insert>
+
+    <update id="updateMatchedText" parameterType="EngSentenceWordRel">
+        update eng_sentence_word_rel r
+        join eng_sentence s on s.id=r.sentence_id
+        set r.matched_text=#{matchedText},r.update_by=#{updateBy},r.update_time=now()
+        where r.sentence_id=#{sentenceId} and r.word_id=#{wordId} and s.create_by=#{updateBy}
+    </update>
+
+    <insert id="upsertBatch">
+        insert into eng_sentence_word_rel(sentence_id,word_id,matched_text,create_by,create_time)
+        values
+        <foreach item="relation" collection="relations" separator=",">
+            (#{relation.sentenceId},#{relation.wordId},#{relation.matchedText},#{relation.createBy},now())
+        </foreach>
+        on duplicate key update matched_text=values(matched_text),update_by=values(create_by),update_time=now()
+    </insert>
+
+    <delete id="deleteBySentenceAndWord">
+        delete r from eng_sentence_word_rel r join eng_sentence s on s.id=r.sentence_id
+        where r.sentence_id=#{sentenceId} and r.word_id=#{wordId} and s.create_by=#{username}
+    </delete>
+
+    <delete id="deleteBySentenceAndWordIds">
+        delete r from eng_sentence_word_rel r join eng_sentence s on s.id=r.sentence_id
+        where r.sentence_id=#{sentenceId} and s.create_by=#{username} and r.word_id in
+        <foreach item="wordId" collection="wordIds" open="(" separator="," close=")">
+            #{wordId}
+        </foreach>
+    </delete>
+
+    <delete id="deleteBySentenceIds">
+        delete r from eng_sentence_word_rel r join eng_sentence s on s.id=r.sentence_id
+        where s.create_by=#{username} and r.sentence_id in
+        <foreach item="sentenceId" collection="sentenceIds" open="(" separator="," close=")">
+            #{sentenceId}
+        </foreach>
+    </delete>
+
+    <delete id="deleteByArticleAndWordNames">
+        delete r from eng_sentence_word_rel r
+        join eng_sentence s on s.id=r.sentence_id
+        join eng_word w on w.id=r.word_id
+        where s.article_id=#{articleId} and s.create_by=#{username} and w.word_name in
+        <foreach item="wordName" collection="wordNames" open="(" separator="," close=")">
+            #{wordName}
+        </foreach>
+    </delete>
+
+    <delete id="deleteByArticle">
+        delete r from eng_sentence_word_rel r join eng_sentence s on s.id=r.sentence_id
+        where s.article_id=#{articleId} and s.create_by=#{username}
+    </delete>
+</mapper>

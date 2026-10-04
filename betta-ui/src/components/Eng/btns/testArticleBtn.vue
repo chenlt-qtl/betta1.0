@@ -13,7 +13,7 @@ export default {
   props: ["articleId"],
   methods: {
     handleTest: function () {
-      this.$router.push("/eng/article/test/" + this.articleId);
+      this.$router.push("/eng/study/levels/" + this.articleId);
     },
   },
 };

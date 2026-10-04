@@ -8,19 +8,28 @@ export function getStudySummary() {
   })
 }
 
-// 查询当前用户指定文章的最佳进度
-export function getArticleProgress(articleId) {
+// 查询文章的闯关地图
+export function getArticleLevels(articleId) {
   return request({
-    url: '/eng/study/progress/' + articleId,
+    url: '/eng/study/articles/' + articleId + '/levels',
     method: 'get'
   })
 }
 
-// 获取挑战题目，接口不会返回正确答案
-export function getArticleChallenge(articleId) {
+// 查询全局复习概览
+export function getReviewOverview() {
   return request({
-    url: '/eng/study/challenge/' + articleId,
+    url: '/eng/study/review',
     method: 'get'
+  })
+}
+
+// 获取新词或复习挑战题目，接口不会返回正确答案
+export function getStudyChallenge(query) {
+  return request({
+    url: '/eng/study/challenge',
+    method: 'get',
+    params: query
   })
 }
 
@@ -48,6 +57,14 @@ export function listWrongWords(query) {
     url: '/eng/study/wrong/list',
     method: 'get',
     params: query
+  })
+}
+
+// 查询当前用户某次测试涉及的规范词明细
+export function getStudyRecordWords(recordId) {
+  return request({
+    url: '/eng/study/records/' + recordId + '/words',
+    method: 'get'
   })
 }
 

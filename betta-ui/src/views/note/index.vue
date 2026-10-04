@@ -107,7 +107,6 @@
           :expand-on-click-node="false"
           show-checkbox
           check-strictly
-          default-expand-all
           @check-change="handleMoveCheckChange"
           @node-click="handleNodeClick"
         >
@@ -1261,9 +1260,15 @@ export default {
       }
     },
     selectedDirectory() {
-      // 当前选中节点优先于下拉筛选目录：目录内新建，文件旁新建；未选中节点时才回退到筛选目录。
-      if (this.currentPath) {
-        return this.currentNodeType === 'directory' ? this.currentPath : this.dirname(this.currentPath)
+      const selectedNode = this.$refs.tree && this.$refs.tree.getCurrentNode()
+      // 页签、搜索和收藏也会更新当前笔记；只有主树的有效当前节点才能作为新建位置。
+      const visibleSelectedNode = selectedNode
+        ? this.findNodeByPath(this.visibleTreeData, selectedNode.path)
+        : null
+      if (visibleSelectedNode) {
+        return visibleSelectedNode.type === 'directory'
+          ? visibleSelectedNode.path
+          : this.dirname(visibleSelectedNode.path)
       }
       return this.selectedFolderPath || ''
     },
