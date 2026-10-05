@@ -7,16 +7,19 @@
         <result property="studyMode" column="study_mode"/><result property="correctCount" column="correct_count"/>
         <result property="totalCount" column="total_count"/><result property="allCorrect" column="all_correct"/>
         <result property="stars" column="stars"/><result property="milestoneCoin" column="milestone_coin"/>
+        <result property="pronunciationScore" column="pronunciation_score"/>
+        <result property="pronunciationPassed" column="pronunciation_passed"/>
         <result property="reviewCoin" column="review_coin"/><result property="wordName" column="word_name"/>
         <result property="acceptation" column="acceptation"/><result property="sourceArticleTitle" column="source_article_title"/>
         <result property="createTime" column="create_time"/>
     </resultMap>
     <insert id="insertBatch">
         insert into eng_study_record_word(study_record_id,word_id,source_article_id,study_mode,correct_count,total_count,
-          all_correct,stars,milestone_coin,review_coin,create_time) values
+          all_correct,stars,pronunciation_score,pronunciation_passed,milestone_coin,review_coin,create_time) values
         <foreach item="item" collection="items" separator=",">
           (#{item.studyRecordId},#{item.wordId},#{item.sourceArticleId},#{item.studyMode},#{item.correctCount},
-           #{item.totalCount},#{item.allCorrect},#{item.stars},#{item.milestoneCoin},#{item.reviewCoin},now())
+           #{item.totalCount},#{item.allCorrect},#{item.stars},#{item.pronunciationScore},#{item.pronunciationPassed},
+           #{item.milestoneCoin},#{item.reviewCoin},now())
         </foreach>
     </insert>
     <select id="selectByRecordAndUser" resultMap="RecordWordMap">

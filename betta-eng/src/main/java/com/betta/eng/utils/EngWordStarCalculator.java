@@ -27,6 +27,15 @@ public final class EngWordStarCalculator
         return wrongCount == 1 ? 2 : 1;
     }
 
+    /** 按整轮拼写正确题数换算星级。 */
+    public static int spellingStars(int correctCount, int totalCount)
+    {
+        if (totalCount <= 0 || correctCount <= 0) return 0;
+        int wrongCount = totalCount - correctCount;
+        if (wrongCount <= 0) return 3;
+        return wrongCount == 1 ? 2 : 1;
+    }
+
     /** 根据最新星级和最近测试日实时计算当前星级。 */
     public static int currentStars(Integer latestStars, Date latestTestTime, Date now)
     {
@@ -47,10 +56,24 @@ public final class EngWordStarCalculator
         return cumulativeCoin(targetStars) - cumulativeCoin(Math.min(rewardedStars, targetStars));
     }
 
+    /** 返回拼写测试从已奖励星级提升到目标星级应补发的累计金币。 */
+    public static long spellingMilestoneCoin(int rewardedStars, int targetStars)
+    {
+        return spellingCumulativeCoin(targetStars)
+                - spellingCumulativeCoin(Math.min(rewardedStars, targetStars));
+    }
+
     private static long cumulativeCoin(int stars)
     {
         if (stars >= 3) return 6;
         if (stars == 2) return 3;
         return stars == 1 ? 1 : 0;
+    }
+
+    private static long spellingCumulativeCoin(int stars)
+    {
+        if (stars >= 3) return 9;
+        if (stars == 2) return 5;
+        return stars == 1 ? 2 : 0;
     }
 }

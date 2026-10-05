@@ -19,9 +19,14 @@
         <el-radio-button label="recommended">推荐复习</el-radio-button>
         <el-radio-button label="all">全部已学</el-radio-button>
       </el-radio-group>
-      <el-button type="primary" :disabled="selectedWordIds.length === 0" @click="startReview">
-        开始复习（{{ selectedWordIds.length }}）
-      </el-button>
+      <div class="review-actions">
+        <el-button type="primary" :disabled="selectedWordIds.length === 0" @click="startReview">
+          普通复习（{{ selectedWordIds.length }}）
+        </el-button>
+        <el-button type="warning" :disabled="selectedWordIds.length === 0" @click="startSpelling">
+          拼写测试（{{ selectedWordIds.length }}）
+        </el-button>
+      </div>
     </div>
 
     <el-empty v-if="!loading && visibleWords.length === 0" :description="emptyDescription" />
@@ -35,7 +40,10 @@
       >
         <div class="word-heading">
           <strong>{{ word.wordName }}</strong>
-          <el-tag v-if="word.recommended" type="warning" size="mini">建议复习</el-tag>
+          <div class="word-tags">
+            <el-tag v-if="word.recommended" type="warning" size="mini">建议复习</el-tag>
+            <el-tag v-if="word.spellingEligible === false" type="info" size="mini">不可拼写</el-tag>
+          </div>
         </div>
         <div class="star-row">
           <span>当前 <b>{{ word.currentStars || 0 }}★</b></span>
@@ -112,11 +120,26 @@ export default {
       this.selectedWordIds.push(wordId)
     },
     startReview() {
+      this.startChallenge('REVIEW')
+    },
+    startSpelling() {
+      if (!this.selectedWordIds.length) return
+      const ineligibleWords = this.words.filter(word =>
+        this.isSelected(word.wordId) && word.spellingEligible !== true
+      )
+      if (ineligibleWords.length) {
+        this.$modal.msgWarning('拼写测试只能选择不少于 4 个字符且全部为英文字母的单词')
+        return
+      }
+      this.startChallenge('SPELLING')
+    },
+    /** 普通复习与拼写测试复用挑战页，通过模式隔离出题和奖励规则。 */
+    startChallenge(mode) {
       if (!this.selectedWordIds.length) return
       this.$router.push({
         path: '/eng/study/challenge/review',
         query: {
-          mode: 'REVIEW',
+          mode,
           wordIds: this.selectedWordIds.map(String).join(',')
         }
       })
@@ -150,6 +173,8 @@ export default {
 .review-summary strong { color: #3b8b43; font-size: 26px; }
 .review-summary span { color: #71806e; font-size: 13px; }
 .review-toolbar { margin-bottom: 18px; }
+.review-actions, .word-tags { display: flex; align-items: center; gap: 8px; }
+.review-actions .el-button, .word-tags .el-tag { margin: 0; }
 .review-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
 .review-card {
   position: relative;
@@ -181,7 +206,8 @@ export default {
   .review-header p { font-size: 12px; }
   .review-summary ::v-deep .el-card__body { padding: 12px 6px; }
   .review-toolbar { align-items: stretch; flex-direction: column; }
-  .review-toolbar .el-button { width: 100%; margin: 0; }
+  .review-actions { width: 100%; }
+  .review-actions .el-button { flex: 1; min-width: 0; }
   .review-grid { grid-template-columns: 1fr; }
 }
 </style>

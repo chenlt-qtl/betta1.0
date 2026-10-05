@@ -11,5 +11,7 @@ public class EngArticleLevelMapVo
     private String title;
     private Integer totalLevels;
     private Integer completedLevels;
+    /** 当前服务配置是否支持跟读评分。 */
+    private Boolean pronunciationEnabled;
     private List<EngArticleLevelVo> levels;
 }

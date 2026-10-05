@@ -41,14 +41,15 @@
       <el-table v-else :data="recentRecords">
         <el-table-column label="类型" width="90" align="center">
           <template slot-scope="scope">
-            <el-tag :type="recordMode(scope.row) === 'REVIEW' ? 'warning' : 'success'" size="small">
-              {{ recordMode(scope.row) === 'REVIEW' ? '复习' : '新词' }}
+            <el-tag :type="recordModeTagType(scope.row)" size="small">
+              {{ recordModeLabel(scope.row) }}
             </el-tag>
           </template>
         </el-table-column>
         <el-table-column label="文章/关卡" min-width="180">
           <template slot-scope="scope">
             <span v-if="recordMode(scope.row) === 'REVIEW'">全局单词复习</span>
+            <span v-else-if="recordMode(scope.row) === 'SPELLING'">全局拼写测试</span>
             <span v-else>{{ scope.row.articleTitle || ('文章 #' + scope.row.articleId) }}<small v-if="scope.row.levelNo"> · 第 {{ scope.row.levelNo }} 关</small></span>
           </template>
         </el-table-column>
@@ -116,11 +117,19 @@ export default {
       }).finally(() => { this.loading = false })
     },
     recordMode(record) { return String(record.studyMode || record.mode || 'NEW').toUpperCase() },
+    recordModeLabel(record) {
+      const labels = { NEW: '新词', REVIEW: '复习', SPELLING: '拼写' }
+      return labels[this.recordMode(record)] || '新词'
+    },
+    recordModeTagType(record) {
+      const types = { NEW: 'success', REVIEW: 'warning', SPELLING: 'danger' }
+      return types[this.recordMode(record)] || 'success'
+    },
     openLevelMap(articleId) { if (articleId) this.$router.push('/eng/study/levels/' + articleId) },
     openReview() { this.$router.push('/eng/study/review') },
     openWrongWords() { this.$router.push('/eng/study/wrong') },
     continueRecord(record) {
-      if (this.recordMode(record) === 'REVIEW') return this.openReview()
+      if (['REVIEW', 'SPELLING'].includes(this.recordMode(record))) return this.openReview()
       this.openLevelMap(record.articleId)
     },
     openRecordWords(record) {

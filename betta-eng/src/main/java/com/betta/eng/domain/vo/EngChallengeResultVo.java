@@ -18,6 +18,12 @@ public class EngChallengeResultVo {
     private Integer correctCount;
     /** 总题数。 */
     private Integer totalCount;
+    /** 跟读合格数。 */
+    private Integer pronunciationPassedCount;
+    /** 跟读题总数。 */
+    private Integer pronunciationTotalCount;
+    /** 本轮跟读平均总分，未启用跟读时为空。 */
+    private Integer pronunciationAverageScore;
     /** 是否达到 80 分一星通关线。 */
     private Boolean passed;
     private Integer stars;

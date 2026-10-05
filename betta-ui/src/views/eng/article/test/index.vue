@@ -1,9 +1,9 @@
 <template>
   <div class="test-article" v-loading="loading || submitting">
-    <section :class="['test-container', { 'test-container--questions': step === 2 }]">
+    <section :class="['test-container', { 'test-container--preview': step === 1, 'test-container--questions': step === 2 }]">
       <div v-if="challenge.title" class="test-title">
         <span>{{ challenge.title }}</span>
-        <span class="challenge-mode">{{ isReview ? '单词复习' : `第 ${challenge.levelNo || levelNo} 关` }}</span>
+        <span class="challenge-mode">{{ modeLabel }}</span>
       </div>
 
       <el-empty v-if="!loading && questionList.length === 0" :description="emptyDescription">
@@ -58,22 +58,29 @@ export default {
   computed: {
     mode() { return String(this.$route.query.mode || '').toUpperCase() },
     isReview() { return this.mode === 'REVIEW' },
+    isSpelling() { return this.mode === 'SPELLING' },
+    isWordSelectionMode() { return this.isReview || this.isSpelling },
+    modeLabel() {
+      if (this.isSpelling) return '拼写测试'
+      return this.isReview ? '单词复习' : `第 ${this.challenge.levelNo || this.levelNo} 关`
+    },
     articleId() {
-      if (this.isReview) return null
+      if (this.isWordSelectionMode) return null
       return this.$route.params && this.$route.params.articleId
     },
     levelNo() {
-      if (this.isReview) return null
+      if (this.isWordSelectionMode) return null
       const value = Number(this.$route.query.levelNo)
       return Number.isInteger(value) && value > 0 ? value : null
     },
-    wordIds() { return this.isReview ? String(this.$route.query.wordIds || '') : '' },
+    wordIds() { return this.isWordSelectionMode ? String(this.$route.query.wordIds || '') : '' },
     emptyDescription() {
+      if (this.isSpelling) return '当前没有可进行拼写测试的单词'
       return this.isReview ? '当前没有可复习的单词' : '本关没有需要学习的新词，请返回地图继续'
     }
   },
   created() {
-    if (!['NEW', 'REVIEW'].includes(this.mode)) {
+    if (!['NEW', 'REVIEW', 'SPELLING'].includes(this.mode)) {
       const articleId = this.$route.params && this.$route.params.articleId
       this.$router.replace(articleId ? '/eng/study/levels/' + articleId : '/eng/study/index')
       return
@@ -83,7 +90,7 @@ export default {
   methods: {
     challengeQuery() {
       const query = { mode: this.mode }
-      if (this.isReview) {
+      if (this.isWordSelectionMode) {
         if (this.wordIds) query.wordIds = this.wordIds
       } else {
         query.articleId = this.articleId
@@ -92,7 +99,7 @@ export default {
       return query
     },
     loadTest() {
-      if (!this.isReview && (!this.articleId || !this.levelNo)) {
+      if (!this.isWordSelectionMode && (!this.articleId || !this.levelNo)) {
         this.$modal.msgError('请指定文章和关卡')
         this.loading = false
         return
@@ -106,7 +113,7 @@ export default {
         this.result = null
         this.roundKey++
         if (!this.questionList.length) return
-        this.step = !this.isReview && this.wordList.length ? 1 : 2
+        this.step = !this.isWordSelectionMode && this.wordList.length ? 1 : 2
       }).finally(() => { this.loading = false })
     },
     toStep2() { this.step = 2 },
@@ -126,7 +133,7 @@ export default {
     },
     restart() { this.loadTest() },
     goNextLevel() {
-      if (this.isReview || !this.result || this.result.nextLevelUnlocked !== true || this.result.nextLevelNo == null) {
+      if (this.isWordSelectionMode || !this.result || this.result.nextLevelUnlocked !== true || this.result.nextLevelNo == null) {
         this.backToLearning()
         return
       }
@@ -136,7 +143,7 @@ export default {
       }).then(() => this.loadTest())
     },
     backToLearning() {
-      this.$router.push(this.isReview ? '/eng/study/review' : '/eng/study/levels/' + this.articleId)
+      this.$router.push(this.isWordSelectionMode ? '/eng/study/review' : '/eng/study/levels/' + this.articleId)
     },
     openReview() { this.$router.push('/eng/study/review') },
     openWrongWords() { this.$router.push('/eng/study/wrong') }
@@ -152,9 +159,10 @@ export default {
   background: linear-gradient(135deg, #e4f6dc 0%, #eef8e8 50%, #fff7df 100%);
 
   .test-container { position: relative; width: 460px; height: calc(100vh - 164px); min-height: 560px; margin: 16px auto; padding: 20px; overflow: hidden; border: 1px solid rgba(255, 255, 255, .7); border-radius: 12px; background: rgba(255, 255, 255, .55); box-shadow: 0 25px 45px rgba(53, 112, 52, .12); backdrop-filter: blur(18px); }
+  .test-container--preview { display: flex; flex-direction: column; }
   .test-container--questions { display: flex; flex-direction: column; height: auto; min-height: max(560px, calc(100vh - 164px)); overflow: visible; }
   .test-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 28px; margin-bottom: 12px; font-weight: 600; }
-  .challenge-mode { color: #67a85d; font-size: 12px; font-weight: normal; }
+  .challenge-mode { color: #67a85d; font-size: 12px; font-weight: normal;display: inline-block;width: 100px;text-align: right; }
   .box-block { width: 100%; margin-top: 14px; padding: 13px 18px; border: 1px solid rgba(255, 255, 255, .7); border-radius: 28px; background: rgba(255, 255, 255, .7); box-shadow: 0 5px 15px rgba(0, 0, 0, .05); font-size: 14px; }
   .block-button { min-width: 96px; padding: 12px 18px; border: 1px solid rgba(255, 255, 255, .7); border-radius: 28px; color: #333; background: #fff; box-shadow: 0 5px 15px rgba(0, 0, 0, .05); font-weight: 600; cursor: pointer; }
   .block-button:disabled { color: #c0c4cc; cursor: not-allowed; }

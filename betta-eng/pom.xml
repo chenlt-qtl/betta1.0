@@ -12,10 +12,13 @@
     <packaging>jar</packaging>
     <description>英语学习与游戏化闯关模块</description>
     <dependencies>
-        <!-- 仅复用项目已有公共能力，不引入新的第三方依赖。 -->
         <dependency>
             <groupId>com.betta</groupId>
             <artifactId>betta-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.tencentcloudapi</groupId>
+            <artifactId>tencentcloud-speech-sdk-java</artifactId>
         </dependency>
     </dependencies>
 </project>

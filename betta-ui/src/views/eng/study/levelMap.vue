@@ -1,10 +1,22 @@
 <template>
   <div class="level-map-page" v-loading="loading">
     <header class="map-header">
-      <el-button icon="el-icon-arrow-left" @click="backToStudy">学习中心</el-button>
+      <div class="map-header-actions">
+        <el-button icon="el-icon-arrow-left" @click="backToStudy">学习中心</el-button>
+        <el-tooltip :content="pronunciationStatusText" placement="bottom-start">
+          <span
+            :class="['pronunciation-indicator', { 'is-enabled': pronunciationEnabled }]"
+            role="img"
+            tabindex="0"
+            :aria-label="pronunciationStatusText"
+          >
+            <i class="el-icon-microphone" aria-hidden="true" />
+          </span>
+        </el-tooltip>
+      </div>
       <div class="map-title">
         <h2>{{ mapData.title || '新词闯关' }}</h2>
-        <p>每关 5 个词，获得至少 1 颗星后解锁下一关</p>
+        <p>每关 5 个词，获得至少 1 颗星后解锁下一关；深绿色已掌握关卡仍可复测，金币按普通达星规则发放</p>
       </div>
       <div class="map-progress">{{ completedLevels }}/{{ totalLevels }} 关</div>
     </header>
@@ -32,8 +44,9 @@
               'is-mastered': level.masteredByExistingWords,
             },
           ]"
-          :disabled="!level.unlocked || level.masteredByExistingWords"
+          :disabled="!level.unlocked"
           :aria-label="levelAriaLabel(level)"
+          :title="levelHint(level)"
           @click="startLevel(level)"
         >
           <div class="level-card-title">
@@ -117,6 +130,14 @@ export default {
     completedLevels() {
       return Number(this.mapData.completedLevels) || 0
     },
+    pronunciationEnabled() {
+      return this.mapData.pronunciationEnabled === true
+    },
+    pronunciationStatusText() {
+      return this.pronunciationEnabled
+        ? '跟读评分已启用'
+        : '跟读评分不可用：服务未启用或腾讯云配置不完整'
+    },
     roadHeight() {
       return Math.max(this.levels.length * LEVEL_ROW_HEIGHT, 1)
     },
@@ -148,7 +169,7 @@ export default {
       })
     },
     startLevel(level) {
-      if (!level.unlocked || level.masteredByExistingWords) return
+      if (!level.unlocked) return
       this.$router.push({
         path: '/eng/study/challenge/' + this.articleId,
         query: { mode: 'NEW', levelNo: String(level.levelNo) }
@@ -156,7 +177,12 @@ export default {
     },
     levelAriaLabel(level) {
       if (!level.unlocked) return `第 ${level.levelNo} 关未解锁`
-      if (level.masteredByExistingWords) return `第 ${level.levelNo} 关已掌握，无需重复学习`
+      if (level.masteredByExistingWords) return `进入第 ${level.levelNo} 关重新测试，当前单词已掌握，金币按普通达星规则发放`
+      return `进入第 ${level.levelNo} 关`
+    },
+    levelHint(level) {
+      if (!level.unlocked) return '完成前一关并获得至少 1 颗星后解锁'
+      if (level.masteredByExistingWords) return '已掌握，可重新测试；金币按普通达星规则发放'
       return `进入第 ${level.levelNo} 关`
     },
     backToStudy() {
@@ -176,10 +202,41 @@ export default {
 
 .map-header {
   display: grid;
-  grid-template-columns: 140px minmax(0, 1fr) 140px;
+  grid-template-columns: 180px minmax(0, 1fr) 140px;
   align-items: center;
   max-width: 820px;
   margin: 0 auto 24px;
+}
+
+.map-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pronunciation-indicator {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid #e6a23c;
+  border-radius: 50%;
+  outline: none;
+  color: #e6a23c;
+  background: rgba(255, 255, 255, 0.88);
+  font-size: 18px;
+  cursor: help;
+}
+
+.pronunciation-indicator.is-enabled {
+  border-color: #45a33a;
+  color: #45a33a;
+}
+
+.pronunciation-indicator:focus-visible {
+  box-shadow: 0 0 0 3px rgba(64, 158, 255, 0.35);
 }
 
 .map-title {
@@ -253,7 +310,7 @@ export default {
   cursor: not-allowed;
 }
 
-.level-card.is-mastered { background: #2e8b57; cursor: default; }
+.level-card.is-mastered:not(.is-locked) { background: #2e8b57; cursor: pointer; }
 
 .level-card-title {
   display: flex;
@@ -280,11 +337,12 @@ export default {
 
 @media (max-width: 600px) {
   .level-map-page { min-height: calc(100vh - 50px); padding: 12px; }
-  .map-header { grid-template-columns: auto 1fr; gap: 10px; }
-  .map-title { text-align: left; }
+  .map-header { grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
+  .map-header-actions { grid-column: 1; grid-row: 1; }
+  .map-title { grid-column: 1 / -1; grid-row: 2; text-align: center; }
   .map-title h2 { font-size: 20px; }
   .map-title p { font-size: 12px; }
-  .map-progress { grid-column: 1 / -1; text-align: center; }
+  .map-progress { grid-column: 2; grid-row: 1; text-align: right; }
   .level-road { padding-top: 8px; }
   .level-row { min-height: 100px; }
   .level-card { border-radius: 20px; }

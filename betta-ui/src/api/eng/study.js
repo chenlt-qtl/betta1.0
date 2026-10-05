@@ -24,7 +24,7 @@ export function getReviewOverview() {
   })
 }
 
-// 获取新词或复习挑战题目，接口不会返回正确答案
+// 获取新词、复习或拼写挑战题目，接口不会返回正确答案
 export function getStudyChallenge(query) {
   return request({
     url: '/eng/study/challenge',
@@ -39,6 +39,20 @@ export function checkArticleChallengeAnswer(data) {
     url: '/eng/study/challenge/check',
     method: 'post',
     data
+  })
+}
+
+// 上传当前跟读题的 WAV 录音并获取服务端可信评分
+export function assessChallengePronunciation(data) {
+  return request({
+    url: '/eng/study/challenge/pronunciation',
+    method: 'post',
+    data,
+    timeout: 20000,
+    headers: {
+      'Content-Type': 'multipart/form-data',
+      repeatSubmit: false
+    }
   })
 }
 

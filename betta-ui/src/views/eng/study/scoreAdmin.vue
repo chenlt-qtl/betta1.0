@@ -70,11 +70,11 @@
     >
       <el-table v-loading="historyLoading" :data="historyList">
         <el-table-column label="类型" width="80" align="center">
-          <template slot-scope="scope">{{ recordMode(scope.row) === 'REVIEW' ? '复习' : '新词' }}</template>
+          <template slot-scope="scope">{{ recordModeLabel(scope.row) }}</template>
         </el-table-column>
         <el-table-column label="文章" min-width="180" show-overflow-tooltip>
           <template slot-scope="scope">
-            {{ recordMode(scope.row) === 'REVIEW' ? '全局复习' : (scope.row.articleTitle || ('文章 #' + scope.row.articleId)) }}
+            {{ recordScopeLabel(scope.row) }}
             <span v-if="scope.row.levelNo"> · 第 {{ scope.row.levelNo }} 关</span>
           </template>
         </el-table-column>
@@ -93,7 +93,7 @@
           <template slot-scope="scope">{{ scope.row.coinReward || 0 }}</template>
         </el-table-column>
         <el-table-column label="奖励明细" align="center" width="150">
-          <template slot-scope="scope">里程碑 {{ scope.row.milestoneCoin || 0 }} / 复习 {{ scope.row.reviewCoin || 0 }}</template>
+          <template slot-scope="scope">{{ rewardDetailText(scope.row) }}</template>
         </el-table-column>
         <el-table-column label="学习时间" align="center" min-width="170">
           <template slot-scope="scope">{{ parseTime(scope.row.studyTime || scope.row.createTime) || '-' }}</template>
@@ -215,6 +215,21 @@ export default {
     },
     recordMode(record) {
       return String(record.studyMode || record.mode || 'NEW').toUpperCase()
+    },
+    recordModeLabel(record) {
+      const labels = { NEW: '新词', REVIEW: '复习', SPELLING: '拼写' }
+      return labels[this.recordMode(record)] || '新词'
+    },
+    recordScopeLabel(record) {
+      const mode = this.recordMode(record)
+      if (mode === 'REVIEW') return '全局复习'
+      if (mode === 'SPELLING') return '全局拼写测试'
+      return record.articleTitle || ('文章 #' + record.articleId)
+    },
+    rewardDetailText(record) {
+      const milestoneCoin = record.milestoneCoin || 0
+      if (this.recordMode(record) === 'SPELLING') return '拼写里程碑 ' + milestoneCoin
+      return '里程碑 ' + milestoneCoin + ' / 复习 ' + (record.reviewCoin || 0)
     }
   }
 }

@@ -19,4 +19,6 @@ public class EngChallengeVo {
     private List<EngWordVo> words;
     /** 本次挑战题目集合。 */
     private List<EngChallengeQuestionVo> questions;
+    /** 本次测试是否包含跟读评分。 */
+    private Boolean pronunciationEnabled;
 }

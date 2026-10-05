@@ -34,7 +34,98 @@
       />
     </section>
 
-    <section v-if="isChoiceQuestion(currentQuestion)" class="answer">
+    <section v-if="!isSpelling && currentQuestion.type === 'PRONUNCIATION'" class="pronunciation-answer">
+      <p class="pronunciation-tip">请先听标准发音，再清晰朗读单词。</p>
+
+      <div v-if="currentPronunciationState.status === 'recording'" class="recording-status" role="status">
+        <span class="recording-dot" />
+        正在录音 {{ recordingSeconds }} 秒（最长 5 秒）
+      </div>
+      <div v-else-if="currentPronunciationState.status === 'assessing'" class="assessing-status" role="status">
+        <i class="el-icon-loading" /> 正在评分，请稍候…
+      </div>
+
+      <el-alert
+        v-if="currentPronunciationState.error"
+        :title="currentPronunciationState.error"
+        type="error"
+        :closable="false"
+        show-icon
+      />
+
+      <div v-if="currentPronunciationResult" class="pronunciation-result" aria-live="polite">
+        <div class="pronunciation-score">
+          <strong>{{ scoreText(currentPronunciationResult.score) }}</strong>
+          <span>跟读得分</span>
+          <el-tag :type="currentPronunciationResult.passed ? 'success' : 'warning'" size="small">
+            {{ currentPronunciationResult.passed ? '发音合格' : '继续加油' }}
+          </el-tag>
+        </div>
+        <div class="score-details">
+          <span>准确度 {{ scoreText(currentPronunciationResult.accuracy) }}</span>
+          <span>流利度 {{ scoreText(currentPronunciationResult.fluency) }}</span>
+          <span>完整度 {{ scoreText(currentPronunciationResult.completeness) }}</span>
+        </div>
+        <div v-if="currentPronunciationPhones.length" class="phone-feedback">
+          <span
+            v-for="(phone, phoneIndex) in currentPronunciationPhones"
+            :key="phoneIndex"
+            :class="{ 'phone-feedback--weak': phoneScore(phone) < 60 }"
+          >
+            {{ phoneLabel(phone) }} {{ scoreText(phoneScore(phone)) }}
+          </span>
+        </div>
+      </div>
+
+      <p class="pronunciation-attempts">
+        剩余 {{ currentRemainingAttempts }}/3 次
+      </p>
+
+      <div class="pronunciation-actions">
+        <el-button
+          v-if="currentPronunciationState.status !== 'recording' && currentRemainingAttempts > 0"
+          type="primary"
+          round
+          :disabled="pronunciationBusy"
+          icon="el-icon-microphone"
+          @click="startPronunciationRecording"
+        >
+          {{ currentPronunciationResult ? '重新录制' : '开始录音' }}
+        </el-button>
+        <el-button
+          v-if="currentPronunciationState.status === 'recording'"
+          type="danger"
+          round
+          icon="el-icon-video-pause"
+          @click="finishPronunciationRecording"
+        >
+          停止并评分
+        </el-button>
+        <el-button
+          v-if="currentRecordingUrl"
+          class="own-recording-button"
+          type="primary"
+          circle
+          :disabled="pronunciationBusy"
+          aria-label="播放我的发音"
+          title="播放我的发音"
+          @click="playOwnPronunciation"
+        >
+          <svg-icon icon-class="sound" />
+        </el-button>
+        <el-button
+          v-if="currentPronunciationResult"
+          type="success"
+          round
+          :disabled="pronunciationBusy"
+          @click="advanceOrComplete"
+        >
+          {{ index < questionList.length - 1 ? '下一题' : '完成测试' }}
+        </el-button>
+      </div>
+    </section>
+
+    <section v-else-if="isChoiceQuestion(currentQuestion)" class="answer">
       <ul>
         <li
           v-for="option in currentQuestion.options"
@@ -86,8 +177,9 @@
 </template>
 
 <script>
-import { checkArticleChallengeAnswer } from '@/api/eng/study'
+import { assessChallengePronunciation, checkArticleChallengeAnswer } from '@/api/eng/study'
 import { play, playAnswerFeedback, prepareAnswerFeedback } from '@/utils/audio'
+import PcmRecorder, { MAX_DURATION_MS } from '@/utils/pcmRecorder'
 
 const AUTO_ADVANCE_DELAY = 1000
 
@@ -125,7 +217,15 @@ export default {
       checkRequestIds: {},
       checkSequence: 0,
       autoAdvanceTimer: null,
-      completionEmitted: false
+      completionEmitted: false,
+      pronunciationStates: {},
+      pronunciationResults: {},
+      pronunciationAttempts: {},
+      pronunciationRecordingUrls: {},
+      recorder: null,
+      recordingPlayer: null,
+      recordingElapsedMs: 0,
+      recordingTimer: null
     }
   },
   computed: {
@@ -140,6 +240,40 @@ export default {
     },
     currentCheckResult() {
       return this.checkResults[this.currentQuestion.questionId] || null
+    },
+    currentPronunciationState() {
+      return this.pronunciationStates[this.currentQuestion.questionId] || { status: 'idle', error: '' }
+    },
+    currentPronunciationResult() {
+      return this.pronunciationResults[this.currentQuestion.questionId] || null
+    },
+    currentPronunciationPhones() {
+      const result = this.currentPronunciationResult
+      return result && Array.isArray(result.phones) ? result.phones : []
+    },
+    currentPronunciationAttempt() {
+      return this.pronunciationAttempts[this.currentQuestion.questionId] || {
+        attemptCount: 0,
+        remainingAttempts: 3
+      }
+    },
+    currentRemainingAttempts() {
+      const remainingAttempts = Number(this.currentPronunciationAttempt.remainingAttempts)
+      return Number.isInteger(remainingAttempts)
+        ? Math.min(3, Math.max(0, remainingAttempts))
+        : 3
+    },
+    currentRecordingUrl() {
+      return this.pronunciationRecordingUrls[this.currentQuestion.questionId] || ''
+    },
+    pronunciationBusy() {
+      return ['preparing', 'recording', 'stopping', 'assessing'].includes(this.currentPronunciationState.status)
+    },
+    recordingSeconds() {
+      return (this.recordingElapsedMs / 1000).toFixed(1)
+    },
+    isSpelling() {
+      return String(this.mode || '').toUpperCase() === 'SPELLING'
     },
     /** 按题型精简操作说明，仅保留用户作答所需的单词、释义或句子。 */
     displayPrompt() {
@@ -183,12 +317,25 @@ export default {
   beforeDestroy() {
     this.completionEmitted = true
     this.clearAutoAdvance()
+    this.clearRecordingTimer()
+    if (this.recorder) this.recorder.cancel()
+    this.releaseRecordingPlayer()
+    Object.keys(this.pronunciationRecordingUrls).forEach(questionId => {
+      URL.revokeObjectURL(this.pronunciationRecordingUrls[questionId])
+    })
   },
   methods: {
     /** 为所有题目预建响应式答案，填词题同时记录各答案格占用的候选项索引。 */
     initializeAnswers() {
       this.questionList.forEach(question => {
         this.$set(this.answers, question.questionId, '')
+        if (question.type === 'PRONUNCIATION') {
+          this.$set(this.pronunciationStates, question.questionId, { status: 'idle', error: '' })
+          this.$set(this.pronunciationAttempts, question.questionId, {
+            attemptCount: 0,
+            remainingAttempts: 3
+          })
+        }
         if (question.type !== 'SENTENCE_FILL') return
         const answerLength = Number(question.answerLength)
         const letters = Number.isInteger(answerLength) && answerLength > 0
@@ -203,7 +350,8 @@ export default {
         WORD_TO_CN: '看词选中文',
         CN_TO_WORD: '看中文选英文',
         SENTENCE_CHOICE: '句子挖空选词',
-        SENTENCE_FILL: '句子挖空填词'
+        SENTENCE_FILL: this.isSpelling ? '随机挖空拼写' : '句子挖空填词',
+        PRONUNCIATION: '单词跟读'
       }
       return labels[type] || '英语测试'
     },
@@ -311,6 +459,151 @@ export default {
     isFillOptionDisabled(optionIndex) {
       return this.currentFillOptionIndexes.includes(optionIndex) || !this.currentFillLetters.includes('')
     },
+    setPronunciationState(questionId, state) {
+      this.$set(this.pronunciationStates, questionId, Object.assign({ status: 'idle', error: '' }, state))
+    },
+    async startPronunciationRecording() {
+      const question = this.currentQuestion
+      if (!question || question.type !== 'PRONUNCIATION' || this.pronunciationBusy || this.currentRemainingAttempts <= 0) return
+      const questionId = question.questionId
+      this.clearAutoAdvance()
+      // 开始采集前停止回听，避免扬声器声音被麦克风再次录入。
+      this.releaseRecordingPlayer()
+      this.$set(this.answers, questionId, '')
+      this.$delete(this.pronunciationResults, questionId)
+      this.setPronunciationState(questionId, { status: 'preparing', error: '' })
+      const recorder = new PcmRecorder({
+        maxDurationMs: MAX_DURATION_MS,
+        onAutoStop: () => this.finishPronunciationRecording()
+      })
+      this.recorder = recorder
+      try {
+        await recorder.start()
+        if (this.completionEmitted || this.recorder !== recorder || this.currentQuestion.questionId !== questionId) {
+          await recorder.cancel()
+          return
+        }
+        this.recordingElapsedMs = 0
+        this.recordingTimer = setInterval(() => {
+          this.recordingElapsedMs = Math.min(MAX_DURATION_MS, this.recordingElapsedMs + 100)
+        }, 100)
+        this.setPronunciationState(questionId, { status: 'recording', error: '' })
+      } catch (error) {
+        if (this.recorder === recorder) this.recorder = null
+        this.setPronunciationState(questionId, { status: 'error', error: this.recordingErrorMessage(error) })
+      }
+    },
+    async finishPronunciationRecording() {
+      const question = this.currentQuestion
+      const recorder = this.recorder
+      if (!question || question.type !== 'PRONUNCIATION' || !recorder || !recorder.recording) return
+      const questionId = question.questionId
+      this.setPronunciationState(questionId, { status: 'stopping', error: '' })
+      this.clearRecordingTimer()
+      try {
+        const recording = await recorder.stop()
+        if (this.recorder === recorder) this.recorder = null
+        this.replaceRecordingUrl(questionId, recording.blob)
+        await this.assessPronunciation(question, recording.blob)
+      } catch (error) {
+        if (this.recorder === recorder) this.recorder = null
+        this.setPronunciationState(questionId, { status: 'error', error: this.recordingErrorMessage(error) })
+      }
+    },
+    async assessPronunciation(question, audio) {
+      const questionId = question.questionId
+      this.setPronunciationState(questionId, { status: 'assessing', error: '' })
+      const data = new FormData()
+      data.append('attemptId', this.attemptId)
+      data.append('mode', this.mode)
+      if (this.articleId != null) data.append('articleId', this.articleId)
+      if (this.levelNo != null) data.append('levelNo', this.levelNo)
+      data.append('questionId', questionId)
+      data.append('audio', audio, 'pronunciation.wav')
+      try {
+        const response = await assessChallengePronunciation(data)
+        if (this.completionEmitted || this.currentQuestion.questionId !== questionId) return
+        const result = response.data || {}
+        if (String(result.questionId) !== String(questionId) || typeof result.passed !== 'boolean') {
+          throw new Error('评分结果无效，请重新录制')
+        }
+        this.updatePronunciationAttempts(questionId, result)
+        this.$set(this.pronunciationResults, questionId, result)
+        // 客户端只提交已评测标记，最终分数由服务端缓存的可信结果决定。
+        this.$set(this.answers, questionId, 'ASSESSED')
+        this.setPronunciationState(questionId, { status: 'success', error: '' })
+      } catch (error) {
+        this.$set(this.answers, questionId, '')
+        this.setPronunciationState(questionId, { status: 'error', error: this.assessmentErrorMessage(error) })
+      }
+    },
+    clearRecordingTimer() {
+      if (this.recordingTimer !== null) clearInterval(this.recordingTimer)
+      this.recordingTimer = null
+    },
+    /** 使用服务端返回的权威次数，避免前端计数与并发请求结果不一致。 */
+    updatePronunciationAttempts(questionId, result) {
+      const attemptCount = Number(result.attemptCount)
+      const remainingAttempts = Number(result.remainingAttempts)
+      if (!Number.isInteger(attemptCount) || !Number.isInteger(remainingAttempts)) return
+      this.$set(this.pronunciationAttempts, questionId, {
+        attemptCount: Math.min(3, Math.max(0, attemptCount)),
+        remainingAttempts: Math.min(3, Math.max(0, remainingAttempts))
+      })
+    },
+    /** 每道题仅保留最新录音，并及时释放旧的本地音频地址。 */
+    replaceRecordingUrl(questionId, audioBlob) {
+      const previousUrl = this.pronunciationRecordingUrls[questionId]
+      if (previousUrl) {
+        this.releaseRecordingPlayer()
+        URL.revokeObjectURL(previousUrl)
+      }
+      this.$set(this.pronunciationRecordingUrls, questionId, URL.createObjectURL(audioBlob))
+    },
+    playOwnPronunciation() {
+      const recordingUrl = this.currentRecordingUrl
+      if (!recordingUrl) return
+      this.releaseRecordingPlayer()
+      const player = new Audio(recordingUrl)
+      this.recordingPlayer = player
+      player.onended = () => {
+        if (this.recordingPlayer === player) this.releaseRecordingPlayer()
+      }
+      player.play().catch(() => {
+        if (this.recordingPlayer !== player) return
+        this.$modal.msgWarning('录音播放失败，请重新录制')
+        this.releaseRecordingPlayer()
+      })
+    },
+    releaseRecordingPlayer() {
+      if (!this.recordingPlayer) return
+      this.recordingPlayer.onended = null
+      this.recordingPlayer.pause()
+      this.recordingPlayer.removeAttribute('src')
+      this.recordingPlayer.load()
+      this.recordingPlayer = null
+    },
+    recordingErrorMessage(error) {
+      if (error && error.message) return error.message
+      return '录音失败，请检查麦克风后重试'
+    },
+    assessmentErrorMessage(error) {
+      const responseMessage = error && error.response && error.response.data && error.response.data.msg
+      return responseMessage || (error && error.message) || '发音评分失败，请重新录制'
+    },
+    scoreText(value) {
+      const score = Number(value)
+      return Number.isFinite(score) ? Math.round(score) : '--'
+    },
+    phoneLabel(phone) {
+      if (!phone || typeof phone !== 'object') return String(phone || '')
+      return phone.phone || phone.phoneme || phone.symbol || phone.name || '音素'
+    },
+    phoneScore(phone) {
+      if (!phone || typeof phone !== 'object') return 0
+      const score = Number(phone.score != null ? phone.score : phone.accuracy)
+      return Number.isFinite(score) ? score : 0
+    },
     /** 判题反馈短暂停留后自动进入下一题，最后一题则提交整轮答案。 */
     scheduleAutoAdvance(questionId, requestId) {
       this.clearAutoAdvance()
@@ -337,9 +630,9 @@ export default {
         answer: this.answers[question.questionId]
       })))
     },
-    /** 看词选中文题进入时自动播放单词发音。 */
+    /** 看词选中文题及跟读题进入时自动播放一次标准发音。 */
     tryAutoPlay(question) {
-      if (!question || question.type !== 'WORD_TO_CN' || !question.audioUrl) return
+      if (!question || !['WORD_TO_CN', 'PRONUNCIATION'].includes(question.type) || !question.audioUrl) return
       this.$nextTick(() => {
         try {
           play(question.audioUrl, '', () => {})
@@ -433,6 +726,113 @@ export default {
     }
   }
 
+  .pronunciation-answer {
+    display: flex;
+    flex: none;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
+    width: 100%;
+  }
+
+  .pronunciation-tip {
+    margin: 0;
+    color: #606266;
+    font-size: 13px;
+    line-height: 1.6;
+    text-align: center;
+  }
+
+  .pronunciation-attempts {
+    margin: 0;
+    color: #909399;
+    font-size: 13px;
+    text-align: center;
+  }
+
+  .recording-status,
+  .assessing-status {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 32px;
+    color: #606266;
+  }
+
+  .recording-status { color: #f56c6c; }
+
+  .recording-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #f56c6c;
+    animation: recording-pulse 1s infinite;
+  }
+
+  .pronunciation-result {
+    padding: 14px;
+    border: 1px solid rgba(220, 223, 230, .8);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, .65);
+  }
+
+  .pronunciation-score {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+  }
+
+  .pronunciation-score strong {
+    color: #409eff;
+    font-size: 30px;
+  }
+
+  .pronunciation-score > span { color: #606266; }
+
+  .score-details,
+  .phone-feedback,
+  .pronunciation-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+  }
+
+  .score-details {
+    margin-top: 10px;
+    color: #606266;
+    font-size: 13px;
+  }
+
+  .phone-feedback { margin-top: 10px; }
+
+  .phone-feedback span {
+    padding: 3px 8px;
+    border-radius: 12px;
+    color: #67c23a;
+    background: #f0f9eb;
+    font-size: 12px;
+  }
+
+  .phone-feedback .phone-feedback--weak {
+    color: #e6a23c;
+    background: #fdf6ec;
+  }
+
+  .own-recording-button {
+    flex: 0 0 auto;
+    font-size: 18px;
+  }
+
+  @keyframes recording-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: .45; transform: scale(.8); }
+  }
+
   .right {
     background: rgba(46, 204, 113, 0.25);
   }
@@ -518,6 +918,25 @@ export default {
   }
 
   @media (max-width: 480px) {
+    .question { min-height: 64px; }
+
+    .question-prompt {
+      font-size: 17px;
+      overflow-wrap: anywhere;
+    }
+
+    .pronunciation-actions .el-button {
+      flex: 1 1 130px;
+      min-width: 0;
+      margin-left: 0;
+    }
+
+    .pronunciation-actions .own-recording-button {
+      flex: 0 0 40px;
+    }
+
+    .score-details { gap: 6px 12px; }
+
     .fill-option-list {
       gap: 8px;
     }

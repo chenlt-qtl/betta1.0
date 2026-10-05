@@ -114,19 +114,26 @@ export default {
 
 <style scoped lang="scss">
 .test-step1 {
-  height: calc(100% - 40px);
+  flex: 1 1 0;
+  min-height: 0;
 
   .word-table,
   .word-detail {
     display: flex;
     flex-direction: column;
     height: 100%;
+    min-height: 0;
   }
 
   .table,
   .acceptations {
     flex: 1;
+    min-height: 0;
   }
+
+  .table { overflow-y: auto; }
+
+  .toolbar { flex: none; }
 
   .word-container {
     color: #333;

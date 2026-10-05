@@ -11,6 +11,9 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
+import com.betta.common.annotation.RateLimiter;
+import com.betta.common.enums.LimitType;
 import com.betta.common.core.controller.BaseController;
 import com.betta.common.core.domain.AjaxResult;
 import com.betta.common.core.page.TableDataInfo;
@@ -18,6 +21,7 @@ import com.betta.common.exception.ServiceException;
 import com.betta.eng.domain.EngWrongWord;
 import com.betta.eng.domain.dto.EngChallengeCheckDto;
 import com.betta.eng.domain.dto.EngChallengeSubmitDto;
+import com.betta.eng.domain.dto.EngPronunciationAssessDto;
 import com.betta.eng.service.IEngStudyService;
 
 /**
@@ -81,6 +85,20 @@ public class EngStudyController extends BaseController
     {
         // 参数合法性与题目归属由业务层统一校验，控制器仅转发请求并封装响应。
         return success(service.checkChallengeAnswer(request));
+    }
+
+    /** 上传单词录音并返回可信跟读评分；同一来源每分钟最多二十次。 */
+    @RateLimiter(key = "eng:pronunciation:", time = 60, count = 20, limitType = LimitType.IP)
+    @PostMapping("/challenge/pronunciation")
+    public AjaxResult pronunciation(@RequestParam String attemptId, @RequestParam String mode,
+            @RequestParam(required = false) Long articleId,
+            @RequestParam(required = false) Integer levelNo,
+            @RequestParam String questionId, @RequestParam MultipartFile audio)
+    {
+        EngPronunciationAssessDto request = new EngPronunciationAssessDto();
+        request.setAttemptId(attemptId); request.setMode(mode); request.setArticleId(articleId);
+        request.setLevelNo(levelNo); request.setQuestionId(questionId); request.setAudio(audio);
+        return success(service.assessPronunciation(request));
     }
 
     /** 提交 request 中的闯关答案并返回服务端计分结果。 */
