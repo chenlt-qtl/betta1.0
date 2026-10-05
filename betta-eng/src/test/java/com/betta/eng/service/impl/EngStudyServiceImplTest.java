@@ -46,6 +46,7 @@ public class EngStudyServiceImplTest
         try
         {
             shouldExposePronunciationAvailabilityOnLevelMap();
+            shouldDisablePronunciationForInsecureAccess();
             shouldSeparateOrdinaryAndSpellingQuestions();
             shouldExposeAndEnforceSpellingEligibility();
             shouldKeepSpellingDefinitionStableWithinAttempt();
@@ -98,6 +99,32 @@ public class EngStudyServiceImplTest
         EngArticleLevelMapVo available = new Harness(true).service.getArticleLevels(ARTICLE_ID);
         assertTrue(Boolean.TRUE.equals(available.getPronunciationEnabled()),
                 "跟读评分配置完整时地图必须返回可用");
+    }
+
+    /** 非安全访问不得生成跟读题，提交时应按知识题独立计分。 */
+    private static void shouldDisablePronunciationForInsecureAccess()
+    {
+        Harness harness = new Harness(true);
+        harness.progress.put(2L, progress(2L, 99L, 1, 1));
+        EngChallengeVo insecure = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null, false);
+        assertTrue(Boolean.FALSE.equals(insecure.getPronunciationEnabled()), "HTTP 挑战必须标记跟读不可用");
+        assertTrue(insecure.getQuestions().stream().noneMatch(item -> "PRONUNCIATION".equals(item.getType())),
+                "HTTP 挑战不得生成跟读题");
+
+        EngChallengeSubmitDto request = request(insecure.getAttemptId(), "NEW", ARTICLE_ID, 1);
+        request.setAnswers(perfectAppleAnswers());
+        EngChallengeResultVo result = harness.service.submitChallenge(request, false);
+        assertEquals(100, result.getScore(), "HTTP 提交必须仅按知识题计算满分");
+        assertEquals(0, result.getPronunciationTotalCount(), "HTTP 提交的跟读题总数必须为零");
+        assertEquals(0, result.getPronunciationPassedCount(), "HTTP 提交的跟读合格数必须为零");
+        assertEquals(null, result.getPronunciationAverageScore(), "HTTP 提交不得生成跟读平均分");
+
+        Harness secureHarness = new Harness(true);
+        secureHarness.progress.put(2L, progress(2L, 99L, 1, 1));
+        EngChallengeVo secure = secureHarness.service.getChallenge("NEW", ARTICLE_ID, 1, null, true);
+        assertTrue(Boolean.TRUE.equals(secure.getPronunciationEnabled()), "HTTPS 挑战应保留可用的跟读评分");
+        assertTrue(secure.getQuestions().stream().anyMatch(item -> "PRONUNCIATION".equals(item.getType())),
+                "HTTPS 挑战应继续生成跟读题");
     }
 
     /** 普通测试不再混入拼写题，拼写模式也不得生成选择题或跟读题。 */
@@ -454,8 +481,13 @@ public class EngStudyServiceImplTest
     {
         assertTrue(EngStudyServiceImpl.class.getMethod("submitChallenge", EngChallengeSubmitDto.class)
                 .isAnnotationPresent(Transactional.class), "提交入口必须由事务包裹");
+        assertTrue(EngStudyServiceImpl.class.getMethod("submitChallenge", EngChallengeSubmitDto.class, boolean.class)
+                .isAnnotationPresent(Transactional.class), "访问环境感知的提交入口必须由事务包裹");
         assertTrue(EngStudyServiceImpl.class.getMethod("getChallenge", String.class, Long.class, Integer.class, List.class)
                 .isAnnotationPresent(Transactional.class), "自动掌握关卡写入必须处于事务边界");
+        assertTrue(EngStudyServiceImpl.class.getMethod("getChallenge", String.class, Long.class, Integer.class,
+                List.class, boolean.class).isAnnotationPresent(Transactional.class),
+                "访问环境感知的挑战入口必须由事务包裹");
     }
 
     /** 59 分不合格、60 分合格，并按知识 90% 与跟读 10% 四舍五入计分。 */

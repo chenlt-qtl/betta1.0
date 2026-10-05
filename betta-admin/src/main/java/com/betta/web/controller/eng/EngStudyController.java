@@ -1,8 +1,11 @@
 package com.betta.web.controller.eng;
 
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -52,9 +55,11 @@ public class EngStudyController extends BaseController
 
     /** 查询文章永久关卡地图。 */
     @GetMapping("/articles/{articleId}/levels")
-    public AjaxResult levels(@PathVariable Long articleId)
+    public AjaxResult levels(@PathVariable Long articleId, HttpServletRequest request)
     {
-        return success(service.getArticleLevels(articleId));
+        var levels = service.getArticleLevels(articleId);
+        levels.setPronunciationEnabled(Boolean.TRUE.equals(levels.getPronunciationEnabled()) && isSecure(request));
+        return success(levels);
     }
 
     /** 查询全局已学词和建议复习状态。 */
@@ -69,9 +74,10 @@ public class EngStudyController extends BaseController
     public AjaxResult challenge(@RequestParam String mode,
             @RequestParam(required = false) Long articleId,
             @RequestParam(required = false) Integer levelNo,
-            @RequestParam(required = false) String wordIds)
+            @RequestParam(required = false) String wordIds,
+            HttpServletRequest request)
     {
-        return success(service.getChallenge(mode, articleId, levelNo, parseWordIds(wordIds)));
+        return success(service.getChallenge(mode, articleId, levelNo, parseWordIds(wordIds), isSecure(request)));
     }
 
     /**
@@ -93,8 +99,11 @@ public class EngStudyController extends BaseController
     public AjaxResult pronunciation(@RequestParam String attemptId, @RequestParam String mode,
             @RequestParam(required = false) Long articleId,
             @RequestParam(required = false) Integer levelNo,
-            @RequestParam String questionId, @RequestParam MultipartFile audio)
+            @RequestParam String questionId, @RequestParam MultipartFile audio,
+            HttpServletRequest servletRequest)
     {
+        if (!isSecure(servletRequest))
+            throw new ServiceException("当前为非安全访问环境，跟读评分需要 HTTPS");
         EngPronunciationAssessDto request = new EngPronunciationAssessDto();
         request.setAttemptId(attemptId); request.setMode(mode); request.setArticleId(articleId);
         request.setLevelNo(levelNo); request.setQuestionId(questionId); request.setAudio(audio);
@@ -103,9 +112,9 @@ public class EngStudyController extends BaseController
 
     /** 提交 request 中的闯关答案并返回服务端计分结果。 */
     @PostMapping("/challenge/submit")
-    public AjaxResult submit(@RequestBody EngChallengeSubmitDto request)
+    public AjaxResult submit(@RequestBody EngChallengeSubmitDto request, HttpServletRequest servletRequest)
     {
-        return success(service.submitChallenge(request));
+        return success(service.submitChallenge(request, isSecure(servletRequest)));
     }
 
     /**
@@ -155,5 +164,58 @@ public class EngStudyController extends BaseController
             throw new ServiceException("复习单词主键格式错误");
         }
         return new ArrayList<>(ids);
+    }
+
+    /**
+     * 兼容 TLS 在反向代理终止的场景。生产环境仍须由网络层限制 8080 仅供内网访问，
+     * 并由 Nginx 覆盖客户端传入的 X-Forwarded-Proto。
+     */
+    private boolean isSecure(HttpServletRequest request)
+    {
+        if (request.isSecure()) return true;
+        if (!isTrustedProxyAddress(request.getRemoteAddr())) return false;
+        String forwardedProto = request.getHeader("X-Forwarded-Proto");
+        if (forwardedProto == null) return false;
+        String firstValue = forwardedProto.split(",", 2)[0].trim();
+        return "https".equalsIgnoreCase(firstValue);
+    }
+
+    /** 仅信任回环、私网和链路本地来源，避免公网直连通过伪造代理头启用跟读。 */
+    private boolean isTrustedProxyAddress(String remoteAddress)
+    {
+        InetAddress address = parseLiteralAddress(remoteAddress);
+        if (address == null) return false;
+        if (address.isLoopbackAddress() || address.isSiteLocalAddress() || address.isLinkLocalAddress()) return true;
+        byte[] bytes = address.getAddress();
+        return bytes.length == 16 && (bytes[0] & 0xFE) == 0xFC;
+    }
+
+    /** 只解析字面量 IP，拒绝主机名以避免通过 DNS 结果建立代理信任。 */
+    private InetAddress parseLiteralAddress(String value)
+    {
+        if (value == null || value.isBlank()) return null;
+        try
+        {
+            if (value.indexOf(':') >= 0)
+            {
+                if (!value.matches("[0-9A-Fa-f:.]+")) return null;
+                return InetAddress.getByName(value);
+            }
+            String[] parts = value.split("\\.", -1);
+            if (parts.length != 4) return null;
+            byte[] bytes = new byte[4];
+            for (int index = 0; index < parts.length; index++)
+            {
+                if (parts[index].isEmpty() || !parts[index].chars().allMatch(Character::isDigit)) return null;
+                int part = Integer.parseInt(parts[index]);
+                if (part > 255) return null;
+                bytes[index] = (byte) part;
+            }
+            return InetAddress.getByAddress(bytes);
+        }
+        catch (UnknownHostException | NumberFormatException exception)
+        {
+            return null;
+        }
     }
 }

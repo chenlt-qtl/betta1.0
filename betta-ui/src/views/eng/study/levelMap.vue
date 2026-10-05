@@ -130,10 +130,16 @@ export default {
     completedLevels() {
       return Number(this.mapData.completedLevels) || 0
     },
+    httpsAccess() {
+      return typeof window !== 'undefined' && window.location && window.location.protocol === 'https:'
+    },
     pronunciationEnabled() {
-      return this.mapData.pronunciationEnabled === true
+      return this.httpsAccess && this.mapData.pronunciationEnabled === true
     },
     pronunciationStatusText() {
+      if (!this.httpsAccess) {
+        return '跟读评分不可用：当前使用 HTTP 访问，请改用 HTTPS'
+      }
       return this.pronunciationEnabled
         ? '跟读评分已启用'
         : '跟读评分不可用：服务未启用或腾讯云配置不完整'
