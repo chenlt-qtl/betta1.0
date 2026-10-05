@@ -20,12 +20,17 @@ public interface IEngStudyService {
     EngReviewOverviewVo getReviewOverview();
     /** 按 NEW、REVIEW 或 SPELLING 模式构建固定规范词集合的无答案挑战。 */
     EngChallengeVo getChallenge(String mode, Long articleId, Integer levelNo, List<Long> wordIds);
+    /** 按当前访问环境是否允许跟读，构建固定规范词集合的无答案挑战。 */
+    EngChallengeVo getChallenge(String mode, Long articleId, Integer levelNo, List<Long> wordIds,
+            boolean pronunciationAllowed);
     /** 校验 request 中的单题答案并返回即时判定结果，不写入学习数据。 */
     EngChallengeResultVo.ResultItem checkChallengeAnswer(EngChallengeCheckDto request);
     /** 校验并评测一条跟读录音，可信结果由服务端缓存。 */
     EngPronunciationAssessmentVo assessPronunciation(EngPronunciationAssessDto request);
     /** 校验并提交 request，返回计分及逐题结果。 */
     EngChallengeResultVo submitChallenge(EngChallengeSubmitDto request);
+    /** 按当前访问环境是否允许跟读，校验并提交 request。 */
+    EngChallengeResultVo submitChallenge(EngChallengeSubmitDto request, boolean pronunciationAllowed);
     /** 按 wrongWord 条件查询当前用户错词。 */
     List<EngWrongWord> selectWrongWordList(EngWrongWord wrongWord);
     /** 将当前用户 id 对应错词标记掌握并返回影响行数。 */

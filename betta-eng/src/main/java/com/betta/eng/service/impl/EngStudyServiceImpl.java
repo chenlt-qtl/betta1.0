@@ -226,18 +226,27 @@ public class EngStudyServiceImpl implements IEngStudyService
     @Transactional
     public EngChallengeVo getChallenge(String mode, Long articleId, Integer levelNo, List<Long> wordIds)
     {
+        return getChallenge(mode, articleId, levelNo, wordIds, true);
+    }
+
+    @Override
+    @Transactional
+    public EngChallengeVo getChallenge(String mode, Long articleId, Integer levelNo, List<Long> wordIds,
+            boolean pronunciationAllowed)
+    {
         String actualMode = requireMode(mode);
         List<EngWordVo> words = NEW.equals(actualMode) ? newWordsForLevel(articleId, levelNo, true)
                 : reviewWords(wordIds, SPELLING.equals(actualMode));
         if (words.isEmpty()) throw new ServiceException(NEW.equals(actualMode) ? "本关新词已全部掌握" : "暂无可复习单词");
         String attemptId = UUID.randomUUID().toString();
-        List<QuestionDefinition> definitions = buildDefinitions(actualMode, articleId, words, attemptId);
+        List<QuestionDefinition> definitions = buildDefinitions(actualMode, articleId, words, attemptId,
+                pronunciationAllowed);
         EngChallengeVo challenge = new EngChallengeVo();
         challenge.setAttemptId(attemptId); challenge.setMode(actualMode);
         challenge.setArticleId(articleId); challenge.setLevelNo(levelNo);
         challenge.setTitle(NEW.equals(actualMode) ? requireArticle(articleId).getTitle()
                 : SPELLING.equals(actualMode) ? "拼写测试" : "单词复习");
-        challenge.setWords(words); challenge.setPronunciationEnabled(!SPELLING.equals(actualMode)
+        challenge.setWords(words); challenge.setPronunciationEnabled(pronunciationAllowed && !SPELLING.equals(actualMode)
                 && pronunciationProperties.isAvailable());
         List<EngChallengeQuestionVo> questions = definitions.stream().map(this::questionVo)
                 .collect(Collectors.toCollection(ArrayList::new));
@@ -256,7 +265,7 @@ public class EngStudyServiceImpl implements IEngStudyService
         List<EngWordVo> words = resolveSubmittedWords(mode, request.getArticleId(), request.getLevelNo(),
                 Set.of(wordId), false);
         QuestionDefinition definition = findDefinition(buildDefinitions(mode, request.getArticleId(), words,
-                request.getAttemptId()),
+                request.getAttemptId(), true),
                 request.getQuestionId());
         if (definition == null || !isPronunciation(definition)) throw new ServiceException("跟读题不属于当前测试");
         byte[] audio = audioBytes(request);
@@ -303,7 +312,7 @@ public class EngStudyServiceImpl implements IEngStudyService
         if (wordId == null) throw new ServiceException("题目标识无效");
         List<EngWordVo> words = resolveSubmittedWords(mode, request.getArticleId(), request.getLevelNo(), Set.of(wordId), false);
         QuestionDefinition definition = findDefinition(buildDefinitions(mode, request.getArticleId(), words,
-                request.getAttemptId()),
+                request.getAttemptId(), true),
                 request.getQuestionId());
         if (definition == null) throw new ServiceException("题目不属于当前测试");
         if (isPronunciation(definition)) throw new ServiceException("跟读题请使用跟读评分接口");
@@ -313,6 +322,13 @@ public class EngStudyServiceImpl implements IEngStudyService
     @Override
     @Transactional
     public EngChallengeResultVo submitChallenge(EngChallengeSubmitDto request)
+    {
+        return submitChallenge(request, true);
+    }
+
+    @Override
+    @Transactional
+    public EngChallengeResultVo submitChallenge(EngChallengeSubmitDto request, boolean pronunciationAllowed)
     {
         validateSubmit(request);
         Long userId = SecurityUtils.getUserId();
@@ -327,7 +343,7 @@ public class EngStudyServiceImpl implements IEngStudyService
         if (submittedIds.contains(null)) throw new ServiceException("题目标识无效");
         List<EngWordVo> words = resolveSubmittedWords(mode, request.getArticleId(), request.getLevelNo(), submittedIds, true);
         List<QuestionDefinition> definitions = buildDefinitions(mode, request.getArticleId(), words,
-                request.getAttemptId());
+                request.getAttemptId(), pronunciationAllowed);
         Map<String, String> answers = validateAnswers(request.getAnswers(), definitions);
         Map<Long, EngPronunciationAssessmentVo> pronunciation = loadPronunciationAssessments(
                 userId, request, mode, definitions, answers);
@@ -493,7 +509,7 @@ public class EngStudyServiceImpl implements IEngStudyService
     }
 
     private List<QuestionDefinition> buildDefinitions(String mode, Long articleId, List<EngWordVo> words,
-            String attemptId)
+            String attemptId, boolean includePronunciation)
     {
         List<QuestionDefinition> result = new ArrayList<>();
         for (EngWordVo word : words)
@@ -507,7 +523,7 @@ public class EngStudyServiceImpl implements IEngStudyService
             SentenceContent sentence = sentenceContent(mode, articleId, word);
             if (sentence != null)
                 result.add(sentenceChoice(word, words, sentence));
-            if (pronunciationProperties.isAvailable()) result.add(pronunciation(word));
+            if (includePronunciation && pronunciationProperties.isAvailable()) result.add(pronunciation(word));
         }
         return result;
     }
