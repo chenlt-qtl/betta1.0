@@ -12,6 +12,8 @@ public class EngChallengeWordResultVo
     private Integer correctCount;
     private Integer totalCount;
     private Boolean allCorrect;
+    private Integer pronunciationScore;
+    private Boolean pronunciationPassed;
     private Integer stars;
     private Integer highestStars;
     private Integer currentStars;

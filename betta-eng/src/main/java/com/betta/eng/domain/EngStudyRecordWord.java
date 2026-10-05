@@ -17,6 +17,10 @@ public class EngStudyRecordWord extends BaseEntity
     private Integer totalCount;
     private Integer allCorrect;
     private Integer stars;
+    /** 最终采用的单词跟读整数分，未启用跟读时为空。 */
+    private Integer pronunciationScore;
+    /** 跟读是否合格，未启用跟读时为空。 */
+    private Integer pronunciationPassed;
     private Long milestoneCoin;
     private Long reviewCoin;
     private String wordName;

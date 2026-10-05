@@ -17,9 +17,9 @@ public class EngStudyRecord extends BaseEntity {
     private Long articleId;
     /** 客户端一次测试的幂等标识。 */
     private String attemptId;
-    /** 学习模式：NEW 或 REVIEW。 */
+    /** 学习模式：NEW、REVIEW 或 SPELLING。 */
     private String studyMode;
-    /** 新词关卡号，复习时为空。 */
+    /** 新词关卡号，复习与拼写测试时为空。 */
     private Integer levelNo;
     /** 本次得分。 */
     private Integer score;

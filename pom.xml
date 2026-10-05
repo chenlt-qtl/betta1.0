@@ -28,11 +28,19 @@
         <jwt.version>0.9.1</jwt.version>
         <jaxb-api.version>2.3.1</jaxb-api.version>
         <springdoc.version>3.0.2</springdoc.version>
+        <tencentcloud-speech.version>1.0.68</tencentcloud-speech.version>
     </properties>
 
     <!-- 依赖声明 -->
     <dependencyManagement>
         <dependencies>
+
+            <!-- 腾讯云智聆口语评测服务端 SDK -->
+            <dependency>
+                <groupId>com.tencentcloudapi</groupId>
+                <artifactId>tencentcloud-speech-sdk-java</artifactId>
+                <version>${tencentcloud-speech.version}</version>
+            </dependency>
 
             <!-- SpringBoot的依赖配置-->
             <dependency>

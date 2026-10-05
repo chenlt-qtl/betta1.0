@@ -17,6 +17,8 @@ public class EngUserWordProgress extends BaseEntity
     private Integer latestStars;
     private Date latestTestTime;
     private Integer rewardedStars;
+    /** 拼写测试已发放奖励的最高星级，与普通里程碑独立。 */
+    private Integer spellingRewardedStars;
     private Long firstArticleId;
     private Integer firstLevelNo;
 }

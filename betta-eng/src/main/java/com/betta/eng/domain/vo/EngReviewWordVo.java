@@ -16,6 +16,8 @@ public class EngReviewWordVo
     private Integer currentStars;
     private Date latestTestTime;
     private Boolean recommended;
+    /** 是否满足四字母随机挖空拼写测试条件。 */
+    private Boolean spellingEligible;
     private List<String> sourceArticles;
     /** Mapper 聚合来源文章的内部逗号文本。 */
     private String sourceArticleNames;

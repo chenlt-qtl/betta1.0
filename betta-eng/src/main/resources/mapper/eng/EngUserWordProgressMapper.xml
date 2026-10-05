@@ -6,6 +6,7 @@
         <result property="wordId" column="word_id"/><result property="learned" column="learned"/>
         <result property="highestStars" column="highest_stars"/><result property="latestStars" column="latest_stars"/>
         <result property="latestTestTime" column="latest_test_time"/><result property="rewardedStars" column="rewarded_stars"/>
+        <result property="spellingRewardedStars" column="spelling_rewarded_stars"/>
         <result property="firstArticleId" column="first_article_id"/><result property="firstLevelNo" column="first_level_no"/>
         <result property="createBy" column="create_by"/><result property="createTime" column="create_time"/>
         <result property="updateBy" column="update_by"/><result property="updateTime" column="update_time"/>
@@ -17,9 +18,9 @@
         <result property="sourceArticleNames" column="source_article_names"/>
     </resultMap>
     <insert id="ensureProgress" parameterType="EngUserWordProgress">
-        insert ignore into eng_user_word_progress(user_id,word_id,learned,highest_stars,latest_stars,rewarded_stars,
+        insert ignore into eng_user_word_progress(user_id,word_id,learned,highest_stars,latest_stars,rewarded_stars,spelling_rewarded_stars,
           first_article_id,first_level_no,create_by,create_time,update_by,update_time)
-        values(#{userId},#{wordId},0,0,0,0,#{firstArticleId},#{firstLevelNo},#{createBy},now(),#{updateBy},now())
+        values(#{userId},#{wordId},0,0,0,0,0,#{firstArticleId},#{firstLevelNo},#{createBy},now(),#{updateBy},now())
     </insert>
     <select id="selectForUpdate" resultMap="ProgressMap">
         select * from eng_user_word_progress where user_id=#{userId} and word_id=#{wordId} for update
@@ -30,6 +31,7 @@
     <update id="updateProgress" parameterType="EngUserWordProgress">
         update eng_user_word_progress set learned=#{learned},highest_stars=#{highestStars},latest_stars=#{latestStars},
           latest_test_time=#{latestTestTime},rewarded_stars=#{rewardedStars},
+          spelling_rewarded_stars=#{spellingRewardedStars},
           first_article_id=coalesce(first_article_id,#{firstArticleId}),first_level_no=coalesce(first_level_no,#{firstLevelNo}),
           update_by=#{updateBy},update_time=now() where id=#{id}
     </update>
