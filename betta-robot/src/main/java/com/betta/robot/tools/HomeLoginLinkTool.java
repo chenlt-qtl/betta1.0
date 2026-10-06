@@ -1,6 +1,7 @@
 package com.betta.robot.tools;
 
 import com.betta.common.utils.StringUtils;
+import com.betta.robot.config.RobotLinkProperties;
 import com.betta.robot.dto.ActionResult;
 import com.betta.robot.service.RobotAutoLoginService;
 import lombok.extern.slf4j.Slf4j;
@@ -26,16 +27,20 @@ public class HomeLoginLinkTool implements ITool {
     @Autowired
     private RobotAutoLoginService robotAutoLoginService;
 
+    @Autowired
+    private RobotLinkProperties robotLinkProperties;
+
     /**
      * 根据工具参数生成指定昵称用户的短期首页登录链接。
      *
-     * @param params 工具参数，支持 frontBaseUrl、nickname、targetPath、expireMinutes
+     * @param params 工具参数，支持 frontBaseUrl、nickname、targetPath、expireMinutes；环境配置优先于 frontBaseUrl
      * @return 自动登录链接生成结果
      */
     @Override
     public ActionResult execute(Map<String, Object> params) {
         try {
-            String frontBaseUrl = getStringParam(params, "frontBaseUrl");
+            String frontBaseUrl = StringUtils.defaultIfBlank(
+                    robotLinkProperties.getFrontBaseUrl(), getStringParam(params, "frontBaseUrl"));
             if (StringUtils.isBlank(frontBaseUrl)) {
                 return ActionResult.fail("未配置前端地址 frontBaseUrl");
             }

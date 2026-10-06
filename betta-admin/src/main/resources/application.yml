@@ -41,6 +41,12 @@ logging:
     com.betta: debug
     org.springframework: warn
 
+# 机器人回复链接配置
+robot:
+  link:
+    # 生产环境从 /data/app/betta.env 注入公网前端地址
+    front-base-url: ${BETTA_FRONT_BASE_URL:}
+
 # 用户配置
 user:
   password:
