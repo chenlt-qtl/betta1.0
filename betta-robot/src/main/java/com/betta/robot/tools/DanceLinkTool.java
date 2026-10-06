@@ -1,6 +1,7 @@
 package com.betta.robot.tools;
 
 import com.betta.common.utils.StringUtils;
+import com.betta.robot.config.RobotLinkProperties;
 import com.betta.robot.dto.ActionResult;
 import com.betta.robot.service.RobotAutoLoginService;
 import lombok.extern.slf4j.Slf4j;
@@ -32,10 +33,13 @@ public class DanceLinkTool implements ITool {
     @Autowired
     private RobotAutoLoginService robotAutoLoginService;
 
+    @Autowired
+    private RobotLinkProperties robotLinkProperties;
+
     /**
      * 根据工具参数生成跳舞页面的短期自动登录链接。
      *
-     * @param params 工具参数，支持 frontBaseUrl、username、targetPath、expireMinutes
+     * @param params 工具参数，支持 frontBaseUrl、username、targetPath、expireMinutes；环境配置优先于 frontBaseUrl
      * @return 自动登录链接生成结果
      */
     @Override
@@ -44,7 +48,8 @@ public class DanceLinkTool implements ITool {
             // tool_params 示例：
             // {"frontBaseUrl":"https://your-domain.com","username":"damu","targetPath":"/dance","expireMinutes":5}
             // 以后其它模块可以复用 RobotAutoLoginService，只需要换 targetPath 或另建工具配置。
-            String frontBaseUrl = getStringParam(params, "frontBaseUrl");
+            String frontBaseUrl = StringUtils.defaultIfBlank(
+                    robotLinkProperties.getFrontBaseUrl(), getStringParam(params, "frontBaseUrl"));
             if (StringUtils.isBlank(frontBaseUrl)) {
                 return ActionResult.fail("未配置前端地址 frontBaseUrl");
             }
