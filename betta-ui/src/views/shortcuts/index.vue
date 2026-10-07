@@ -9,6 +9,42 @@
         <el-button v-hasPermi="['eng:study:view']" @click="$router.push('/eng/study/index')">学习中心</el-button>
         <el-button @click="changeWordBook">更换词书</el-button>
       </div>
+      <div class="learning-overview">
+        <button type="button" class="overview-card coin-card" @click="openMall">
+          <span class="overview-icon"><i class="el-icon-coin" /></span>
+          <span class="overview-content">
+            <span class="overview-label">金币余额</span>
+            <strong>{{ studySummary.coinBalance || 0 }}<small> 枚</small></strong>
+            <span class="overview-action">去金币商城 <i class="el-icon-arrow-right" /></span>
+          </span>
+        </button>
+        <button
+          v-hasPermi="['eng:study:challenge']"
+          type="button"
+          class="overview-card review-card"
+          @click="openReview"
+        >
+          <span class="overview-icon"><i class="el-icon-refresh" /></span>
+          <span class="overview-content">
+            <span class="overview-label">单词复习</span>
+            <strong>{{ reviewOverview.recommendedCount || 0 }}<small> 个建议复习</small></strong>
+            <span class="overview-action">开始复习 <i class="el-icon-arrow-right" /></span>
+          </span>
+        </button>
+        <button
+          v-hasPermi="['eng:study:wrong']"
+          type="button"
+          class="overview-card wrong-card"
+          @click="openWrongWords"
+        >
+          <span class="overview-icon"><i class="el-icon-collection" /></span>
+          <span class="overview-content">
+            <span class="overview-label">错题本</span>
+            <strong>{{ studySummary.wrongWordCount || 0 }}<small> 个待掌握</small></strong>
+            <span class="overview-action">查看错词 <i class="el-icon-arrow-right" /></span>
+          </span>
+        </button>
+      </div>
       <div v-if="article.id" class="text article">
         <div class="article-title">
           <img src="@/assets/shortcuts/书.svg" />{{ article.title }}
@@ -137,12 +173,15 @@ import {
   listCurrentArticleOptions,
   setCurrentArticle
 } from '@/api/eng/article';
+import { getReviewOverview, getStudySummary } from '@/api/eng/study';
 
 export default {
   name: "Shortcuts",
   data() {
     return {
       article: {},
+      studySummary: {},
+      reviewOverview: {},
       wordBookDialogVisible: false,
       wordBookLoading: false,
       wordBookOptions: [],
@@ -179,8 +218,23 @@ export default {
     getCurrentArticle().then((res) => {
       this.article = res.data || {};
     });
+    getStudySummary().then((res) => {
+      this.studySummary = res.data || {};
+    });
+    getReviewOverview().then((res) => {
+      this.reviewOverview = res.data || {};
+    });
   },
   methods: {
+    openMall() {
+      this.$router.push('/mall/index');
+    },
+    openReview() {
+      this.$router.push('/eng/study/review');
+    },
+    openWrongWords() {
+      this.$router.push('/eng/study/wrong');
+    },
     changeWordBook() {
       this.wordBookKeyword = '';
       this.wordBookDialogVisible = true;
@@ -248,6 +302,88 @@ export default {
       color: #8d96a8;
     }
 
+    .learning-overview {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      padding: 22px 0 8px;
+
+      .overview-card {
+        display: flex;
+        min-width: 0;
+        padding: 16px;
+        border: 1px solid #edf0f4;
+        border-radius: 12px;
+        background: #f7f9fb;
+        color: #555f76;
+        font: inherit;
+        text-align: left;
+        transition: transform 0.2s, box-shadow 0.2s;
+        cursor: pointer;
+
+        &:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 6px 16px rgba(78, 89, 110, 0.13);
+        }
+
+        .overview-icon {
+          display: flex;
+          flex: 0 0 38px;
+          align-items: center;
+          justify-content: center;
+          width: 38px;
+          height: 38px;
+          margin-right: 10px;
+          border-radius: 11px;
+          font-size: 20px;
+        }
+
+        .overview-content {
+          display: flex;
+          min-width: 0;
+          flex-direction: column;
+        }
+
+        .overview-label {
+          color: #8d96a8;
+          font-size: 13px;
+        }
+
+        strong {
+          margin-top: 2px;
+          color: #555f76;
+          font-size: 24px;
+          font-weight: 600;
+
+          small {
+            color: #8d96a8;
+            font-size: 12px;
+            font-weight: 400;
+          }
+        }
+
+        .overview-action {
+          margin-top: 12px;
+          font-size: 13px;
+        }
+      }
+
+      .coin-card {
+        .overview-icon { color: #e6a23c; background: #fdf3e4; }
+        .overview-action { color: #e6a23c; }
+      }
+
+      .review-card {
+        .overview-icon { color: #3b8b43; background: #eaf5eb; }
+        .overview-action { color: #3b8b43; }
+      }
+
+      .wrong-card {
+        .overview-icon { color: #ef6b6b; background: #fdecec; }
+        .overview-action { color: #ef6b6b; }
+      }
+    }
+
     .small-img {
       width: 30px;
     }
@@ -309,6 +445,49 @@ export default {
           height: 50px;
           color: #ffc94c;
         }
+      }
+    }
+  }
+}
+
+@media (max-width: 600px) {
+  .app-container {
+    height: auto;
+    min-height: calc(100vh - 84px);
+    padding: 10px;
+
+    .container {
+      padding: 16px;
+
+      .title-btn {
+        position: static;
+        margin-top: 10px;
+
+        .el-button {
+          flex: 1;
+          margin: 0;
+        }
+      }
+
+      .learning-overview {
+        grid-template-columns: 1fr;
+        padding-top: 18px;
+
+        .overview-card {
+          align-items: center;
+
+          .overview-content {
+            flex: 1;
+          }
+
+          .overview-action {
+            margin-top: 6px;
+          }
+        }
+      }
+
+      .other .item {
+        width: calc(50% - 10px);
       }
     }
   }

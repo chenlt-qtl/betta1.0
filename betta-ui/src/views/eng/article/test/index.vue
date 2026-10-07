@@ -12,12 +12,14 @@
       <step1 v-else-if="step === 1" :word-list="wordList" @back="backToLearning" @next="toStep2" />
       <step2
         v-else-if="step === 2"
+        ref="questions"
         :key="roundKey"
         :attempt-id="challenge.attemptId"
         :mode="mode"
         :article-id="articleId"
         :level-no="levelNo"
         :question-list="questionList"
+        :submitting="submitting"
         @complete="submitAnswers"
       />
       <step3
@@ -129,6 +131,8 @@ export default {
       }).then(response => {
         this.result = response.data || {}
         this.step = 3
+      }).catch(() => {
+        if (this.$refs.questions) this.$refs.questions.allowResubmit()
       }).finally(() => { this.submitting = false })
     },
     restart() { this.loadTest() },

@@ -1,9 +1,13 @@
 package com.betta.eng.service.impl;
 
+import jakarta.annotation.PreDestroy;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import com.betta.common.exception.ServiceException;
 import com.betta.eng.config.EngPronunciationProperties;
@@ -12,6 +16,7 @@ import com.betta.eng.domain.vo.EngPronunciationPhoneVo;
 import com.betta.eng.service.IPronunciationAssessmentClient;
 import com.tencent.core.ws.Credential;
 import com.tencent.core.ws.SpeechClient;
+import com.tencent.core.ws.WebsocketProfile;
 import com.tencent.soe.OralEvalConstant;
 import com.tencent.soe.OralEvaluationListener;
 import com.tencent.soe.OralEvaluationRequest;
@@ -25,11 +30,19 @@ import com.tencent.soe.WordRsp;
 @Service
 public class TencentPronunciationAssessmentClient implements IPronunciationAssessmentClient
 {
+    private static final Logger log = LoggerFactory.getLogger(TencentPronunciationAssessmentClient.class);
+    private static final Object CLIENT_INITIALIZATION_LOCK = new Object();
+    private static final int CONNECT_TIMEOUT_MS = 3000;
+    private static final int HANDSHAKE_TIMEOUT_SECONDS = 3;
+    private static final int CONNECT_MAX_TRY_TIMES = 1;
     private static final long START_TIMEOUT_MS = 5000L;
     private static final long RESULT_TIMEOUT_MS = 10000L;
     private static final double PASS_SCORE = 60D;
 
     private final EngPronunciationProperties properties;
+    private final ReentrantReadWriteLock lifecycleLock = new ReentrantReadWriteLock(true);
+    private volatile SpeechClient speechClient;
+    private volatile boolean closed;
 
     public TencentPronunciationAssessmentClient(EngPronunciationProperties properties)
     {
@@ -39,8 +52,23 @@ public class TencentPronunciationAssessmentClient implements IPronunciationAsses
     @Override
     public EngPronunciationAssessmentVo assess(String word, byte[] wavAudio)
     {
-        if (!properties.isAvailable()) throw new ServiceException("跟读评分服务暂未启用");
-        SpeechClient client = new SpeechClient(soeEndpoint());
+        lifecycleLock.readLock().lock();
+        try
+        {
+            ensureOpen();
+            if (!properties.isAvailable()) throw new ServiceException("跟读评分服务暂未启用");
+            return assessWhileOpen(word, wavAudio);
+        }
+        finally
+        {
+            lifecycleLock.readLock().unlock();
+        }
+    }
+
+    /** 读锁覆盖完整评分过程，允许并发评分且防止关闭在途客户端。 */
+    private EngPronunciationAssessmentVo assessWhileOpen(String word, byte[] wavAudio)
+    {
+        long totalStartedAt = System.nanoTime();
         OralEvaluator evaluator = null;
         AtomicReference<OralEvaluationResponse> responseRef = new AtomicReference<>();
         AtomicReference<ServiceException> failureRef = new AtomicReference<>();
@@ -49,11 +77,27 @@ public class TencentPronunciationAssessmentClient implements IPronunciationAsses
             OralEvaluationRequest request = request(word);
             var credential = new Credential(properties.getTencent().getAppId(),
                     properties.getTencent().getSecretId(), properties.getTencent().getSecretKey());
-            evaluator = new OralEvaluator(client, credential, request, listener(responseRef, failureRef));
-            evaluator.start(START_TIMEOUT_MS);
+            evaluator = new OralEvaluator(speechClient(), credential, request, listener(responseRef, failureRef));
+            long startStartedAt = System.nanoTime();
+            try
+            {
+                evaluator.start(START_TIMEOUT_MS);
+            }
+            finally
+            {
+                log.info("跟读评分客户端启动及连接结束，costMs={}", elapsedMillis(startStartedAt));
+            }
             if (failureRef.get() != null) throw failureRef.get();
-            evaluator.write(wavAudio);
-            evaluator.stop(RESULT_TIMEOUT_MS);
+            long resultStartedAt = System.nanoTime();
+            try
+            {
+                evaluator.write(wavAudio);
+                evaluator.stop(RESULT_TIMEOUT_MS);
+            }
+            finally
+            {
+                log.info("跟读评分结果等待结束，costMs={}", elapsedMillis(resultStartedAt));
+            }
             if (failureRef.get() != null) throw failureRef.get();
             OralEvaluationResponse response = responseRef.get();
             if (response == null || response.getCode() != 0 || response.getResult() == null)
@@ -71,8 +115,80 @@ public class TencentPronunciationAssessmentClient implements IPronunciationAsses
         finally
         {
             if (evaluator != null) evaluator.close();
-            client.shutdown();
+            log.info("跟读评分客户端调用结束，costMs={}", elapsedMillis(totalStartedAt));
         }
+    }
+
+    /** 延迟创建全局复用的 SDK 客户端，未启用评分时不创建 Netty 资源。 */
+    SpeechClient speechClient()
+    {
+        lifecycleLock.readLock().lock();
+        try
+        {
+            ensureOpen();
+            SpeechClient current = speechClient;
+            if (current != null) return current;
+            synchronized (CLIENT_INITIALIZATION_LOCK)
+            {
+                current = speechClient;
+                if (current != null) return current;
+                // SDK 将连接超时和重试次数定义为全局静态字段，仅在单例首次初始化时统一设置。
+                SpeechClient.connectTimeout = CONNECT_TIMEOUT_MS;
+                SpeechClient.connectMaxTryTimes = CONNECT_MAX_TRY_TIMES;
+                WebsocketProfile profile = WebsocketProfile.defaultWebsocketProfile();
+                profile.setConnectTimeout(CONNECT_TIMEOUT_MS);
+                profile.setHandshakeTimeout(HANDSHAKE_TIMEOUT_SECONDS);
+                current = createSpeechClient(profile);
+                speechClient = current;
+                return current;
+            }
+        }
+        finally
+        {
+            lifecycleLock.readLock().unlock();
+        }
+    }
+
+    SpeechClient createSpeechClient(WebsocketProfile profile)
+    {
+        return new SpeechClient(soeEndpoint(), profile);
+    }
+
+    void shutdownSpeechClient(SpeechClient client)
+    {
+        client.shutdown();
+    }
+
+    /** 应用关闭时只释放一次 SDK 全局线程资源。 */
+    @PreDestroy
+    public void shutdown()
+    {
+        lifecycleLock.writeLock().lock();
+        try
+        {
+            if (closed) return;
+            closed = true;
+            if (speechClient != null) shutdownSpeechClient(speechClient);
+        }
+        finally
+        {
+            lifecycleLock.writeLock().unlock();
+        }
+    }
+
+    private void ensureOpen()
+    {
+        if (closed) throw new ServiceException("跟读评分服务已关闭");
+    }
+
+    boolean hasInitializedSpeechClient()
+    {
+        return speechClient != null;
+    }
+
+    private long elapsedMillis(long startedAt)
+    {
+        return (System.nanoTime() - startedAt) / 1_000_000L;
     }
 
     private OralEvaluationRequest request(String word)
