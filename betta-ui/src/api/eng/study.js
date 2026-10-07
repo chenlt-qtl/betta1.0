@@ -33,6 +33,23 @@ export function getStudyChallenge(query) {
   })
 }
 
+// 查询当前用户的普通单词测试题型设置
+export function getChallengeSettings() {
+  return request({
+    url: '/eng/study/challenge/settings',
+    method: 'get'
+  })
+}
+
+// 保存当前用户的普通单词测试题型设置
+export function updateChallengeSettings(data) {
+  return request({
+    url: '/eng/study/challenge/settings',
+    method: 'put',
+    data
+  })
+}
+
 // 提交单题答案并即时获取判题结果，不影响最终闯关记录
 export function checkArticleChallengeAnswer(data) {
   return request({

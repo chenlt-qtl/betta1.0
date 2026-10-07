@@ -46,6 +46,10 @@ public class EngStudyServiceImplTest
         try
         {
             shouldExposePronunciationAvailabilityOnLevelMap();
+            shouldReuseArticleWordsAcrossLevelsAndPronunciation();
+            shouldDefaultAndIsolateChallengeSettings();
+            shouldApplyChallengeSettingsWithoutChangingSpelling();
+            shouldRejectInvalidSettingsAndStaleChallenge();
             shouldDisablePronunciationForInsecureAccess();
             shouldSeparateOrdinaryAndSpellingQuestions();
             shouldExposeAndEnforceSpellingEligibility();
@@ -89,6 +93,103 @@ public class EngStudyServiceImplTest
         }
     }
 
+    /** 无记录默认全开，且不同登录用户的设置互不影响。 */
+    private static void shouldDefaultAndIsolateChallengeSettings()
+    {
+        Harness harness = new Harness();
+        EngChallengeSettingVo defaults = harness.service.getChallengeSetting();
+        assertTrue(defaults.getWordToMeaningEnabled() && defaults.getMeaningToWordEnabled()
+                && defaults.getSentenceClozeEnabled() && defaults.getPronunciationEnabled(),
+                "无设置记录时四种普通题型必须默认启用");
+
+        EngChallengeSettingUpdateDto request = setting(false, true, false, false);
+        harness.service.updateChallengeSetting(request);
+        assertTrue(!harness.service.getChallengeSetting().getWordToMeaningEnabled(), "用户设置必须保存");
+        setTestLoginUser(8L);
+        try
+        {
+            assertTrue(harness.service.getChallengeSetting().getWordToMeaningEnabled(), "不同用户必须保持默认设置");
+            harness.service.updateChallengeSetting(setting(true, false, true, true));
+        }
+        finally
+        {
+            setTestLoginUser();
+        }
+        assertTrue(!harness.service.getChallengeSetting().getWordToMeaningEnabled(), "切回原用户后必须读取自己的设置");
+    }
+
+    /** NEW、REVIEW 应按偏好出题，SPELLING 继续只生成独立拼写题。 */
+    private static void shouldApplyChallengeSettingsWithoutChangingSpelling()
+    {
+        Harness harness = spellingHarness();
+        harness.service.updateChallengeSetting(setting(false, true, false, false));
+        EngChallengeVo fresh = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null, true);
+        assertTrue(fresh.getQuestions().stream().allMatch(item -> "CN_TO_WORD".equals(item.getType())),
+                "新词测试只能生成当前用户启用的题型");
+        EngChallengeVo review = harness.service.getChallenge("REVIEW", null, null, List.of(1L), true);
+        assertTrue(review.getQuestions().stream().allMatch(item -> "CN_TO_WORD".equals(item.getType())),
+                "复习测试只能生成当前用户启用的题型");
+        EngChallengeVo spelling = harness.service.getChallenge("SPELLING", null, null, List.of(1L), true);
+        assertTrue(spelling.getQuestions().stream().allMatch(item -> "SENTENCE_FILL".equals(item.getType())),
+                "拼写测试不得受普通题型设置影响");
+    }
+
+    /** 基础题型不得全关，且保存新设置后旧普通测试必须失效。 */
+    private static void shouldRejectInvalidSettingsAndStaleChallenge()
+    {
+        Harness harness = new Harness();
+        EngChallengeVo challenge = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null, false);
+        String legacyAttemptId = challenge.getAttemptId().substring(0, challenge.getAttemptId().lastIndexOf('.'));
+        EngChallengeCheckDto legacyCheck = challengeCheck(legacyAttemptId);
+        assertTrue(harness.service.checkChallengeAnswer(legacyCheck).getCorrect(),
+                "从未保存设置时应兼容部署前生成的纯 UUID 普通测试");
+        assertThrows(() -> harness.service.checkChallengeAnswer(challengeCheck(".0")),
+                "仅版本后缀不得作为测试标识");
+        assertThrows(() -> harness.service.checkChallengeAnswer(challengeCheck("invalid.0")),
+                "非法 UUID 前缀不得通过版本零校验");
+        assertThrows(() -> harness.service.checkChallengeAnswer(challengeCheck(legacyAttemptId + ".extra.0")),
+                "多个分隔符不得通过版本零校验");
+        assertThrows(() -> harness.service.checkChallengeAnswer(challengeCheck(legacyAttemptId + ".00")),
+                "非规范十进制版本零不得通过校验");
+        assertThrows(() -> harness.service.checkChallengeAnswer(challengeCheck(legacyAttemptId + ".1")),
+                "非当前版本不得通过版本零校验");
+        assertThrows(() -> harness.service.updateChallengeSetting(setting(false, false, true, true)),
+                "两个基础知识题型不得同时关闭");
+        harness.service.updateChallengeSetting(setting(true, false, false, false));
+        EngChallengeCheckDto check = challengeCheck(challenge.getAttemptId());
+        assertThrows(() -> harness.service.checkChallengeAnswer(check), "设置变化后旧测试必须失效");
+        assertThrows(() -> harness.service.checkChallengeAnswer(legacyCheck),
+                "保存设置后部署前的纯 UUID 测试也必须失效");
+        EngChallengeVo current = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null, false);
+        assertTrue(harness.service.checkChallengeAnswer(challengeCheck(current.getAttemptId())).getCorrect(),
+                "当前版本的规范测试标识必须有效");
+        String currentUuid = current.getAttemptId().substring(0, current.getAttemptId().lastIndexOf('.'));
+        assertThrows(() -> harness.service.checkChallengeAnswer(challengeCheck("invalid.1")),
+                "非法 UUID 前缀不得通过版本一校验");
+        assertThrows(() -> harness.service.checkChallengeAnswer(challengeCheck(currentUuid + ".extra.1")),
+                "多个分隔符不得通过版本一校验");
+        assertThrows(() -> harness.service.checkChallengeAnswer(challengeCheck(currentUuid + ".01")),
+                "非规范十进制版本一不得通过校验");
+        assertThrows(() -> harness.service.checkChallengeAnswer(challengeCheck(currentUuid + ".0")),
+                "旧版本后缀不得通过版本一校验");
+    }
+
+    private static EngChallengeCheckDto challengeCheck(String attemptId)
+    {
+        EngChallengeCheckDto request = new EngChallengeCheckDto(); request.setAttemptId(attemptId);
+        request.setMode("NEW"); request.setArticleId(ARTICLE_ID); request.setLevelNo(1);
+        request.setQuestionId("WORD_TO_CN:1"); request.setAnswer("苹果"); return request;
+    }
+
+    private static EngChallengeSettingUpdateDto setting(boolean wordToMeaning, boolean meaningToWord,
+            boolean sentenceCloze, boolean pronunciation)
+    {
+        EngChallengeSettingUpdateDto request = new EngChallengeSettingUpdateDto();
+        request.setWordToMeaningEnabled(wordToMeaning); request.setMeaningToWordEnabled(meaningToWord);
+        request.setSentenceClozeEnabled(sentenceCloze); request.setPronunciationEnabled(pronunciation);
+        return request;
+    }
+
     /** 地图接口应明确返回跟读评分配置是否完整可用。 */
     private static void shouldExposePronunciationAvailabilityOnLevelMap()
     {
@@ -99,6 +200,22 @@ public class EngStudyServiceImplTest
         EngArticleLevelMapVo available = new Harness(true).service.getArticleLevels(ARTICLE_ID);
         assertTrue(Boolean.TRUE.equals(available.getPronunciationEnabled()),
                 "跟读评分配置完整时地图必须返回可用");
+    }
+
+    /** 多关卡地图和跟读校验都只能加载一次文章全部单词。 */
+    private static void shouldReuseArticleWordsAcrossLevelsAndPronunciation()
+    {
+        Harness harness = new Harness(true);
+        harness.levelWords.put(2, List.of("dog"));
+        EngArticleLevelMapVo map = harness.service.getArticleLevels(ARTICLE_ID);
+        assertEquals(2, map.getLevels().size(), "多关卡地图必须保留全部有效关卡");
+        assertEquals(1, harness.articleWordListReads.get(), "构建关卡地图只能查询一次文章全部单词");
+
+        EngChallengeVo challenge = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null);
+        harness.articleWordListReads.set(0);
+        harness.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "NEW", ARTICLE_ID, 1,
+                "PRONUNCIATION:1", wav(false)));
+        assertEquals(1, harness.articleWordListReads.get(), "跟读题校验只能查询一次文章全部单词");
     }
 
     /** 非安全访问不得生成跟读题，提交时应按知识题独立计分。 */
@@ -1070,11 +1187,13 @@ public class EngStudyServiceImplTest
     {
         private final Map<Long, EngUserWordProgress> progress = new LinkedHashMap<>();
         private final Map<Integer, EngArticleLevelProgress> levelProgress = new LinkedHashMap<>();
+        private final Map<Long, EngUserChallengeSetting> challengeSettings = new HashMap<>();
         private final Map<String, EngStudyRecord> records = new HashMap<>();
         private final List<EngStudyRecordWord> details = new ArrayList<>();
         private final AtomicInteger detailWrites = new AtomicInteger();
         private final AtomicInteger currentAttemptReads = new AtomicInteger();
         private final AtomicInteger wrongWrites = new AtomicInteger();
+        private final AtomicInteger articleWordListReads = new AtomicInteger();
         private boolean hideOrdinaryAttemptRead;
         private Long lastWrongArticleId;
         private int familiarityDelta;
@@ -1122,7 +1241,10 @@ public class EngStudyServiceImplTest
                 return defaultValue(returnType(IEngSentenceService.class, method));
             });
             IEngWordService wordService = proxy(IEngWordService.class, (method, args) -> {
-                if ("selectWordListByArticle".equals(method)) return List.of(apple, cat, dog);
+                if ("selectWordListByArticle".equals(method))
+                {
+                    articleWordListReads.incrementAndGet(); return List.of(apple, cat, dog);
+                }
                 if ("selectEngWordById".equals(method)) return toWord(wordById.get(args[0]));
                 if ("updateFamiliarity".equals(method)) { familiarityDelta += (Integer) args[1]; return 1; }
                 return defaultValue(returnType(IEngWordService.class, method));
@@ -1135,8 +1257,23 @@ public class EngStudyServiceImplTest
                     proxy(IEngIcibaSentenceService.class, (method, args) -> List.of()), wordService,
                     recordMapper(), recordWordMapper(), walletMapper(),
                     wrongWordMapper(),
-                    wordProgressMapper(), levelProgressMapper(), articleWordMapper(), properties, client,
+                    wordProgressMapper(), levelProgressMapper(), articleWordMapper(), challengeSettingMapper(), properties, client,
                     pronunciationCache);
+        }
+
+        private EngUserChallengeSettingMapper challengeSettingMapper()
+        {
+            return proxy(EngUserChallengeSettingMapper.class, (method, args) -> {
+                if ("selectByUserId".equals(method)) return challengeSettings.get(args[0]);
+                if ("upsert".equals(method))
+                {
+                    EngUserChallengeSetting incoming = (EngUserChallengeSetting) args[0];
+                    EngUserChallengeSetting stored = challengeSettings.get(incoming.getUserId());
+                    incoming.setSettingVersion(stored == null ? 1L : stored.getSettingVersion() + 1L);
+                    challengeSettings.put(incoming.getUserId(), incoming); return 1;
+                }
+                return defaultValue(returnType(EngUserChallengeSettingMapper.class, method));
+            });
         }
 
         private EngStudyRecordMapper recordMapper()
@@ -1252,6 +1389,18 @@ public class EngStudyServiceImplTest
             return proxy(EngArticleWordRelMapper.class, (method, args) -> {
                 if ("selectMaxLevelNo".equals(method)) return levelWords.keySet().stream().max(Integer::compareTo).orElse(0);
                 if ("lockArticle".equals(method)) { lockOrder.add("articleLock"); return ARTICLE_ID; }
+                if ("selectEngArticleWordRelList".equals(method))
+                {
+                    List<EngArticleWordRel> result = new ArrayList<>(); long id = 1L;
+                    for (Map.Entry<Integer, List<String>> entry : levelWords.entrySet())
+                        for (String name : entry.getValue())
+                        {
+                            EngArticleWordRel relation = new EngArticleWordRel(); relation.setId(id++);
+                            relation.setArticleId(ARTICLE_ID); relation.setWordName(name);
+                            relation.setLevelNo(entry.getKey()); relation.setCreateBy("tester"); result.add(relation);
+                        }
+                    return result;
+                }
                 if ("selectByArticleAndLevel".equals(method))
                 {
                     Integer levelNo = (Integer) args[1];

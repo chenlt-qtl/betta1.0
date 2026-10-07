@@ -24,6 +24,7 @@ import com.betta.common.exception.ServiceException;
 import com.betta.eng.domain.EngWrongWord;
 import com.betta.eng.domain.dto.EngChallengeCheckDto;
 import com.betta.eng.domain.dto.EngChallengeSubmitDto;
+import com.betta.eng.domain.dto.EngChallengeSettingUpdateDto;
 import com.betta.eng.domain.dto.EngPronunciationAssessDto;
 import com.betta.eng.service.IEngStudyService;
 
@@ -67,6 +68,20 @@ public class EngStudyController extends BaseController
     public AjaxResult review()
     {
         return success(service.getReviewOverview());
+    }
+
+    /** 查询当前登录用户的普通单词测试题型设置。 */
+    @GetMapping("/challenge/settings")
+    public AjaxResult challengeSettings()
+    {
+        return success(service.getChallengeSetting());
+    }
+
+    /** 保存当前登录用户的普通单词测试题型设置。 */
+    @PutMapping("/challenge/settings")
+    public AjaxResult updateChallengeSettings(@RequestBody EngChallengeSettingUpdateDto request)
+    {
+        return success(service.updateChallengeSetting(request));
     }
 
     /** 按 NEW 或 REVIEW 模式获取不包含正确答案的固定词集挑战。 */
