@@ -28,6 +28,7 @@
         v-if="canPlayAudio"
         type="text"
         icon="el-icon-video-play"
+        :disabled="currentQuestion.type === 'PRONUNCIATION' && pronunciationBusy"
         aria-label="重新发音"
         title="重新发音"
         @click="playCurrentAudio"
@@ -203,7 +204,7 @@
 <script>
 import { assessChallengePronunciation, checkArticleChallengeAnswer } from '@/api/eng/study'
 import { createAnswerDigest } from '@/utils/answerDigest'
-import { play, playAnswerFeedback, prepareAnswerFeedback } from '@/utils/audio'
+import { play, playAnswerFeedback, prepareAnswerFeedback, stop as stopAudio } from '@/utils/audio'
 import PcmRecorder, { MAX_DURATION_MS } from '@/utils/pcmRecorder'
 
 const AUTO_ADVANCE_DELAY = 1000
@@ -550,7 +551,8 @@ export default {
       if (!question || question.type !== 'PRONUNCIATION' || this.pronunciationBusy || this.currentRemainingAttempts <= 0) return
       const questionId = question.questionId
       this.clearAutoAdvance()
-      // 开始采集前停止回听，避免扬声器声音被麦克风再次录入。
+      // 开始采集前停止标准发音和录音回听，避免扬声器声音被麦克风再次录入。
+      stopAudio()
       this.releaseRecordingPlayer()
       this.$set(this.answers, questionId, '')
       this.$delete(this.pronunciationResults, questionId)
@@ -591,6 +593,7 @@ export default {
         const recording = await recorder.stop()
         if (this.recorder === recorder) this.recorder = null
         this.replaceRecordingUrl(questionId, recording.blob)
+        this.playOwnPronunciation()
         await this.assessPronunciation(question, recording.blob)
       } catch (error) {
         if (this.recorder === recorder) this.recorder = null
@@ -733,6 +736,7 @@ export default {
       this.completionEmitted = false
     },
     advanceOrComplete() {
+      this.releaseRecordingPlayer()
       if (this.index < this.questionList.length - 1) {
         this.index++
         return
@@ -765,7 +769,7 @@ export default {
       }
     },
     playCurrentAudio() {
-      if (!this.currentQuestion.audioUrl) return
+      if (!this.currentQuestion.audioUrl || (this.currentQuestion.type === 'PRONUNCIATION' && this.pronunciationBusy)) return
       try {
         play(this.currentQuestion.audioUrl, '', () => {
           this.$modal.msgWarning('音频播放失败，请稍后重试')

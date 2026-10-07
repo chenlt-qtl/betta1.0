@@ -26,6 +26,13 @@ const resolveAudioUrl = (url) => {
   return resourcePrefix + (encodedResourcePath.startsWith("/") ? encodedResourcePath : "/" + encodedResourcePath);
 }
 
+/** 停止当前单词发音，并清理分段播放的延迟停止任务。 */
+export const stop = () => {
+  clearTimeout(timer);
+  timer = undefined;
+  player.pause();
+}
+
 /**播放MP3 */
 export const play = (url, timeStr, onError = () => {}) => {
 
