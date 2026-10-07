@@ -48,7 +48,7 @@ export function assessChallengePronunciation(data) {
     url: '/eng/study/challenge/pronunciation',
     method: 'post',
     data,
-    timeout: 20000,
+    timeout: 35000,
     headers: {
       'Content-Type': 'multipart/form-data',
       repeatSubmit: false

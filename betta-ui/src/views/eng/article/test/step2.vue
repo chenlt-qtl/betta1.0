@@ -117,10 +117,11 @@
           v-if="currentPronunciationResult"
           type="success"
           round
-          :disabled="pronunciationBusy"
+          :loading="submitting"
+          :disabled="pronunciationBusy || submitting"
           @click="advanceOrComplete"
         >
-          {{ index < questionList.length - 1 ? '下一题' : '完成测试' }}
+          {{ isLastQuestion ? '提交' : '下一题' }}
         </el-button>
       </div>
     </section>
@@ -173,6 +174,18 @@
       :closable="false"
       show-icon
     />
+
+    <div v-if="showFinalSubmit" class="toolbar final-submit-actions">
+      <el-button
+        type="success"
+        round
+        :loading="submitting"
+        :disabled="submitting"
+        @click="advanceOrComplete"
+      >
+        提交
+      </el-button>
+    </div>
   </div>
 </template>
 
@@ -205,6 +218,10 @@ export default {
     questionList: {
       type: Array,
       default: () => []
+    },
+    submitting: {
+      type: Boolean,
+      default: false
     }
   },
   data() {
@@ -274,6 +291,15 @@ export default {
     },
     isSpelling() {
       return String(this.mode || '').toUpperCase() === 'SPELLING'
+    },
+    isLastQuestion() {
+      return this.index === this.questionList.length - 1
+    },
+    showFinalSubmit() {
+      if (!this.isLastQuestion || this.currentQuestion.type === 'PRONUNCIATION') return false
+      return this.currentCheckResult &&
+        !this.currentCheckResult.loading &&
+        typeof this.currentCheckResult.correct === 'boolean'
     },
     /** 按题型精简操作说明，仅保留用户作答所需的单词、释义或句子。 */
     displayPrompt() {
@@ -604,9 +630,10 @@ export default {
       const score = Number(phone.score != null ? phone.score : phone.accuracy)
       return Number.isFinite(score) ? score : 0
     },
-    /** 判题反馈短暂停留后自动进入下一题，最后一题则提交整轮答案。 */
+    /** 判题反馈短暂停留后自动进入下一题，最后一题保留显式提交入口。 */
     scheduleAutoAdvance(questionId, requestId) {
       this.clearAutoAdvance()
+      if (this.isLastQuestion) return
       this.autoAdvanceTimer = setTimeout(() => {
         this.autoAdvanceTimer = null
         if (this.checkRequestIds[questionId] !== requestId || this.currentQuestion.questionId !== questionId) return
@@ -617,6 +644,10 @@ export default {
       if (this.autoAdvanceTimer === null) return
       clearTimeout(this.autoAdvanceTimer)
       this.autoAdvanceTimer = null
+    },
+    /** 整轮提交失败时保留当前答案，并重新开放提交入口。 */
+    allowResubmit() {
+      this.completionEmitted = false
     },
     advanceOrComplete() {
       if (this.index < this.questionList.length - 1) {

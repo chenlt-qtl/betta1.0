@@ -22,6 +22,8 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.concurrent.TimeUnit;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
@@ -32,6 +34,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class EngStudyServiceImpl implements IEngStudyService
 {
+    private static final Logger log = LoggerFactory.getLogger(EngStudyServiceImpl.class);
     private static final String NEW = "NEW";
     private static final String REVIEW = "REVIEW";
     private static final String SPELLING = "SPELLING";
@@ -257,6 +260,7 @@ public class EngStudyServiceImpl implements IEngStudyService
     @Override
     public EngPronunciationAssessmentVo assessPronunciation(EngPronunciationAssessDto request)
     {
+        long stageStartedAt = System.nanoTime();
         validatePronunciationRequest(request);
         String mode = requireMode(request.getMode());
         Long wordId = extractWordId(request.getQuestionId());
@@ -268,18 +272,26 @@ public class EngStudyServiceImpl implements IEngStudyService
                 request.getAttemptId(), true),
                 request.getQuestionId());
         if (definition == null || !isPronunciation(definition)) throw new ServiceException("跟读题不属于当前测试");
+        log.info("跟读测评题目解析完成，costMs={}", elapsedMillis(stageStartedAt));
+        stageStartedAt = System.nanoTime();
         byte[] audio = audioBytes(request);
         validateWav(audio);
+        log.info("跟读测评音频校验完成，costMs={}", elapsedMillis(stageStartedAt));
         Long userId = SecurityUtils.getUserId();
         String generation = UUID.randomUUID().toString();
+        stageStartedAt = System.nanoTime();
         int attemptCount = beginPronunciation(userId, request, generation);
+        log.info("跟读测评 Redis 次数预占完成，costMs={}", elapsedMillis(stageStartedAt));
         EngPronunciationAssessmentVo result;
+        stageStartedAt = System.nanoTime();
         try
         {
             result = pronunciationClient.assess(definition.word().getWordName(), audio);
+            log.info("跟读测评云端调用完成，costMs={}", elapsedMillis(stageStartedAt));
         }
         catch (RuntimeException exception)
         {
+            log.warn("跟读测评云端调用失败，costMs={}", elapsedMillis(stageStartedAt), exception);
             releasePronunciationAttempt(userId, request, exception);
             throw exception;
         }
@@ -295,9 +307,16 @@ public class EngStudyServiceImpl implements IEngStudyService
         result.setPassed(matchTag == 0 && result.getAccuracy() >= 60D);
         result.setAttemptCount(attemptCount);
         result.setRemainingAttempts(MAX_PRONUNCIATION_ATTEMPTS - attemptCount);
+        stageStartedAt = System.nanoTime();
         if (!cachePronunciation(userId, request, result, generation))
             throw new ServiceException("本次跟读结果已过期，请使用最新录音重试");
+        log.info("跟读测评结果缓存完成，costMs={}", elapsedMillis(stageStartedAt));
         return result;
+    }
+
+    private long elapsedMillis(long startedAt)
+    {
+        return (System.nanoTime() - startedAt) / 1_000_000L;
     }
 
     @Override

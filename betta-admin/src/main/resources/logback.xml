@@ -34,6 +34,23 @@
             <onMismatch>DENY</onMismatch>
         </filter>
 	</appender>
+
+    <!-- 警告日志单独落盘，便于排查第三方 SDK 连接重试。 -->
+    <appender name="file_warn" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${log.path}/sys-warn.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>${log.path}/sys-warn.%d{yyyy-MM-dd}.log</fileNamePattern>
+            <maxHistory>60</maxHistory>
+        </rollingPolicy>
+        <encoder>
+            <pattern>${log.pattern}</pattern>
+        </encoder>
+        <filter class="ch.qos.logback.classic.filter.LevelFilter">
+            <level>WARN</level>
+            <onMatch>ACCEPT</onMatch>
+            <onMismatch>DENY</onMismatch>
+        </filter>
+    </appender>
 	
 	<appender name="file_error" class="ch.qos.logback.core.rolling.RollingFileAppender">
 	    <file>${log.path}/sys-error.log</file>
@@ -107,6 +124,13 @@
         <appender-ref ref="file_sql" />
         <appender-ref ref="console" />
     </logger>
+    <!-- 仅收集腾讯语音 SDK 的精确 WARN，不扩大其他系统警告的落盘范围。 -->
+    <logger name="com.tencent.core.ws">
+        <appender-ref ref="file_warn" />
+    </logger>
+    <logger name="com.tencent.soe">
+        <appender-ref ref="file_warn" />
+    </logger>
 	<!-- Spring日志级别控制  -->
 	<logger name="org.springframework" level="warn" />
 
@@ -114,7 +138,7 @@
 		<appender-ref ref="console" />
 	</root>
 	
-	<!--系统操作日志-->
+    <!--系统操作日志-->
     <root level="info">
         <appender-ref ref="file_info" />
         <appender-ref ref="file_error" />
