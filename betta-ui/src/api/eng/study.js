@@ -24,7 +24,7 @@ export function getReviewOverview() {
   })
 }
 
-// 获取新词、复习或拼写挑战题目，接口不会返回正确答案
+// 获取普通、复习、跟读或拼写挑战题目；不返回明文正确答案，仅返回用于前端判题的答案摘要
 export function getStudyChallenge(query) {
   return request({
     url: '/eng/study/challenge',
@@ -33,24 +33,7 @@ export function getStudyChallenge(query) {
   })
 }
 
-// 查询当前用户的普通单词测试题型设置
-export function getChallengeSettings() {
-  return request({
-    url: '/eng/study/challenge/settings',
-    method: 'get'
-  })
-}
-
-// 保存当前用户的普通单词测试题型设置
-export function updateChallengeSettings(data) {
-  return request({
-    url: '/eng/study/challenge/settings',
-    method: 'put',
-    data
-  })
-}
-
-// 提交单题答案并即时获取判题结果，不影响最终闯关记录
+// 摘要缺失或浏览器无法本地判题时兼容回退，不影响最终闯关记录
 export function checkArticleChallengeAnswer(data) {
   return request({
     url: '/eng/study/challenge/check',

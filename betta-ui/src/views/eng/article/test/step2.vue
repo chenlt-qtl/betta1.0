@@ -123,6 +123,17 @@
         >
           {{ isLastQuestion ? '提交' : '下一题' }}
         </el-button>
+        <el-button
+          v-if="pronunciationSkippable"
+          type="warning"
+          plain
+          round
+          :loading="submitting"
+          :disabled="pronunciationBusy || submitting"
+          @click="skipPronunciation"
+        >
+          {{ isLastQuestion ? '跳过并提交' : '跳过本题' }}
+        </el-button>
       </div>
     </section>
 
@@ -191,6 +202,7 @@
 
 <script>
 import { assessChallengePronunciation, checkArticleChallengeAnswer } from '@/api/eng/study'
+import { createAnswerDigest } from '@/utils/answerDigest'
 import { play, playAnswerFeedback, prepareAnswerFeedback } from '@/utils/audio'
 import PcmRecorder, { MAX_DURATION_MS } from '@/utils/pcmRecorder'
 
@@ -285,6 +297,9 @@ export default {
     },
     pronunciationBusy() {
       return ['preparing', 'recording', 'stopping', 'assessing'].includes(this.currentPronunciationState.status)
+    },
+    pronunciationSkippable() {
+      return this.currentPronunciationState.status === 'error' && this.currentPronunciationState.allowSkip === true
     },
     recordingSeconds() {
       return (this.recordingElapsedMs / 1000).toFixed(1)
@@ -403,7 +418,7 @@ export default {
     answerClass(value) {
       const answer = this.answers[this.currentQuestion.questionId]
       const selected = this.hasAnswer(answer) && String(value) === String(answer)
-      // 服务端判题期间先反馈当前选择，避免网络延迟让用户误以为点击未生效。
+      // 异步摘要计算或服务端回退期间先反馈当前选择，避免用户误以为点击未生效。
       if (!this.currentCheckResult || this.currentCheckResult.loading) return selected ? 'selected' : ''
       if (String(value) === String(this.currentCheckResult.correctAnswer)) return 'right'
       if (selected) return 'wrong'
@@ -412,7 +427,7 @@ export default {
     hasAnswer(answer) {
       return answer !== undefined && answer !== null && String(answer).trim() !== ''
     },
-    checkAnswer(question) {
+    async checkAnswer(question) {
       if (!question || this.completionEmitted) return
       this.clearAutoAdvance()
       const answer = this.answers[question.questionId]
@@ -427,6 +442,43 @@ export default {
         correct: null,
         correctAnswer: ''
       })
+      const answerDigest = String(question.answerDigest || '').trim()
+      if (/^[0-9a-f]{64}$/.test(answerDigest)) {
+        try {
+          const result = await this.checkAnswerLocally(question, answer, answerDigest)
+          if (this.completionEmitted || this.checkRequestIds[question.questionId] !== requestId) return
+          this.applyCheckResult(question, requestId, result)
+          return
+        } catch (error) {
+          // Web Crypto 不可用、计算失败或候选项与摘要不一致时，兼容回退服务端判题。
+        }
+      }
+      if (this.completionEmitted || this.checkRequestIds[question.questionId] !== requestId) return
+      this.checkAnswerRemotely(question, answer, requestId)
+    },
+    /** 优先使用题目摘要在本地判题，选择题答错时同步定位正确选项。 */
+    async checkAnswerLocally(question, answer, expectedDigest) {
+      const selectedDigest = await createAnswerDigest(this.attemptId, question.questionId, answer)
+      const correct = selectedDigest === expectedDigest
+      if (correct) {
+        return { correct: true, correctAnswer: answer }
+      }
+      if (!this.isChoiceQuestion(question)) {
+        return { correct: false, correctAnswer: '' }
+      }
+      const options = Array.isArray(question.options) ? question.options : []
+      const optionDigests = await Promise.all(options.map(option => {
+        return createAnswerDigest(this.attemptId, question.questionId, this.optionValue(option))
+      }))
+      const correctIndex = optionDigests.findIndex(digest => digest === expectedDigest)
+      if (correctIndex === -1) throw new Error('题目摘要与候选项不匹配')
+      return {
+        correct: false,
+        correctAnswer: this.optionValue(options[correctIndex])
+      }
+    },
+    /** 摘要无法在前端使用时调用原单题接口，保证滚动发布和旧浏览器仍可答题。 */
+    checkAnswerRemotely(question, answer, requestId) {
       checkArticleChallengeAnswer({
         attemptId: this.attemptId,
         mode: this.mode,
@@ -436,21 +488,23 @@ export default {
         answer
       }).then(response => {
         if (this.completionEmitted || this.checkRequestIds[question.questionId] !== requestId) return
-        const result = response.data || {}
-        this.$set(this.checkResults, question.questionId, {
-          loading: false,
-          correct: result.correct,
-          correctAnswer: result.correctAnswer || ''
-        })
-        if (typeof result.correct === 'boolean') {
-          playAnswerFeedback(result.correct)
-          this.playCorrectAnswerAudio(question)
-          this.scheduleAutoAdvance(question.questionId, requestId)
-        }
+        this.applyCheckResult(question, requestId, response.data || {})
       }).catch(() => {
         if (this.checkRequestIds[question.questionId] !== requestId) return
         this.$set(this.checkResults, question.questionId, null)
       })
+    },
+    /** 统一落地本地或服务端判题结果，保持音效、发音及自动切题行为一致。 */
+    applyCheckResult(question, requestId, result) {
+      this.$set(this.checkResults, question.questionId, {
+        loading: false,
+        correct: result.correct,
+        correctAnswer: result.correctAnswer || ''
+      })
+      if (typeof result.correct !== 'boolean') return
+      playAnswerFeedback(result.correct)
+      this.playCorrectAnswerAudio(question)
+      this.scheduleAutoAdvance(question.questionId, requestId)
     },
     invalidateCheckResult(questionId) {
       this.clearAutoAdvance()
@@ -489,7 +543,7 @@ export default {
       return this.currentFillOptionIndexes.includes(optionIndex) || !this.currentFillLetters.includes('')
     },
     setPronunciationState(questionId, state) {
-      this.$set(this.pronunciationStates, questionId, Object.assign({ status: 'idle', error: '' }, state))
+      this.$set(this.pronunciationStates, questionId, Object.assign({ status: 'idle', error: '', allowSkip: false }, state))
     },
     async startPronunciationRecording() {
       const question = this.currentQuestion
@@ -519,7 +573,11 @@ export default {
         this.setPronunciationState(questionId, { status: 'recording', error: '' })
       } catch (error) {
         if (this.recorder === recorder) this.recorder = null
-        this.setPronunciationState(questionId, { status: 'error', error: this.recordingErrorMessage(error) })
+        this.setPronunciationState(questionId, {
+          status: 'error',
+          error: this.recordingErrorMessage(error),
+          allowSkip: true
+        })
       }
     },
     async finishPronunciationRecording() {
@@ -536,7 +594,12 @@ export default {
         await this.assessPronunciation(question, recording.blob)
       } catch (error) {
         if (this.recorder === recorder) this.recorder = null
-        this.setPronunciationState(questionId, { status: 'error', error: this.recordingErrorMessage(error) })
+        this.setPronunciationState(questionId, {
+          status: 'error',
+          error: this.recordingErrorMessage(error),
+          // 主动过早停止属于可重试输入，初始化或采集异常才允许跳过。
+          allowSkip: !error || error.code !== 'TOO_SHORT'
+        })
       }
     },
     async assessPronunciation(question, audio) {
@@ -563,7 +626,11 @@ export default {
         this.setPronunciationState(questionId, { status: 'success', error: '' })
       } catch (error) {
         this.$set(this.answers, questionId, '')
-        this.setPronunciationState(questionId, { status: 'error', error: this.assessmentErrorMessage(error) })
+        this.setPronunciationState(questionId, {
+          status: 'error',
+          error: this.assessmentErrorMessage(error),
+          allowSkip: true
+        })
       }
     },
     clearRecordingTimer() {
@@ -619,6 +686,19 @@ export default {
     assessmentErrorMessage(error) {
       const responseMessage = error && error.response && error.response.data && error.response.data.msg
       return responseMessage || (error && error.message) || '发音评分失败，请重新录制'
+    },
+    /** 仅录音或评分异常时允许跳过；跳过不伪造评分结果。 */
+    async skipPronunciation() {
+      const question = this.currentQuestion
+      if (!question || question.type !== 'PRONUNCIATION' || !this.pronunciationSkippable) return
+      const recorder = this.recorder
+      this.recorder = null
+      this.clearRecordingTimer()
+      if (recorder) await recorder.cancel()
+      this.$set(this.answers, question.questionId, 'SKIPPED')
+      this.$delete(this.pronunciationResults, question.questionId)
+      this.setPronunciationState(question.questionId, { status: 'skipped', error: '' })
+      this.advanceOrComplete()
     },
     scoreText(value) {
       const score = Number(value)

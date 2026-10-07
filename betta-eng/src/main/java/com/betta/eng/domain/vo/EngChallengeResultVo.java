@@ -29,7 +29,9 @@ public class EngChallengeResultVo {
     private Integer stars;
     private Long milestoneCoin;
     private Long reviewCoin;
-    /** 本轮获得金币，为里程碑金币与复习金币之和。 */
+    /** 本轮发音合格奖励，每个合格单词奖励 2 金币。 */
+    private Long pronunciationCoin;
+    /** 本轮获得金币，为里程碑、复习与发音金币之和。 */
     private Long coinReward;
     /** 本轮奖励入账后的当前金币余额。 */
     private Long coinBalance;

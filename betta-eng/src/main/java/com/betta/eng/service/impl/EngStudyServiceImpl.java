@@ -21,6 +21,9 @@ import java.util.stream.Collectors;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,16 +33,19 @@ import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/** 新词关卡、全局复习与独立拼写测试统一学习服务。 */
+/** 新词关卡、全局复习、跟读与拼写测试统一学习服务。 */
 @Service
 public class EngStudyServiceImpl implements IEngStudyService
 {
     private static final Logger log = LoggerFactory.getLogger(EngStudyServiceImpl.class);
     private static final String NEW = "NEW";
     private static final String REVIEW = "REVIEW";
+    private static final String PRONUNCIATION = "PRONUNCIATION";
     private static final String SPELLING = "SPELLING";
     private static final String PRONUNCIATION_PREFIX = "PRONUNCIATION:";
     private static final String ASSESSED = "ASSESSED";
+    private static final String SKIPPED = "SKIPPED";
+    private static final long PRONUNCIATION_PASSED_COIN = 2L;
     private static final List<String> PREFIXES = List.of("WORD_TO_CN:", "CN_TO_WORD:",
             "SENTENCE_CHOICE:", "SENTENCE_FILL:", PRONUNCIATION_PREFIX);
     private static final int REVIEW_WORD_LIMIT = 5;
@@ -78,7 +84,6 @@ public class EngStudyServiceImpl implements IEngStudyService
     private final EngUserWordProgressMapper wordProgressMapper;
     private final EngArticleLevelProgressMapper levelProgressMapper;
     private final EngArticleWordRelMapper articleWordRelMapper;
-    private final EngUserChallengeSettingMapper challengeSettingMapper;
     private final EngPronunciationProperties pronunciationProperties;
     private final IPronunciationAssessmentClient pronunciationClient;
     private final RedisCache redisCache;
@@ -90,7 +95,7 @@ public class EngStudyServiceImpl implements IEngStudyService
             EngStudyRecordMapper recordMapper, EngStudyRecordWordMapper recordWordMapper,
             EngCoinWalletMapper coinWalletMapper, EngWrongWordMapper wrongWordMapper,
             EngUserWordProgressMapper wordProgressMapper, EngArticleLevelProgressMapper levelProgressMapper,
-            EngArticleWordRelMapper articleWordRelMapper, EngUserChallengeSettingMapper challengeSettingMapper,
+            EngArticleWordRelMapper articleWordRelMapper,
             EngPronunciationProperties pronunciationProperties,
             IPronunciationAssessmentClient pronunciationClient, RedisCache redisCache)
     {
@@ -105,7 +110,6 @@ public class EngStudyServiceImpl implements IEngStudyService
         this.wordProgressMapper = wordProgressMapper;
         this.levelProgressMapper = levelProgressMapper;
         this.articleWordRelMapper = articleWordRelMapper;
-        this.challengeSettingMapper = challengeSettingMapper;
         this.pronunciationProperties = pronunciationProperties;
         this.pronunciationClient = pronunciationClient;
         this.redisCache = redisCache;
@@ -117,11 +121,10 @@ public class EngStudyServiceImpl implements IEngStudyService
             EngStudyRecordMapper recordMapper, EngStudyRecordWordMapper recordWordMapper,
             EngCoinWalletMapper coinWalletMapper, EngWrongWordMapper wrongWordMapper,
             EngUserWordProgressMapper wordProgressMapper, EngArticleLevelProgressMapper levelProgressMapper,
-            EngArticleWordRelMapper articleWordRelMapper, EngUserChallengeSettingMapper challengeSettingMapper)
+            EngArticleWordRelMapper articleWordRelMapper)
     {
         this(articleService, sentenceService, dictionarySentenceService, wordService, recordMapper, recordWordMapper,
                 coinWalletMapper, wrongWordMapper, wordProgressMapper, levelProgressMapper, articleWordRelMapper,
-                challengeSettingMapper,
                 new EngPronunciationProperties(), null, null);
     }
 
@@ -237,33 +240,6 @@ public class EngStudyServiceImpl implements IEngStudyService
     }
 
     @Override
-    public EngChallengeSettingVo getChallengeSetting()
-    {
-        return settingVo(currentChallengeSetting());
-    }
-
-    @Override
-    @Transactional
-    public EngChallengeSettingVo updateChallengeSetting(EngChallengeSettingUpdateDto request)
-    {
-        if (request == null || request.getWordToMeaningEnabled() == null
-                || request.getMeaningToWordEnabled() == null || request.getSentenceClozeEnabled() == null
-                || request.getPronunciationEnabled() == null)
-            throw new ServiceException("题型开关不能为空");
-        if (!request.getWordToMeaningEnabled() && !request.getMeaningToWordEnabled())
-            throw new ServiceException("看词选义和看义选词至少启用一种");
-        EngUserChallengeSetting setting = new EngUserChallengeSetting();
-        setting.setUserId(SecurityUtils.getUserId());
-        setting.setWordToMeaningEnabled(request.getWordToMeaningEnabled());
-        setting.setMeaningToWordEnabled(request.getMeaningToWordEnabled());
-        setting.setSentenceClozeEnabled(request.getSentenceClozeEnabled());
-        setting.setPronunciationEnabled(request.getPronunciationEnabled());
-        setting.setCreateBy(SecurityUtils.getUsername()); setting.setUpdateBy(SecurityUtils.getUsername());
-        challengeSettingMapper.upsert(setting);
-        return settingVo(currentChallengeSetting());
-    }
-
-    @Override
     @Transactional
     public EngChallengeVo getChallenge(String mode, Long articleId, Integer levelNo, List<Long> wordIds)
     {
@@ -276,22 +252,35 @@ public class EngStudyServiceImpl implements IEngStudyService
             boolean pronunciationAllowed)
     {
         String actualMode = requireMode(mode);
-        List<EngWordVo> words = NEW.equals(actualMode) ? newWordsForLevel(articleId, levelNo, true)
-                : reviewWords(wordIds, SPELLING.equals(actualMode));
+        List<EngWordVo> words;
+        int newWordCount = 0;
+        if (NEW.equals(actualMode))
+        {
+            words = newWordsForLevel(articleId, levelNo, true);
+            List<EngWordVo> levelWords = wordsForLevel(articleId, levelNo);
+            newWordCount = countNewWords(levelWords);
+        }
+        else
+        {
+            words = reviewWords(wordIds, SPELLING.equals(actualMode));
+        }
         if (words.isEmpty()) throw new ServiceException(NEW.equals(actualMode) ? "本关新词已全部掌握" : "暂无可复习单词");
-        EngUserChallengeSetting setting = SPELLING.equals(actualMode) ? null : currentChallengeSetting();
-        String attemptId = UUID.randomUUID().toString()
-                + (setting == null ? "" : "." + settingVersion(setting));
+        if (PRONUNCIATION.equals(actualMode)
+                && (!pronunciationAllowed || !pronunciationProperties.isAvailable()))
+            throw new ServiceException("跟读评分服务暂未启用");
+        String attemptId = UUID.randomUUID().toString();
         List<QuestionDefinition> definitions = buildDefinitions(actualMode, articleId, words, attemptId,
-                pronunciationAllowed, setting);
+                pronunciationAllowed);
         EngChallengeVo challenge = new EngChallengeVo();
         challenge.setAttemptId(attemptId); challenge.setMode(actualMode);
         challenge.setArticleId(articleId); challenge.setLevelNo(levelNo);
         challenge.setTitle(NEW.equals(actualMode) ? requireArticle(articleId).getTitle()
-                : SPELLING.equals(actualMode) ? "拼写测试" : "单词复习");
-        challenge.setWords(words); challenge.setPronunciationEnabled(pronunciationAllowed && setting != null
-                && Boolean.TRUE.equals(setting.getPronunciationEnabled()) && pronunciationProperties.isAvailable());
-        List<EngChallengeQuestionVo> questions = definitions.stream().map(this::questionVo)
+                : SPELLING.equals(actualMode) ? "拼写测试"
+                : PRONUNCIATION.equals(actualMode) ? "跟读测试" : "单词复习");
+        challenge.setWords(words);
+        challenge.setPronunciationEnabled(pronunciationAllowed && pronunciationProperties.isAvailable());
+        challenge.setNewWordCount(newWordCount); challenge.setHasNewWords(newWordCount > 0);
+        List<EngChallengeQuestionVo> questions = definitions.stream().map(item -> questionVo(item, attemptId))
                 .collect(Collectors.toCollection(ArrayList::new));
         Collections.shuffle(questions); challenge.setQuestions(questions);
         return challenge;
@@ -395,6 +384,9 @@ public class EngStudyServiceImpl implements IEngStudyService
         EngStudyRecord existing = findAttempt(userId, request.getAttemptId());
         if (existing != null) return existingResult(existing);
         String mode = requireMode(request.getMode());
+        if (PRONUNCIATION.equals(mode)
+                && (!pronunciationAllowed || !pronunciationProperties.isAvailable()))
+            throw new ServiceException("跟读评分服务暂未启用");
         if (NEW.equals(mode) && articleWordRelMapper.lockArticle(request.getArticleId(), username) == null)
             throw new ServiceException("文章不存在或无权操作");
         Set<Long> submittedIds = request.getAnswers().stream().map(item -> extractWordId(item.getQuestionId()))
@@ -419,6 +411,12 @@ public class EngStudyServiceImpl implements IEngStudyService
         for (EngWordVo word : words)
         {
             WordScore score = scores.get(word.getId());
+            if (PRONUNCIATION.equals(mode))
+            {
+                // 纯跟读测试只持久化评分与奖励明细，不改变任何知识进度。
+                details.add(detail(record.getId(), word, score, mode, 0L, 0L));
+                continue;
+            }
             EngUserWordProgress progress = lockProgress(userId, username, word.getId(), request.getArticleId(), request.getLevelNo());
             int targetHighest = Math.max(value(progress.getHighestStars()), score.stars());
             int targetSpellingRewarded = Math.max(value(progress.getSpellingRewardedStars()), score.stars());
@@ -453,8 +451,10 @@ public class EngStudyServiceImpl implements IEngStudyService
             levelProgressMapper.upsertBest(level);
             applyNextLevel(result, request.getArticleId(), request.getLevelNo(), result.getStars());
         }
+        long pronunciationCoin = result.getPronunciationPassedCount() * PRONUNCIATION_PASSED_COIN;
         result.setMilestoneCoin(milestoneCoin); result.setReviewCoin(reviewCoin);
-        result.setCoinReward(milestoneCoin + reviewCoin);
+        result.setPronunciationCoin(pronunciationCoin);
+        result.setCoinReward(milestoneCoin + reviewCoin + pronunciationCoin);
         if (result.getCoinReward() > 0) coinWalletMapper.increaseCoinBalance(userId, result.getCoinReward(), username);
         result.setCoinBalance(coinWalletMapper.selectCoinBalance(userId));
         record.setMilestoneCoin(milestoneCoin); record.setReviewCoin(reviewCoin); record.setCoinReward(result.getCoinReward());
@@ -544,6 +544,19 @@ public class EngStudyServiceImpl implements IEngStudyService
         return result;
     }
 
+    /** 统计当前关卡尚未进入学习进度的单词，供前端切换学习与测试入口。 */
+    private int countNewWords(List<EngWordVo> words)
+    {
+        Long userId = SecurityUtils.getUserId();
+        int count = 0;
+        for (EngWordVo word : words)
+        {
+            EngUserWordProgress progress = wordProgressMapper.selectByUserAndWord(userId, word.getId());
+            if (progress == null || value(progress.getLearned()) == 0) count++;
+        }
+        return count;
+    }
+
     private List<EngWordVo> resolveSubmittedWords(String mode, Long articleId, Integer levelNo, Set<Long> ids,
             boolean requireCompleteLevel)
     {
@@ -597,16 +610,13 @@ public class EngStudyServiceImpl implements IEngStudyService
         return result;
     }
 
-    /** 使用当前用户设置重建题目，并拒绝设置变更前生成的普通测试。 */
+    /** 按固定模式重建题目，兼容上线前已生成的带版本后缀标识。 */
     private List<QuestionDefinition> currentDefinitions(String mode, Long articleId, List<EngWordVo> words,
             String attemptId, boolean includePronunciation)
     {
-        if (SPELLING.equals(mode)) return buildDefinitions(mode, articleId, words, attemptId, false, null);
-        EngUserChallengeSetting setting = currentChallengeSetting();
-        long version = settingVersion(setting);
-        if (!isVersionedUuid(attemptId, version) && !(version == 0L && isUuid(attemptId)))
-            throw new ServiceException("题型设置已变化，请重新开始测试");
-        return buildDefinitions(mode, articleId, words, attemptId, includePronunciation, setting);
+        if (!isUuid(attemptId) && !isVersionedUuid(attemptId, null))
+            throw new ServiceException("测试标识无效");
+        return buildDefinitions(mode, articleId, words, attemptId, includePronunciation);
     }
 
     /** 校验标准 UUID 加单个规范十进制版本后缀，可选限制为指定版本。 */
@@ -644,7 +654,7 @@ public class EngStudyServiceImpl implements IEngStudyService
     }
 
     private List<QuestionDefinition> buildDefinitions(String mode, Long articleId, List<EngWordVo> words,
-            String attemptId, boolean includePronunciation, EngUserChallengeSetting setting)
+            String attemptId, boolean includePronunciation)
     {
         List<QuestionDefinition> result = new ArrayList<>();
         for (EngWordVo word : words)
@@ -654,41 +664,17 @@ public class EngStudyServiceImpl implements IEngStudyService
                 result.add(spellingFill(word, attemptId));
                 continue;
             }
-            if (Boolean.TRUE.equals(setting.getWordToMeaningEnabled())) result.add(wordToCn(word, words));
-            if (Boolean.TRUE.equals(setting.getMeaningToWordEnabled())) result.add(cnToWord(word, words));
-            SentenceContent sentence = Boolean.TRUE.equals(setting.getSentenceClozeEnabled())
-                    ? sentenceContent(mode, articleId, word) : null;
+            if (PRONUNCIATION.equals(mode))
+            {
+                if (includePronunciation && pronunciationProperties.isAvailable()) result.add(pronunciation(word));
+                continue;
+            }
+            result.add(wordToCn(word, words));
+            result.add(cnToWord(word, words));
+            SentenceContent sentence = sentenceContent(mode, articleId, word);
             if (sentence != null)
                 result.add(sentenceChoice(word, words, sentence));
-            if (includePronunciation && Boolean.TRUE.equals(setting.getPronunciationEnabled())
-                    && pronunciationProperties.isAvailable()) result.add(pronunciation(word));
         }
-        return result;
-    }
-
-    /** 无设置记录时全部启用，以保持既有用户行为。 */
-    private EngUserChallengeSetting currentChallengeSetting()
-    {
-        EngUserChallengeSetting setting = challengeSettingMapper.selectByUserId(SecurityUtils.getUserId());
-        if (setting != null) return setting;
-        setting = new EngUserChallengeSetting(); setting.setUserId(SecurityUtils.getUserId());
-        setting.setWordToMeaningEnabled(true); setting.setMeaningToWordEnabled(true);
-        setting.setSentenceClozeEnabled(true); setting.setPronunciationEnabled(true); setting.setSettingVersion(0L);
-        return setting;
-    }
-
-    private long settingVersion(EngUserChallengeSetting setting)
-    {
-        return setting.getSettingVersion() == null ? 0L : setting.getSettingVersion();
-    }
-
-    private EngChallengeSettingVo settingVo(EngUserChallengeSetting setting)
-    {
-        EngChallengeSettingVo result = new EngChallengeSettingVo();
-        result.setWordToMeaningEnabled(setting.getWordToMeaningEnabled());
-        result.setMeaningToWordEnabled(setting.getMeaningToWordEnabled());
-        result.setSentenceClozeEnabled(setting.getSentenceClozeEnabled());
-        result.setPronunciationEnabled(setting.getPronunciationEnabled());
         return result;
     }
 
@@ -796,6 +782,7 @@ public class EngStudyServiceImpl implements IEngStudyService
         for (QuestionDefinition definition : definitions)
         {
             if (!isPronunciation(definition)) continue;
+            if (SKIPPED.equals(answers.get(definition.id()))) continue;
             if (!ASSESSED.equals(answers.get(definition.id()))) throw new ServiceException("跟读题必须先完成评分");
             String cached = redisCache == null ? null : redisCache.getCacheObject(
                     pronunciationCacheKey(userId, request.getAttemptId(), definition.id()));
@@ -1018,7 +1005,8 @@ public class EngStudyServiceImpl implements IEngStudyService
         {
             if (answer == null || !allowed.contains(answer.getQuestionId())) throw new ServiceException("存在不属于当前测试的题目");
             if (StringUtils.isEmpty(answer.getAnswer())) throw new ServiceException("答案不能为空");
-            if (answer.getQuestionId().startsWith(PRONUNCIATION_PREFIX) && !ASSESSED.equals(answer.getAnswer()))
+            if (answer.getQuestionId().startsWith(PRONUNCIATION_PREFIX)
+                    && !ASSESSED.equals(answer.getAnswer()) && !SKIPPED.equals(answer.getAnswer()))
                 throw new ServiceException("跟读题答案标记无效");
             if (answers.put(answer.getQuestionId(), answer.getAnswer()) != null) throw new ServiceException("题目不能重复提交");
         }
@@ -1050,9 +1038,8 @@ public class EngStudyServiceImpl implements IEngStudyService
         int pronunciationPassed = (int) pronunciation.values().stream()
                 .filter(item -> Boolean.TRUE.equals(item.getPassed())).count();
         int pronunciationTotal = pronunciation.size();
-        int score = pronunciationTotal == 0
-                ? (knowledgeTotal == 0 ? 0 : (int) Math.round(correct * 100D / knowledgeTotal))
-                : (int) Math.round(correct * 90D / knowledgeTotal + pronunciationPassed * 10D / pronunciationTotal);
+        // 跟读是额外金币项，知识题始终独立按百分制计算。
+        int score = knowledgeTotal == 0 ? 0 : (int) Math.round(correct * 100D / knowledgeTotal);
         EngChallengeResultVo result = new EngChallengeResultVo();
         result.setAttemptId(request.getAttemptId()); result.setMode(mode); result.setArticleId(request.getArticleId());
         result.setLevelNo(request.getLevelNo()); result.setScore(score); result.setCorrectCount(correct);
@@ -1060,6 +1047,10 @@ public class EngStudyServiceImpl implements IEngStudyService
         result.setPronunciationTotalCount(pronunciationTotal);
         result.setPronunciationAverageScore(pronunciationTotal == 0 ? null : (int) Math.round(
                 pronunciation.values().stream().mapToInt(EngPronunciationAssessmentVo::getScore).average().orElse(0D)));
+        if (PRONUNCIATION.equals(mode))
+        {
+            result.setStars(0); result.setPassed(true); result.setResults(items); return result;
+        }
         result.setStars(SPELLING.equals(mode)
                 ? EngWordStarCalculator.spellingStars(correct, knowledgeTotal)
                 : EngWordStarCalculator.levelStars(score));
@@ -1070,7 +1061,8 @@ public class EngStudyServiceImpl implements IEngStudyService
             List<EngChallengeResultVo.ResultItem> items, String mode, int levelStars,
             Long articleId, Long userId, Map<Long, EngPronunciationAssessmentVo> pronunciation)
     {
-        Map<String, Boolean> correctness = items.stream().collect(Collectors.toMap(
+        Map<String, Boolean> correctness = items.stream().filter(item -> !item.getQuestionId().startsWith(PRONUNCIATION_PREFIX))
+                .collect(Collectors.toMap(
                 EngChallengeResultVo.ResultItem::getQuestionId, EngChallengeResultVo.ResultItem::getCorrect));
         Map<Long, int[]> counts = new LinkedHashMap<>();
         for (QuestionDefinition definition : definitions)
@@ -1080,23 +1072,36 @@ public class EngStudyServiceImpl implements IEngStudyService
             if (Boolean.TRUE.equals(correctness.get(definition.id()))) count[0]++;
         }
         Map<Long, WordScore> scores = new LinkedHashMap<>();
+        if (PRONUNCIATION.equals(mode))
+        {
+            for (QuestionDefinition definition : definitions)
+            {
+                EngPronunciationAssessmentVo assessment = pronunciation.get(definition.word().getId());
+                EngUserWordProgress progress = wordProgressMapper.selectByUserAndWord(userId,
+                        definition.word().getId());
+                scores.put(definition.word().getId(), new WordScore(0, 0, true, 0,
+                        progress == null ? null : progress.getFirstArticleId(),
+                        assessment == null ? null : assessment.getScore(),
+                        assessment == null ? null : Boolean.TRUE.equals(assessment.getPassed())));
+            }
+            return scores;
+        }
         for (var entry : counts.entrySet())
         {
             int correct = entry.getValue()[0], total = entry.getValue()[1];
             EngPronunciationAssessmentVo assessment = pronunciation.get(entry.getKey());
-            boolean pronunciationPassed = assessment == null || Boolean.TRUE.equals(assessment.getPassed());
             int stars = NEW.equals(mode) || SPELLING.equals(mode)
                     ? levelStars : EngWordStarCalculator.reviewStars(correct, total);
-            if (REVIEW.equals(mode) && assessment != null && !pronunciationPassed) stars = Math.min(stars, 2);
             Long sourceArticleId = articleId;
             if (!NEW.equals(mode))
             {
                 EngUserWordProgress progress = wordProgressMapper.selectByUserAndWord(userId, entry.getKey());
                 sourceArticleId = progress == null ? null : progress.getFirstArticleId();
             }
-            scores.put(entry.getKey(), new WordScore(correct, total, correct == total && pronunciationPassed,
+            // 跟读结果仅用于展示和额外金币，不改变知识题掌握状态、星级或错词判定。
+            scores.put(entry.getKey(), new WordScore(correct, total, correct == total,
                     stars, sourceArticleId, assessment == null ? null : assessment.getScore(),
-                    assessment == null ? null : pronunciationPassed));
+                    assessment == null ? null : Boolean.TRUE.equals(assessment.getPassed())));
         }
         return scores;
     }
@@ -1150,8 +1155,9 @@ public class EngStudyServiceImpl implements IEngStudyService
             item.setWordName(word.getWordName()); item.setSourceArticleId(score.sourceArticleId());
             item.setCorrectCount(score.correct()); item.setTotalCount(score.total()); item.setAllCorrect(score.allCorrect());
             item.setPronunciationScore(score.pronunciationScore()); item.setPronunciationPassed(score.pronunciationPassed());
-            item.setStars(score.stars()); item.setHighestStars(value(progress.getHighestStars()));
-            item.setCurrentStars(EngWordStarCalculator.currentStars(progress.getLatestStars(), progress.getLatestTestTime(), now));
+            item.setStars(score.stars()); item.setHighestStars(progress == null ? 0 : value(progress.getHighestStars()));
+            item.setCurrentStars(progress == null ? 0 : EngWordStarCalculator.currentStars(
+                    progress.getLatestStars(), progress.getLatestTestTime(), now));
             item.setMilestoneCoin(detail.getMilestoneCoin()); item.setReviewCoin(detail.getReviewCoin()); result.add(item);
         }
         return result;
@@ -1189,6 +1195,11 @@ public class EngStudyServiceImpl implements IEngStudyService
         result.setPronunciationTotalCount(pronunciationScores.size());
         result.setPronunciationPassedCount((int) wordResults.stream()
                 .filter(item -> Boolean.TRUE.equals(item.getPronunciationPassed())).count());
+        // 以持久化总奖励恢复发音金币，兼容上线前已有合格发音但未实际发币的历史记录。
+        long persistedPronunciationCoin = Math.max(0L,
+                result.getCoinReward() - result.getMilestoneCoin() - result.getReviewCoin());
+        long theoreticalPronunciationCoin = result.getPronunciationPassedCount() * PRONUNCIATION_PASSED_COIN;
+        result.setPronunciationCoin(Math.min(persistedPronunciationCoin, theoreticalPronunciationCoin));
         result.setPronunciationAverageScore(pronunciationScores.isEmpty() ? null : (int) Math.round(
                 pronunciationScores.stream().mapToInt(Integer::intValue).average().orElse(0D)));
         result.setWordResults(wordResults);
@@ -1217,7 +1228,8 @@ public class EngStudyServiceImpl implements IEngStudyService
             EngChallengeResultVo result)
     {
         EngStudyRecord record = new EngStudyRecord(); record.setUserId(userId);
-        record.setArticleId(NEW.equals(mode) ? request.getArticleId() : null); record.setAttemptId(request.getAttemptId());
+        record.setArticleId(NEW.equals(mode) || PRONUNCIATION.equals(mode) ? request.getArticleId() : null);
+        record.setAttemptId(request.getAttemptId());
         record.setStudyMode(mode); record.setLevelNo(request.getLevelNo()); record.setScore(result.getScore());
         record.setCorrectCount(result.getCorrectCount()); record.setTotalCount(result.getTotalCount());
         record.setPassed(Boolean.TRUE.equals(result.getPassed()) ? 1 : 0); record.setStars(result.getStars());
@@ -1254,8 +1266,8 @@ public class EngStudyServiceImpl implements IEngStudyService
     private String requireMode(String mode)
     {
         String value = mode == null ? "" : mode.trim().toUpperCase(Locale.ROOT);
-        if (!NEW.equals(value) && !REVIEW.equals(value) && !SPELLING.equals(value))
-            throw new ServiceException("学习模式必须为 NEW、REVIEW 或 SPELLING");
+        if (!NEW.equals(value) && !REVIEW.equals(value) && !PRONUNCIATION.equals(value) && !SPELLING.equals(value))
+            throw new ServiceException("学习模式必须为 NEW、REVIEW、PRONUNCIATION 或 SPELLING");
         return value;
     }
 
@@ -1281,19 +1293,44 @@ public class EngStudyServiceImpl implements IEngStudyService
     private String sentencePrompt(String instruction, String sentence, String translation)
     { return instruction + "：“" + sentence + "”" + (StringUtils.isEmpty(translation) ? "" : "；中文提示：" + translation); }
     private Pattern wholeWord(String word) { return Pattern.compile("(?<![A-Za-z])" + Pattern.quote(word) + "(?![A-Za-z])", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE); }
-    private EngChallengeQuestionVo questionVo(QuestionDefinition item)
-    { EngChallengeQuestionVo vo = new EngChallengeQuestionVo(); vo.setQuestionId(item.id()); vo.setType(item.type()); vo.setPrompt(item.prompt()); vo.setOptions(item.options()); vo.setAudioUrl(item.audio()); vo.setAnswerLength(item.answerLength()); vo.setWord(isPronunciation(item) ? item.word().getWordName() : null); return vo; }
+    private EngChallengeQuestionVo questionVo(QuestionDefinition item, String attemptId)
+    {
+        EngChallengeQuestionVo vo = new EngChallengeQuestionVo();
+        vo.setQuestionId(item.id()); vo.setType(item.type()); vo.setPrompt(item.prompt());
+        vo.setOptions(item.options()); vo.setAudioUrl(item.audio()); vo.setAnswerLength(item.answerLength());
+        vo.setAnswerDigest(isPronunciation(item) ? null : answerDigest(attemptId, item.id(), item.answer()));
+        vo.setWord(isPronunciation(item) ? item.word().getWordName() : null);
+        return vo;
+    }
     private EngChallengeResultVo.ResultItem resultItem(QuestionDefinition definition, String answer)
     { var item = new EngChallengeResultVo.ResultItem(); item.setQuestionId(definition.id()); item.setCorrect(normalize(definition.answer()).equals(normalize(answer))); item.setCorrectAnswer(definition.answer()); return item; }
     private EngChallengeResultVo.ResultItem pronunciationResultItem(QuestionDefinition definition,
             EngPronunciationAssessmentVo assessment)
-    { var item = new EngChallengeResultVo.ResultItem(); item.setQuestionId(definition.id()); item.setCorrect(Boolean.TRUE.equals(assessment.getPassed())); item.setCorrectAnswer(ASSESSED); return item; }
+    {
+        var item = new EngChallengeResultVo.ResultItem(); item.setQuestionId(definition.id());
+        item.setCorrect(assessment == null ? null : Boolean.TRUE.equals(assessment.getPassed()));
+        item.setCorrectAnswer(assessment == null ? null : ASSESSED); return item;
+    }
     private boolean isPronunciation(QuestionDefinition definition)
     { return definition != null && "PRONUNCIATION".equals(definition.type()); }
     private QuestionDefinition findDefinition(List<QuestionDefinition> definitions, String id)
     { return definitions.stream().filter(item -> item.id().equals(id)).findFirst().orElse(null); }
     private Long extractWordId(String id)
     { if (id == null) return null; for (String prefix : PREFIXES) if (id.startsWith(prefix)) try { return Long.valueOf(id.substring(prefix.length())); } catch (NumberFormatException ignored) { return null; } return null; }
+    /** 将测试、题目与规范答案绑定，避免挑战接口直接暴露明文答案。 */
+    private String answerDigest(String attemptId, String questionId, String answer)
+    {
+        String payload = attemptId + '\0' + questionId + '\0' + normalize(answer);
+        try
+        {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(payload.getBytes(StandardCharsets.UTF_8)));
+        }
+        catch (NoSuchAlgorithmException exception)
+        {
+            throw new IllegalStateException("JVM 不支持 SHA-256", exception);
+        }
+    }
     private String normalize(String value) { return value == null ? "" : value.trim().toLowerCase(Locale.ROOT); }
     private boolean validWord(EngWordVo word) { return word != null && word.getId() != null && StringUtils.isNotEmpty(word.getWordName()) && StringUtils.isNotEmpty(word.getAcceptation()); }
     private boolean isSpellingEligible(String wordName)

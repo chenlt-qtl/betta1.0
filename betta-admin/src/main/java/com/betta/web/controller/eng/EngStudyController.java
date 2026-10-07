@@ -24,7 +24,6 @@ import com.betta.common.exception.ServiceException;
 import com.betta.eng.domain.EngWrongWord;
 import com.betta.eng.domain.dto.EngChallengeCheckDto;
 import com.betta.eng.domain.dto.EngChallengeSubmitDto;
-import com.betta.eng.domain.dto.EngChallengeSettingUpdateDto;
 import com.betta.eng.domain.dto.EngPronunciationAssessDto;
 import com.betta.eng.service.IEngStudyService;
 
@@ -70,21 +69,7 @@ public class EngStudyController extends BaseController
         return success(service.getReviewOverview());
     }
 
-    /** 查询当前登录用户的普通单词测试题型设置。 */
-    @GetMapping("/challenge/settings")
-    public AjaxResult challengeSettings()
-    {
-        return success(service.getChallengeSetting());
-    }
-
-    /** 保存当前登录用户的普通单词测试题型设置。 */
-    @PutMapping("/challenge/settings")
-    public AjaxResult updateChallengeSettings(@RequestBody EngChallengeSettingUpdateDto request)
-    {
-        return success(service.updateChallengeSetting(request));
-    }
-
-    /** 按 NEW 或 REVIEW 模式获取不包含正确答案的固定词集挑战。 */
+    /** 按 NEW、REVIEW、PRONUNCIATION 或 SPELLING 模式获取不含明文答案的挑战。 */
     @GetMapping("/challenge")
     public AjaxResult challenge(@RequestParam String mode,
             @RequestParam(required = false) Long articleId,
@@ -96,7 +81,7 @@ public class EngStudyController extends BaseController
     }
 
     /**
-     * 即时校验 request 中的单题答案并返回正确状态及正确答案。
+     * 兼容无法在前端校验摘要的环境，返回单题正确状态及正确答案。
      *
      * @param request 单题判题请求，包含文章主键、题目标识和当前答案
      * @return 统一响应，其中 data 为单题判定结果

@@ -4,7 +4,7 @@ import java.util.List;
 import lombok.Data;
 
 /**
- * 闯关题目展示对象；该对象刻意不包含正确答案，避免挑战接口泄露答案。
+ * 闯关题目展示对象；不包含明文正确答案，仅为非跟读题提供当次测试绑定的答案摘要。
  */
 @Data
 public class EngChallengeQuestionVo {
@@ -20,6 +20,8 @@ public class EngChallengeQuestionVo {
     private String audioUrl;
     /** 拼写题需要填写的字母数，其他题型为空。 */
     private Integer answerLength;
+    /** 绑定当次测试和题目的规范答案 SHA-256 摘要，跟读题为空。 */
+    private String answerDigest;
     /** 跟读题对应的规范单词，其他题型为空。 */
     private String word;
 }

@@ -3,7 +3,6 @@
     <div class="study-header">
       <div><h2>英语学习中心</h2><p>新单词按文章闯关，已学单词在复习区巩固。</p></div>
       <div class="header-actions">
-        <el-button type="primary" plain icon="el-icon-setting" @click="openChallengeSettings">题型设置</el-button>
         <el-button type="success" icon="el-icon-refresh" @click="openReview">单词复习</el-button>
         <el-button type="warning" plain icon="el-icon-collection" @click="openWrongWords">错词本</el-button>
       </div>
@@ -50,13 +49,21 @@
         <el-table-column label="文章/关卡" min-width="180">
           <template slot-scope="scope">
             <span v-if="recordMode(scope.row) === 'REVIEW'">全局单词复习</span>
+            <span v-else-if="recordMode(scope.row) === 'PRONUNCIATION'">跟读测试</span>
             <span v-else-if="recordMode(scope.row) === 'SPELLING'">全局拼写测试</span>
             <span v-else>{{ scope.row.articleTitle || ('文章 #' + scope.row.articleId) }}<small v-if="scope.row.levelNo"> · 第 {{ scope.row.levelNo }} 关</small></span>
           </template>
         </el-table-column>
-        <el-table-column label="星级" width="90" align="center"><template slot-scope="scope"><span class="record-stars">{{ scope.row.stars || 0 }}★</span></template></el-table-column>
+        <el-table-column label="星级" width="90" align="center">
+          <template slot-scope="scope">
+            <span v-if="recordMode(scope.row) === 'PRONUNCIATION'">-</span>
+            <span v-else class="record-stars">{{ scope.row.stars || 0 }}★</span>
+          </template>
+        </el-table-column>
         <el-table-column label="金币" width="90" align="center"><template slot-scope="scope">{{ scope.row.coinReward || 0 }}</template></el-table-column>
-        <el-table-column label="答对" width="110" align="center"><template slot-scope="scope">{{ scope.row.correctCount || 0 }}/{{ scope.row.totalCount || 0 }}</template></el-table-column>
+        <el-table-column label="答对" width="110" align="center">
+          <template slot-scope="scope">{{ recordMode(scope.row) === 'PRONUNCIATION' ? '-' : ((scope.row.correctCount || 0) + '/' + (scope.row.totalCount || 0)) }}</template>
+        </el-table-column>
         <el-table-column label="学习时间" min-width="160"><template slot-scope="scope">{{ parseTime(scope.row.studyTime || scope.row.createTime) || '-' }}</template></el-table-column>
         <el-table-column label="操作" width="150" align="center" fixed="right">
           <template slot-scope="scope">
@@ -78,62 +85,12 @@
       <div slot="footer"><el-button @click="recordDialogOpen = false">关闭</el-button></div>
     </el-dialog>
 
-    <el-dialog
-      title="单词测试题型设置"
-      :visible.sync="settingDialogVisible"
-      width="440px"
-      custom-class="challenge-setting-dialog"
-      append-to-body
-      :close-on-click-modal="false"
-    >
-      <div v-loading="settingLoading">
-        <p class="setting-description">设置仅对当前登录用户生效，新词学习和单词复习会按已开启的题型出题，拼写测试不受影响。</p>
-        <div class="setting-item">
-          <div class="setting-item__copy">
-            <strong>看词选中文</strong>
-            <span class="setting-item__description">根据英文单词选择中文释义</span>
-          </div>
-          <el-switch v-model="challengeSettings.wordToMeaningEnabled" />
-        </div>
-        <div class="setting-item">
-          <div class="setting-item__copy">
-            <strong>看中文选英文</strong>
-            <span class="setting-item__description">根据中文释义选择英文单词</span>
-          </div>
-          <el-switch v-model="challengeSettings.meaningToWordEnabled" />
-        </div>
-        <div class="setting-item">
-          <div class="setting-item__copy">
-            <strong>句子挖空选词</strong>
-            <span class="setting-item__description">在例句中选择合适的单词</span>
-          </div>
-          <el-switch v-model="challengeSettings.sentenceClozeEnabled" />
-        </div>
-        <div class="setting-item">
-          <div class="setting-item__copy">
-            <strong>单词跟读</strong>
-            <span class="setting-item__description">在设备和语音服务可用时进行跟读</span>
-          </div>
-          <el-switch v-model="challengeSettings.pronunciationEnabled" />
-        </div>
-        <p class="setting-tip">“看词选中文”和“看中文选英文”至少开启一项。</p>
-      </div>
-      <span slot="footer" class="dialog-footer">
-        <el-button @click="settingDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="settingSaving" :disabled="settingLoading" @click="saveChallengeSettings">保存</el-button>
-      </span>
-    </el-dialog>
   </div>
 </template>
 
 <script>
 import { listArticle } from '@/api/eng/article'
-import {
-  getChallengeSettings,
-  getStudyRecordWords,
-  getStudySummary,
-  updateChallengeSettings
-} from '@/api/eng/study'
+import { getStudyRecordWords, getStudySummary } from '@/api/eng/study'
 
 export default {
   name: 'EngStudy',
@@ -144,16 +101,7 @@ export default {
       summary: { coinBalance: 0, studyCount: 0, completedArticleCount: 0, wrongWordCount: 0, masteredWrongWordCount: 0, recentRecords: [] },
       recordDialogOpen: false,
       recordLoading: false,
-      recordWords: [],
-      settingDialogVisible: false,
-      settingLoading: false,
-      settingSaving: false,
-      challengeSettings: {
-        wordToMeaningEnabled: true,
-        meaningToWordEnabled: true,
-        sentenceClozeEnabled: true,
-        pronunciationEnabled: true
-      }
+      recordWords: []
     }
   },
   computed: {
@@ -179,45 +127,18 @@ export default {
     },
     recordMode(record) { return String(record.studyMode || record.mode || 'NEW').toUpperCase() },
     recordModeLabel(record) {
-      const labels = { NEW: '新词', REVIEW: '复习', SPELLING: '拼写' }
+      const labels = { NEW: '新词', REVIEW: '复习', PRONUNCIATION: '跟读', SPELLING: '拼写' }
       return labels[this.recordMode(record)] || '新词'
     },
     recordModeTagType(record) {
-      const types = { NEW: 'success', REVIEW: 'warning', SPELLING: 'danger' }
+      const types = { NEW: 'success', REVIEW: 'warning', PRONUNCIATION: '', SPELLING: 'danger' }
       return types[this.recordMode(record)] || 'success'
     },
     openLevelMap(articleId) { if (articleId) this.$router.push('/eng/study/levels/' + articleId) },
     openReview() { this.$router.push('/eng/study/review') },
     openWrongWords() { this.$router.push('/eng/study/wrong') },
-    openChallengeSettings() {
-      this.settingDialogVisible = true
-      this.settingLoading = true
-      getChallengeSettings().then(response => {
-        const settings = response.data || {}
-        Object.keys(this.challengeSettings).forEach(key => {
-          this.challengeSettings[key] = settings[key] !== false
-        })
-      }).catch(() => {
-        this.settingDialogVisible = false
-      }).finally(() => {
-        this.settingLoading = false
-      })
-    },
-    saveChallengeSettings() {
-      if (!this.challengeSettings.wordToMeaningEnabled && !this.challengeSettings.meaningToWordEnabled) {
-        this.$modal.msgWarning('“看词选中文”和“看中文选英文”至少开启一项')
-        return
-      }
-      this.settingSaving = true
-      updateChallengeSettings({ ...this.challengeSettings }).then(() => {
-        this.$modal.msgSuccess('题型设置已保存')
-        this.settingDialogVisible = false
-      }).finally(() => {
-        this.settingSaving = false
-      })
-    },
     continueRecord(record) {
-      if (['REVIEW', 'SPELLING'].includes(this.recordMode(record))) return this.openReview()
+      if (['REVIEW', 'PRONUNCIATION', 'SPELLING'].includes(this.recordMode(record))) return this.openReview()
       this.openLevelMap(record.articleId)
     },
     openRecordWords(record) {
@@ -251,14 +172,6 @@ export default {
   .article-group { margin-top: 8px; color: #909399; font-size: 12px; }
   .record-stars { color: #e6a23c; }
 }
-.challenge-setting-dialog {
-  .setting-description { margin: 0 0 16px; color: #606266; line-height: 1.6; }
-  .setting-item { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 12px 0; border-bottom: 1px solid #ebeef5; }
-  .setting-item__copy { min-width: 0; }
-  .setting-item strong, .setting-item__description { display: block; }
-  .setting-item__description { margin-top: 4px; color: #909399; font-size: 12px; line-height: 1.5; }
-  .setting-tip { margin: 14px 0 0; color: #e6a23c; font-size: 12px; }
-}
 @media (max-width: 600px) {
   .study-center { padding: 12px; overflow-x: hidden; }
   .study-center .study-header { align-items: flex-start; flex-direction: column; }
@@ -266,7 +179,5 @@ export default {
   .study-center .header-actions .el-button { flex: 1; margin: 0; }
   .study-center .section-tip { display: block; margin: 5px 0 0; }
   .record-word-dialog { max-width: calc(100vw - 24px); }
-  .challenge-setting-dialog { width: calc(100% - 24px) !important; margin-top: 8vh !important; }
-  .challenge-setting-dialog .setting-item { gap: 12px; }
 }
 </style>

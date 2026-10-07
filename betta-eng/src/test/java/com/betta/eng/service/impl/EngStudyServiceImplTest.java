@@ -18,6 +18,8 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.CountDownLatch;
@@ -34,7 +36,7 @@ import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
-/** 新词关卡、全局复习、拼写测试、金币与幂等规则的无数据库回归入口。 */
+/** 新词关卡、固定测试模式、金币与幂等规则的无数据库回归入口。 */
 public class EngStudyServiceImplTest
 {
     private static final long USER_ID = 7L;
@@ -47,11 +49,13 @@ public class EngStudyServiceImplTest
         {
             shouldExposePronunciationAvailabilityOnLevelMap();
             shouldReuseArticleWordsAcrossLevelsAndPronunciation();
-            shouldDefaultAndIsolateChallengeSettings();
-            shouldApplyChallengeSettingsWithoutChangingSpelling();
-            shouldRejectInvalidSettingsAndStaleChallenge();
+            shouldBuildFixedQuestionModesAndExposeNewWords();
+            shouldRejectUnlearnedPronunciationWords();
+            shouldKeepPronunciationModeOutsideKnowledgeProgress();
+            shouldKeepTrustedAssessmentAndSkipRulesInPronunciationMode();
             shouldDisablePronunciationForInsecureAccess();
             shouldSeparateOrdinaryAndSpellingQuestions();
+            shouldExposeSaltedAnswerDigestsAndKeepCheckFallback();
             shouldExposeAndEnforceSpellingEligibility();
             shouldKeepSpellingDefinitionStableWithinAttempt();
             shouldRewardSpellingMilestonesOnlyOnce();
@@ -70,10 +74,11 @@ public class EngStudyServiceImplTest
             shouldKeepNextLevelEmptyAtTerminalLevel();
             shouldKeepHistoricalMigrationConsistent();
             shouldExposeTransactionalMutationBoundary();
-            shouldApplyPronunciationBoundaryAndWeightedScore();
+            shouldApplyPronunciationBoundaryAndIndependentReward();
             shouldRejectMissingOrCrossAttemptAssessment();
+            shouldAllowSkippedPronunciationAndRejectInvalidMarker();
             shouldRejectInvalidOrSilentWav();
-            shouldTreatFailedReviewPronunciationAsNotMastered();
+            shouldKeepFailedPronunciationOutsideKnowledgeState();
             shouldKeepOnlyLatestConcurrentRecording();
             shouldLimitPronunciationAttemptsPerWord();
             shouldReleaseFailedPronunciationReservation();
@@ -82,6 +87,7 @@ public class EngStudyServiceImplTest
             shouldIsolateExpiredUserAndTestCaches();
             shouldConvergeAssessmentClientFailureWithoutCache();
             shouldRestorePersistedPronunciationOnDuplicateSubmit();
+            shouldNotInventPronunciationCoinForHistoricalAttempt();
             shouldKeepPronunciationMultipartInMemory();
             shouldRejectForgedQuestionAndEmptyAudio();
             shouldRejectSameModeCrossArticleAndLevel();
@@ -93,101 +99,11 @@ public class EngStudyServiceImplTest
         }
     }
 
-    /** 无记录默认全开，且不同登录用户的设置互不影响。 */
-    private static void shouldDefaultAndIsolateChallengeSettings()
-    {
-        Harness harness = new Harness();
-        EngChallengeSettingVo defaults = harness.service.getChallengeSetting();
-        assertTrue(defaults.getWordToMeaningEnabled() && defaults.getMeaningToWordEnabled()
-                && defaults.getSentenceClozeEnabled() && defaults.getPronunciationEnabled(),
-                "无设置记录时四种普通题型必须默认启用");
-
-        EngChallengeSettingUpdateDto request = setting(false, true, false, false);
-        harness.service.updateChallengeSetting(request);
-        assertTrue(!harness.service.getChallengeSetting().getWordToMeaningEnabled(), "用户设置必须保存");
-        setTestLoginUser(8L);
-        try
-        {
-            assertTrue(harness.service.getChallengeSetting().getWordToMeaningEnabled(), "不同用户必须保持默认设置");
-            harness.service.updateChallengeSetting(setting(true, false, true, true));
-        }
-        finally
-        {
-            setTestLoginUser();
-        }
-        assertTrue(!harness.service.getChallengeSetting().getWordToMeaningEnabled(), "切回原用户后必须读取自己的设置");
-    }
-
-    /** NEW、REVIEW 应按偏好出题，SPELLING 继续只生成独立拼写题。 */
-    private static void shouldApplyChallengeSettingsWithoutChangingSpelling()
-    {
-        Harness harness = spellingHarness();
-        harness.service.updateChallengeSetting(setting(false, true, false, false));
-        EngChallengeVo fresh = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null, true);
-        assertTrue(fresh.getQuestions().stream().allMatch(item -> "CN_TO_WORD".equals(item.getType())),
-                "新词测试只能生成当前用户启用的题型");
-        EngChallengeVo review = harness.service.getChallenge("REVIEW", null, null, List.of(1L), true);
-        assertTrue(review.getQuestions().stream().allMatch(item -> "CN_TO_WORD".equals(item.getType())),
-                "复习测试只能生成当前用户启用的题型");
-        EngChallengeVo spelling = harness.service.getChallenge("SPELLING", null, null, List.of(1L), true);
-        assertTrue(spelling.getQuestions().stream().allMatch(item -> "SENTENCE_FILL".equals(item.getType())),
-                "拼写测试不得受普通题型设置影响");
-    }
-
-    /** 基础题型不得全关，且保存新设置后旧普通测试必须失效。 */
-    private static void shouldRejectInvalidSettingsAndStaleChallenge()
-    {
-        Harness harness = new Harness();
-        EngChallengeVo challenge = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null, false);
-        String legacyAttemptId = challenge.getAttemptId().substring(0, challenge.getAttemptId().lastIndexOf('.'));
-        EngChallengeCheckDto legacyCheck = challengeCheck(legacyAttemptId);
-        assertTrue(harness.service.checkChallengeAnswer(legacyCheck).getCorrect(),
-                "从未保存设置时应兼容部署前生成的纯 UUID 普通测试");
-        assertThrows(() -> harness.service.checkChallengeAnswer(challengeCheck(".0")),
-                "仅版本后缀不得作为测试标识");
-        assertThrows(() -> harness.service.checkChallengeAnswer(challengeCheck("invalid.0")),
-                "非法 UUID 前缀不得通过版本零校验");
-        assertThrows(() -> harness.service.checkChallengeAnswer(challengeCheck(legacyAttemptId + ".extra.0")),
-                "多个分隔符不得通过版本零校验");
-        assertThrows(() -> harness.service.checkChallengeAnswer(challengeCheck(legacyAttemptId + ".00")),
-                "非规范十进制版本零不得通过校验");
-        assertThrows(() -> harness.service.checkChallengeAnswer(challengeCheck(legacyAttemptId + ".1")),
-                "非当前版本不得通过版本零校验");
-        assertThrows(() -> harness.service.updateChallengeSetting(setting(false, false, true, true)),
-                "两个基础知识题型不得同时关闭");
-        harness.service.updateChallengeSetting(setting(true, false, false, false));
-        EngChallengeCheckDto check = challengeCheck(challenge.getAttemptId());
-        assertThrows(() -> harness.service.checkChallengeAnswer(check), "设置变化后旧测试必须失效");
-        assertThrows(() -> harness.service.checkChallengeAnswer(legacyCheck),
-                "保存设置后部署前的纯 UUID 测试也必须失效");
-        EngChallengeVo current = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null, false);
-        assertTrue(harness.service.checkChallengeAnswer(challengeCheck(current.getAttemptId())).getCorrect(),
-                "当前版本的规范测试标识必须有效");
-        String currentUuid = current.getAttemptId().substring(0, current.getAttemptId().lastIndexOf('.'));
-        assertThrows(() -> harness.service.checkChallengeAnswer(challengeCheck("invalid.1")),
-                "非法 UUID 前缀不得通过版本一校验");
-        assertThrows(() -> harness.service.checkChallengeAnswer(challengeCheck(currentUuid + ".extra.1")),
-                "多个分隔符不得通过版本一校验");
-        assertThrows(() -> harness.service.checkChallengeAnswer(challengeCheck(currentUuid + ".01")),
-                "非规范十进制版本一不得通过校验");
-        assertThrows(() -> harness.service.checkChallengeAnswer(challengeCheck(currentUuid + ".0")),
-                "旧版本后缀不得通过版本一校验");
-    }
-
     private static EngChallengeCheckDto challengeCheck(String attemptId)
     {
         EngChallengeCheckDto request = new EngChallengeCheckDto(); request.setAttemptId(attemptId);
         request.setMode("NEW"); request.setArticleId(ARTICLE_ID); request.setLevelNo(1);
         request.setQuestionId("WORD_TO_CN:1"); request.setAnswer("苹果"); return request;
-    }
-
-    private static EngChallengeSettingUpdateDto setting(boolean wordToMeaning, boolean meaningToWord,
-            boolean sentenceCloze, boolean pronunciation)
-    {
-        EngChallengeSettingUpdateDto request = new EngChallengeSettingUpdateDto();
-        request.setWordToMeaningEnabled(wordToMeaning); request.setMeaningToWordEnabled(meaningToWord);
-        request.setSentenceClozeEnabled(sentenceCloze); request.setPronunciationEnabled(pronunciation);
-        return request;
     }
 
     /** 地图接口应明确返回跟读评分配置是否完整可用。 */
@@ -202,7 +118,7 @@ public class EngStudyServiceImplTest
                 "跟读评分配置完整时地图必须返回可用");
     }
 
-    /** 多关卡地图和跟读校验都只能加载一次文章全部单词。 */
+    /** 多关卡地图只加载一次文章单词，跟读按已学词校验不重读文章。 */
     private static void shouldReuseArticleWordsAcrossLevelsAndPronunciation()
     {
         Harness harness = new Harness(true);
@@ -211,11 +127,106 @@ public class EngStudyServiceImplTest
         assertEquals(2, map.getLevels().size(), "多关卡地图必须保留全部有效关卡");
         assertEquals(1, harness.articleWordListReads.get(), "构建关卡地图只能查询一次文章全部单词");
 
-        EngChallengeVo challenge = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null);
+        harness.progress.put(1L, progress(1L, ARTICLE_ID, 1, 1));
+        EngChallengeVo challenge = harness.service.getChallenge("PRONUNCIATION", ARTICLE_ID, 1, List.of(1L));
         harness.articleWordListReads.set(0);
-        harness.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "NEW", ARTICLE_ID, 1,
+        harness.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "PRONUNCIATION", ARTICLE_ID, 1,
                 "PRONUNCIATION:1", wav(false)));
-        assertEquals(1, harness.articleWordListReads.get(), "跟读题校验只能查询一次文章全部单词");
+        assertEquals(0, harness.articleWordListReads.get(), "跟读题校验不得重读文章全部单词");
+    }
+
+    /** 普通、跟读和拼写模式必须固定题型，并明确返回关卡生词数。 */
+    private static void shouldBuildFixedQuestionModesAndExposeNewWords()
+    {
+        Harness harness = new Harness(true);
+        EngChallengeVo fresh = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null, true);
+        assertEquals(2, fresh.getNewWordCount(), "未学关卡必须返回准确生词数");
+        assertTrue(Boolean.TRUE.equals(fresh.getHasNewWords()), "存在生词时必须显式标记");
+        assertTrue(fresh.getQuestions().stream().noneMatch(item -> "PRONUNCIATION".equals(item.getType())),
+                "普通测试不得混入跟读题");
+        assertTrue(fresh.getQuestions().stream().anyMatch(item -> "WORD_TO_CN".equals(item.getType()))
+                && fresh.getQuestions().stream().anyMatch(item -> "CN_TO_WORD".equals(item.getType()))
+                && fresh.getQuestions().stream().anyMatch(item -> "SENTENCE_CHOICE".equals(item.getType())),
+                "普通测试必须固定生成基础题和可用句子题");
+
+        harness.progress.put(1L, progress(1L, ARTICLE_ID, 1, 1));
+        harness.progress.put(2L, progress(2L, ARTICLE_ID, 1, 1));
+        EngChallengeVo learned = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null, true);
+        assertEquals(0, learned.getNewWordCount(), "全部已学时生词数必须为零");
+        assertTrue(Boolean.FALSE.equals(learned.getHasNewWords()), "全部已学时不得显示生词状态");
+        EngChallengeVo pronunciation = harness.service.getChallenge("PRONUNCIATION", ARTICLE_ID, 1,
+                List.of(1L, 2L), true);
+        assertTrue(pronunciation.getQuestions().stream().allMatch(item -> "PRONUNCIATION".equals(item.getType())),
+                "跟读测试只能生成发音题");
+    }
+
+    /** 跟读测试不得接受尚未学习的单词。 */
+    private static void shouldRejectUnlearnedPronunciationWords()
+    {
+        Harness harness = new Harness(true);
+        assertThrows(() -> harness.service.getChallenge("PRONUNCIATION", ARTICLE_ID, 1, List.of(1L), true),
+                "未学单词不得进入跟读测试");
+    }
+
+    /** 纯跟读只发放合格金币并保持幂等，不改变知识进度。 */
+    private static void shouldKeepPronunciationModeOutsideKnowledgeProgress()
+    {
+        Harness harness = new Harness(true);
+        EngUserWordProgress original = progress(1L, ARTICLE_ID, 1, 1);
+        original.setHighestStars(2); original.setLatestStars(1); original.setRewardedStars(2);
+        harness.progress.put(1L, original);
+        EngChallengeVo challenge = harness.service.getChallenge("PRONUNCIATION", ARTICLE_ID, 1, List.of(1L), true);
+        harness.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "PRONUNCIATION",
+                ARTICLE_ID, 1, "PRONUNCIATION:1", wav(false)));
+        EngChallengeSubmitDto request = request(challenge.getAttemptId(), "PRONUNCIATION", ARTICLE_ID, 1);
+        request.setAnswers(List.of(answer("PRONUNCIATION:1", "ASSESSED")));
+        EngChallengeResultVo result = harness.service.submitChallenge(request);
+        assertEquals(0, result.getScore(), "跟读测试不生成知识分");
+        assertEquals(0, result.getStars(), "跟读测试不生成知识星级");
+        assertEquals(2L, result.getPronunciationCoin(), "每个合格发音应奖励2金币");
+        assertEquals(2, harness.progress.get(1L).getHighestStars(), "跟读不得改变最高星级");
+        assertEquals(1, harness.progress.get(1L).getLatestStars(), "跟读不得刷新遗忘曲线");
+        assertEquals(0, harness.wrongWrites.get(), "跟读不得写入错词");
+        assertEquals(0, harness.familiarityDelta, "跟读不得改变词频熟悉度");
+        assertTrue(harness.levelProgress.isEmpty(), "跟读不得改变关卡进度");
+        assertEquals(2L, harness.service.submitChallenge(request).getPronunciationCoin(),
+                "重复提交必须恢复原跟读奖励");
+        assertEquals(2L, harness.balance, "重复提交不得重复发币");
+    }
+
+    /** 跟读合格必须使用服务端可信评分，异常跳过不读缓存也不发币。 */
+    private static void shouldKeepTrustedAssessmentAndSkipRulesInPronunciationMode()
+    {
+        Harness missing = new Harness(true);
+        missing.progress.put(1L, progress(1L, ARTICLE_ID, 1, 1));
+        EngChallengeVo missingChallenge = missing.service.getChallenge("PRONUNCIATION", ARTICLE_ID, 1,
+                List.of(1L), true);
+        EngChallengeSubmitDto missingRequest = request(missingChallenge.getAttemptId(), "PRONUNCIATION",
+                ARTICLE_ID, 1);
+        missingRequest.setAnswers(List.of(answer("PRONUNCIATION:1", "ASSESSED")));
+        assertThrows(() -> missing.service.submitChallenge(missingRequest),
+                "客户端 ASSESSED 标记不得替代服务端可信评分");
+
+        Harness skipped = new Harness(true);
+        skipped.progress.put(1L, progress(1L, ARTICLE_ID, 1, 1));
+        EngChallengeVo skippedChallenge = skipped.service.getChallenge("PRONUNCIATION", ARTICLE_ID, 1,
+                List.of(1L), true);
+        EngChallengeSubmitDto skippedRequest = request(skippedChallenge.getAttemptId(), "PRONUNCIATION",
+                ARTICLE_ID, 1);
+        skippedRequest.setAnswers(List.of(answer("PRONUNCIATION:1", "SKIPPED")));
+        EngChallengeResultVo result = skipped.service.submitChallenge(skippedRequest);
+        assertEquals(0L, result.getPronunciationCoin(), "跳过跟读不得获得金币");
+        assertEquals(null, result.getWordResults().get(0).getPronunciationPassed(),
+                "跳过跟读不得伪造不合格记录");
+
+        Harness invalid = new Harness(true);
+        invalid.progress.put(1L, progress(1L, ARTICLE_ID, 1, 1));
+        EngChallengeVo invalidChallenge = invalid.service.getChallenge("PRONUNCIATION", ARTICLE_ID, 1,
+                List.of(1L), true);
+        EngChallengeSubmitDto invalidRequest = request(invalidChallenge.getAttemptId(), "PRONUNCIATION",
+                ARTICLE_ID, 1);
+        invalidRequest.setAnswers(List.of(answer("PRONUNCIATION:1", "FAILED")));
+        assertThrows(() -> invalid.service.submitChallenge(invalidRequest), "非法跟读标记必须拒绝");
     }
 
     /** 非安全访问不得生成跟读题，提交时应按知识题独立计分。 */
@@ -240,8 +251,8 @@ public class EngStudyServiceImplTest
         secureHarness.progress.put(2L, progress(2L, 99L, 1, 1));
         EngChallengeVo secure = secureHarness.service.getChallenge("NEW", ARTICLE_ID, 1, null, true);
         assertTrue(Boolean.TRUE.equals(secure.getPronunciationEnabled()), "HTTPS 挑战应保留可用的跟读评分");
-        assertTrue(secure.getQuestions().stream().anyMatch(item -> "PRONUNCIATION".equals(item.getType())),
-                "HTTPS 挑战应继续生成跟读题");
+        assertTrue(secure.getQuestions().stream().noneMatch(item -> "PRONUNCIATION".equals(item.getType())),
+                "HTTPS 普通挑战也不得混入跟读题");
     }
 
     /** 普通测试不再混入拼写题，拼写模式也不得生成选择题或跟读题。 */
@@ -258,7 +269,49 @@ public class EngStudyServiceImplTest
         EngChallengeVo spelling = harness.service.getChallenge("SPELLING", null, null, List.of(1L, 4L));
         assertTrue(spelling.getQuestions().stream().allMatch(item -> "SENTENCE_FILL".equals(item.getType())
                 && Integer.valueOf(4).equals(item.getAnswerLength())), "拼写模式只能生成四字母挖空题");
-        assertTrue(Boolean.FALSE.equals(spelling.getPronunciationEnabled()), "拼写模式不得启用跟读题");
+        assertTrue(spelling.getQuestions().stream().noneMatch(item -> "PRONUNCIATION".equals(item.getType())),
+                "拼写模式不得生成跟读题");
+    }
+
+    /** 非跟读题返回当次测试加盐摘要，跟读题不返回，旧单题接口仍可回退。 */
+    private static void shouldExposeSaltedAnswerDigestsAndKeepCheckFallback()
+    {
+        Harness harness = new Harness(true); harness.progress.put(2L, progress(2L, 99L, 1, 1));
+        EngChallengeVo first = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null);
+        Map<String, String> answers = Map.of("WORD_TO_CN:1", "苹果", "CN_TO_WORD:1", "apple",
+                "SENTENCE_CHOICE:1", "apples");
+        for (EngChallengeQuestionVo question : first.getQuestions())
+        {
+            if ("PRONUNCIATION".equals(question.getType()))
+            {
+                assertEquals(null, question.getAnswerDigest(), "跟读题不得返回答案摘要");
+                continue;
+            }
+            String expected = testAnswerDigest(first.getAttemptId(), question.getQuestionId(),
+                    answers.get(question.getQuestionId()));
+            assertTrue(question.getAnswerDigest() != null && question.getAnswerDigest().matches("[0-9a-f]{64}"),
+                    "知识题必须返回64位小写十六进制摘要");
+            assertEquals(expected, question.getAnswerDigest(), "规范正确答案必须命中摘要");
+            assertTrue(!testAnswerDigest(first.getAttemptId(), question.getQuestionId(), "wrong")
+                    .equals(question.getAnswerDigest()), "错误答案不得命中摘要");
+        }
+
+        EngChallengeVo second = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null);
+        EngChallengeQuestionVo firstChoice = first.getQuestions().stream()
+                .filter(item -> "WORD_TO_CN:1".equals(item.getQuestionId())).findFirst().orElseThrow();
+        EngChallengeQuestionVo secondChoice = second.getQuestions().stream()
+                .filter(item -> "WORD_TO_CN:1".equals(item.getQuestionId())).findFirst().orElseThrow();
+        assertTrue(!firstChoice.getAnswerDigest().equals(secondChoice.getAnswerDigest()),
+                "相同题目在不同 attemptId 下必须生成不同摘要");
+
+        Harness spellingHarness = spellingHarness();
+        EngChallengeVo spelling = spellingHarness.service.getChallenge("SPELLING", null, null, List.of(1L));
+        EngChallengeQuestionVo spellingQuestion = spelling.getQuestions().get(0);
+        String spellingAnswer = spellingAnswer(spelling, spellingQuestion);
+        assertEquals(testAnswerDigest(spelling.getAttemptId(), spellingQuestion.getQuestionId(), spellingAnswer),
+                spellingQuestion.getAnswerDigest(), "拼写题正确答案必须命中摘要");
+        assertTrue(harness.service.checkChallengeAnswer(challengeCheck(first.getAttemptId())).getCorrect(),
+                "旧单题判题接口必须继续可用于兼容回退");
     }
 
     /** 复习词返回拼写资格，短词和非纯英文字母词不得进入拼写测试。 */
@@ -607,15 +660,13 @@ public class EngStudyServiceImplTest
                 "访问环境感知的挑战入口必须由事务包裹");
     }
 
-    /** 59 分不合格、60 分合格，并按知识 90% 与跟读 10% 四舍五入计分。 */
-    private static void shouldApplyPronunciationBoundaryAndWeightedScore()
+    /** 59 分不奖励、60 分奖励 2 金币，且跟读结果不参与知识题计分。 */
+    private static void shouldApplyPronunciationBoundaryAndIndependentReward()
     {
-        Harness failed = new Harness(true); failed.progress.put(2L, progress(2L, 99L, 1, 1));
-        EngChallengeVo failedChallenge = failed.service.getChallenge("NEW", ARTICLE_ID, 1, null);
-        assertTrue(failedChallenge.getQuestions().stream().anyMatch(item -> "PRONUNCIATION:1".equals(item.getQuestionId())),
-                "启用且配置完整时每个单词必须生成跟读题");
+        Harness failed = new Harness(true);
+        EngChallengeVo failedChallenge = pronunciationChallenge(failed, 1L);
         failed.assessment = assessment(59, 59D, 0);
-        failed.service.assessPronunciation(assessmentRequest(failedChallenge.getAttemptId(), "NEW", ARTICLE_ID, 1,
+        failed.service.assessPronunciation(assessmentRequest(failedChallenge.getAttemptId(), "PRONUNCIATION", null, null,
                 "PRONUNCIATION:1", wav(false)));
         String cachedPayload = failed.pronunciationCache.resultPayload();
         assertTrue(cachedPayload.contains("\"score\"") && cachedPayload.contains("\"accuracy\"")
@@ -623,96 +674,100 @@ public class EngStudyServiceImplTest
                 "Redis 只能保留最终计分字段和归属信息");
         assertTrue(failed.pronunciationCache.serializationRoundTrips > 0,
                 "Lua 参数与缓存字符串必须按项目 FastJson WriteClassName 语义往返");
-        EngChallengeSubmitDto failedRequest = request(failedChallenge.getAttemptId(), "NEW", ARTICLE_ID, 1);
-        failedRequest.setAnswers(withPronunciation(perfectAppleAnswers()));
+        EngChallengeSubmitDto failedRequest = pronunciationSubmit(failedChallenge, "PRONUNCIATION", null, null);
         EngChallengeResultVo failedResult = failed.service.submitChallenge(failedRequest);
-        assertEquals(90, failedResult.getScore(), "知识全对但59分跟读失败时总分应为90");
+        assertEquals(0, failedResult.getScore(), "纯跟读不得生成知识分");
+        assertEquals(0, failedResult.getStars(), "纯跟读不得生成知识星级");
         assertEquals(0, failedResult.getPronunciationPassedCount(), "59分不得计为跟读合格");
-        assertTrue(!failed.details.get(0).getAllCorrect().equals(1), "跟读失败时单词不得标记全部正确");
+        assertEquals(0L, failedResult.getPronunciationCoin(), "59分跟读失败不得获得发音金币");
+        assertEquals(0, failed.wrongWrites.get(), "跟读失败不得把知识题全对单词写入错词");
 
-        Harness passed = new Harness(true); passed.progress.put(2L, progress(2L, 99L, 1, 1));
-        EngChallengeVo challenge = passed.service.getChallenge("NEW", ARTICLE_ID, 1, null);
+        Harness passed = new Harness(true);
+        EngChallengeVo challenge = pronunciationChallenge(passed, 1L);
         passed.assessment = assessment(60, 60D, 0);
-        passed.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "NEW", ARTICLE_ID, 1,
+        passed.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "PRONUNCIATION", null, null,
                 "PRONUNCIATION:1", wav(false)));
-        EngChallengeSubmitDto request = request(challenge.getAttemptId(), "NEW", ARTICLE_ID, 1);
-        List<EngChallengeAnswerDto> answers = new ArrayList<>(withPronunciation(perfectAppleAnswers()));
-        answers.set(0, answer("WORD_TO_CN:1", "错误")); request.setAnswers(answers);
+        EngChallengeSubmitDto request = pronunciationSubmit(challenge, "PRONUNCIATION", null, null);
         EngChallengeResultVo result = passed.service.submitChallenge(request);
-        assertEquals(70, result.getScore(), "移除普通拼写题后知识答对三分之二，跟读合格总分应为70");
         assertEquals(1, result.getPronunciationPassedCount(), "60分且匹配必须计为合格");
         assertEquals(60, result.getPronunciationAverageScore(), "应返回跟读平均总分");
-
-        Harness perfect = new Harness(true); perfect.progress.put(2L, progress(2L, 99L, 1, 1));
-        EngChallengeVo perfectChallenge = perfect.service.getChallenge("NEW", ARTICLE_ID, 1, null);
-        perfect.assessment = assessment(100, 100D, 0);
-        perfect.service.assessPronunciation(assessmentRequest(perfectChallenge.getAttemptId(), "NEW", ARTICLE_ID, 1,
-                "PRONUNCIATION:1", wav(false)));
-        EngChallengeSubmitDto perfectRequest = request(perfectChallenge.getAttemptId(), "NEW", ARTICLE_ID, 1);
-        perfectRequest.setAnswers(withPronunciation(perfectAppleAnswers()));
-        assertEquals(100, perfect.service.submitChallenge(perfectRequest).getScore(), "知识和跟读全部合格应为100分");
+        assertEquals(2L, result.getPronunciationCoin(), "每个合格发音应额外奖励2金币");
+        assertEquals(2L, result.getCoinReward(), "发音金币必须计入本轮总奖励");
     }
 
     /** 客户端标记不能替代 Redis 可信结果，也不能跨 attempt 复用。 */
     private static void shouldRejectMissingOrCrossAttemptAssessment()
     {
-        Harness harness = new Harness(true); harness.progress.put(2L, progress(2L, 99L, 1, 1));
-        EngChallengeVo challenge = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null);
-        EngChallengeSubmitDto missing = request(challenge.getAttemptId(), "NEW", ARTICLE_ID, 1);
-        missing.setAnswers(withPronunciation(perfectAppleAnswers()));
+        Harness harness = new Harness(true);
+        EngChallengeVo challenge = pronunciationChallenge(harness, 1L);
+        EngChallengeSubmitDto missing = pronunciationSubmit(challenge, "PRONUNCIATION", null, null);
         assertThrows(() -> harness.service.submitChallenge(missing), "无可信缓存时不得提交跟读题");
-        harness.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "NEW", ARTICLE_ID, 1,
+        harness.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "PRONUNCIATION", null, null,
                 "PRONUNCIATION:1", wav(false)));
-        EngChallengeSubmitDto cross = request("another-attempt", "NEW", ARTICLE_ID, 1);
-        cross.setAnswers(withPronunciation(perfectAppleAnswers()));
+        EngChallengeSubmitDto cross = request(UUID.randomUUID().toString(), "PRONUNCIATION", null, null);
+        cross.setAnswers(pronunciationAnswers(challenge, "ASSESSED"));
         assertThrows(() -> harness.service.submitChallenge(cross), "可信评分不得跨 attempt 复用");
+    }
+
+    /** 录音异常可跳过且不读评分缓存，其他跟读标记仍必须拒绝。 */
+    private static void shouldAllowSkippedPronunciationAndRejectInvalidMarker()
+    {
+        Harness skipped = new Harness(true);
+        EngChallengeVo challenge = pronunciationChallenge(skipped, 1L);
+        EngChallengeSubmitDto request = request(challenge.getAttemptId(), "PRONUNCIATION", null, null);
+        request.setAnswers(pronunciationAnswers(challenge, "SKIPPED"));
+        EngChallengeResultVo result = skipped.service.submitChallenge(request);
+        assertEquals(0, result.getScore(), "跳过跟读不得生成知识分");
+        assertEquals(0, result.getStars(), "跳过跟读不得生成知识星级");
+        assertEquals(0, result.getPronunciationTotalCount(), "跳过跟读不得生成发音结果");
+        assertEquals(null, result.getPronunciationAverageScore(), "跳过跟读不得生成虚假平均分");
+        assertEquals(0L, result.getPronunciationCoin(), "跳过跟读不得奖励金币");
+        assertEquals(null, result.getWordResults().get(0).getPronunciationPassed(), "跳过跟读不得保存不合格状态");
+
+        Harness invalid = new Harness(true);
+        EngChallengeVo invalidChallenge = pronunciationChallenge(invalid, 1L);
+        EngChallengeSubmitDto invalidRequest = request(invalidChallenge.getAttemptId(), "PRONUNCIATION", null, null);
+        invalidRequest.setAnswers(pronunciationAnswers(invalidChallenge, "FAILED"));
+        assertThrows(() -> invalid.service.submitChallenge(invalidRequest), "非法跟读标记必须拒绝");
     }
 
     /** WAV 必须具备规范参数、有效时长和非静音 PCM 数据。 */
     private static void shouldRejectInvalidOrSilentWav()
     {
-        Harness harness = new Harness(true); harness.progress.put(2L, progress(2L, 99L, 1, 1));
-        EngChallengeVo challenge = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null);
-        assertThrows(() -> harness.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "NEW",
-                ARTICLE_ID, 1, "PRONUNCIATION:1", new byte[] {1, 2, 3})), "错误 WAV 必须拒绝");
-        assertThrows(() -> harness.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "NEW",
-                ARTICLE_ID, 1, "PRONUNCIATION:1", wav(true))), "静音录音必须拒绝");
-        assertThrows(() -> harness.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "NEW",
-                ARTICLE_ID, 1, "PRONUNCIATION:1", wav(16000, 1, 16, 5100, false))), "超长录音必须拒绝");
-        assertThrows(() -> harness.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "NEW",
-                ARTICLE_ID, 1, "PRONUNCIATION:1", new byte[256 * 1024 + 1])), "超大录音必须拒绝");
-        assertThrows(() -> harness.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "NEW",
-                ARTICLE_ID, 1, "PRONUNCIATION:1", wav(8000, 1, 16, 500, false))), "8kHz录音必须拒绝");
-        assertThrows(() -> harness.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "NEW",
-                ARTICLE_ID, 1, "PRONUNCIATION:1", wav(16000, 2, 16, 500, false))), "双声道录音必须拒绝");
-        assertThrows(() -> harness.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "NEW",
-                ARTICLE_ID, 1, "PRONUNCIATION:1", wav(16000, 1, 8, 500, false))), "非16bit录音必须拒绝");
-        assertThrows(() -> harness.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "NEW",
-                ARTICLE_ID, 1, "PRONUNCIATION:1", wav(16000, 1, 16, 200, false))), "过短录音必须拒绝");
+        Harness harness = new Harness(true);
+        EngChallengeVo challenge = pronunciationChallenge(harness, 1L);
+        assertInvalidAudio(harness, challenge, new byte[] {1, 2, 3}, "错误 WAV 必须拒绝");
+        assertInvalidAudio(harness, challenge, wav(true), "静音录音必须拒绝");
+        assertInvalidAudio(harness, challenge, wav(16000, 1, 16, 5100, false), "超长录音必须拒绝");
+        assertInvalidAudio(harness, challenge, new byte[256 * 1024 + 1], "超大录音必须拒绝");
+        assertInvalidAudio(harness, challenge, wav(8000, 1, 16, 500, false), "8kHz录音必须拒绝");
+        assertInvalidAudio(harness, challenge, wav(16000, 2, 16, 500, false), "双声道录音必须拒绝");
+        assertInvalidAudio(harness, challenge, wav(16000, 1, 8, 500, false), "非16bit录音必须拒绝");
+        assertInvalidAudio(harness, challenge, wav(16000, 1, 16, 200, false), "过短录音必须拒绝");
     }
 
-    /** 复习知识题全对但跟读失败时最高二星、无复习币并进入错词状态。 */
-    private static void shouldTreatFailedReviewPronunciationAsNotMastered()
+    /** 纯跟读不合格只是不发发音金币，不改变已有知识状态。 */
+    private static void shouldKeepFailedPronunciationOutsideKnowledgeState()
     {
         Harness harness = new Harness(true); EngUserWordProgress learned = progress(1L, ARTICLE_ID, 1, 1);
         learned.setHighestStars(3); learned.setRewardedStars(3); harness.progress.put(1L, learned);
-        EngChallengeVo challenge = harness.service.getChallenge("REVIEW", null, null, List.of(1L));
+        EngChallengeVo challenge = pronunciationChallenge(harness, 1L);
         harness.assessment = assessment(100, 100D, 3);
-        harness.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "REVIEW", null, null,
+        harness.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "PRONUNCIATION", null, null,
                 "PRONUNCIATION:1", wav(false)));
-        EngChallengeSubmitDto request = request(challenge.getAttemptId(), "REVIEW", null, null);
-        request.setAnswers(withPronunciation(perfectAppleAnswers()));
+        EngChallengeSubmitDto request = pronunciationSubmit(challenge, "PRONUNCIATION", null, null);
         EngChallengeResultVo result = harness.service.submitChallenge(request);
-        assertEquals(2, result.getWordResults().get(0).getStars(), "复习跟读失败时单词最高二星");
-        assertEquals(0L, result.getReviewCoin(), "复习跟读失败不得发全部正确金币");
-        assertEquals(1, harness.wrongWrites.get(), "复习跟读失败应进入错词状态");
+        assertEquals(0, result.getWordResults().get(0).getStars(), "纯跟读明细不得生成知识星级");
+        assertEquals(0L, result.getReviewCoin(), "纯跟读不得发放复习金币");
+        assertEquals(0L, result.getPronunciationCoin(), "纯跟读不合格不得获得发音金币");
+        assertEquals(0, harness.wrongWrites.get(), "纯跟读不合格不得写入错词状态");
     }
 
     /** 两次重录并发时，只允许后到请求保存可信结果，慢返回的旧请求必须失效。 */
     private static void shouldKeepOnlyLatestConcurrentRecording() throws Exception
     {
-        Harness harness = new Harness(true); harness.progress.put(2L, progress(2L, 99L, 1, 1));
-        EngChallengeVo challenge = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null);
+        Harness harness = new Harness(true);
+        EngChallengeVo challenge = pronunciationChallenge(harness, 1L);
         CountDownLatch firstStarted = new CountDownLatch(1), releaseFirst = new CountDownLatch(1);
         AtomicInteger calls = new AtomicInteger();
         harness.assessmentFunction = ignored -> {
@@ -745,8 +800,7 @@ public class EngStudyServiceImplTest
         {
             releaseFirst.countDown(); executor.shutdownNow();
         }
-        EngChallengeSubmitDto request = request(challenge.getAttemptId(), "NEW", ARTICLE_ID, 1);
-        request.setAnswers(withPronunciation(perfectAppleAnswers()));
+        EngChallengeSubmitDto request = pronunciationSubmit(challenge, "PRONUNCIATION", null, null);
         EngChallengeResultVo result = harness.service.submitChallenge(request);
         assertEquals(100, result.getPronunciationAverageScore(), "最终只能采用后到重录的100分结果");
         assertTrue(harness.pronunciationCache.rejectedSaves > 0, "Lua CAS 必须拒绝旧代次保存");
@@ -756,29 +810,28 @@ public class EngStudyServiceImplTest
     private static void shouldLimitPronunciationAttemptsPerWord()
     {
         Harness harness = new Harness(true);
-        EngChallengeVo challenge = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null);
+        EngChallengeVo challenge = pronunciationChallenge(harness, 1L, 2L);
         for (int attempt = 1; attempt <= 3; attempt++)
         {
             harness.assessment = assessment(70 + attempt, 70D + attempt, 0);
             EngPronunciationAssessmentVo result = harness.service.assessPronunciation(assessmentRequest(
-                    challenge.getAttemptId(), "NEW", ARTICLE_ID, 1, "PRONUNCIATION:1", wav(false)));
+                    challenge.getAttemptId(), "PRONUNCIATION", null, null, "PRONUNCIATION:1", wav(false)));
             assertEquals(attempt, result.getAttemptCount(), "应返回已消耗测评次数");
             assertEquals(3 - attempt, result.getRemainingAttempts(), "应返回剩余测评次数");
         }
-        assertThrows(() -> harness.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "NEW",
-                ARTICLE_ID, 1, "PRONUNCIATION:1", wav(false))), "第四次测评必须拒绝");
+        assertThrows(() -> harness.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "PRONUNCIATION",
+                null, null, "PRONUNCIATION:1", wav(false))), "第四次测评必须拒绝");
         EngPronunciationAssessmentVo anotherWord = harness.service.assessPronunciation(assessmentRequest(
-                challenge.getAttemptId(), "NEW", ARTICLE_ID, 1, "PRONUNCIATION:2", wav(false)));
+                challenge.getAttemptId(), "PRONUNCIATION", null, null, "PRONUNCIATION:2", wav(false)));
         assertEquals(1, anotherWord.getAttemptCount(), "不同单词必须独立计次");
-        EngChallengeSubmitDto submit = request(challenge.getAttemptId(), "NEW", ARTICLE_ID, 1);
-        submit.setAnswers(perfectAppleAndCatAnswers());
+        EngChallengeSubmitDto submit = pronunciationSubmit(challenge, "PRONUNCIATION", null, null);
         EngChallengeResultVo submitted = harness.service.submitChallenge(submit);
         assertEquals(73, submitted.getWordResults().stream().filter(item -> item.getWordId() == 1L)
                 .findFirst().orElseThrow().getPronunciationScore(), "超限请求不得删除第三次可信结果");
 
-        EngChallengeVo anotherChallenge = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null);
+        EngChallengeVo anotherChallenge = pronunciationChallenge(harness, 1L);
         EngPronunciationAssessmentVo anotherAttempt = harness.service.assessPronunciation(assessmentRequest(
-                anotherChallenge.getAttemptId(), "NEW", ARTICLE_ID, 1, "PRONUNCIATION:1", wav(false)));
+                anotherChallenge.getAttemptId(), "PRONUNCIATION", null, null, "PRONUNCIATION:1", wav(false)));
         assertEquals(1, anotherAttempt.getAttemptCount(), "不同测试必须独立计次");
     }
 
@@ -786,10 +839,10 @@ public class EngStudyServiceImplTest
     private static void shouldReleaseFailedPronunciationReservation()
     {
         Harness harness = new Harness(true);
-        EngChallengeVo challenge = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null);
+        EngChallengeVo challenge = pronunciationChallenge(harness, 1L);
         for (int index = 0; index < 4; index++)
-            assertThrows(() -> harness.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "NEW",
-                    ARTICLE_ID, 1, "PRONUNCIATION:1", new byte[] {1, 2, 3})), "WAV 校验失败不得计次");
+            assertThrows(() -> harness.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "PRONUNCIATION",
+                    null, null, "PRONUNCIATION:1", new byte[] {1, 2, 3})), "WAV 校验失败不得计次");
         harness.assessmentFunction = ignored -> { throw new ServiceException("跟读评分服务繁忙，请稍后重试"); };
         for (int index = 0; index < 4; index++)
             assertThrows(() -> assessAsUser(harness, challenge, USER_ID), "第三方异常必须释放次数");
@@ -799,7 +852,7 @@ public class EngStudyServiceImplTest
         for (int attempt = 1; attempt <= 3; attempt++)
         {
             EngPronunciationAssessmentVo result = harness.service.assessPronunciation(assessmentRequest(
-                    challenge.getAttemptId(), "NEW", ARTICLE_ID, 1, "PRONUNCIATION:1", wav(false)));
+                    challenge.getAttemptId(), "PRONUNCIATION", null, null, "PRONUNCIATION:1", wav(false)));
             assertEquals(attempt, result.getAttemptCount(), "失败释放后应从正确次数继续");
         }
     }
@@ -808,7 +861,7 @@ public class EngStudyServiceImplTest
     private static void shouldPreserveOriginalErrorWhenReservationReleaseFails()
     {
         Harness clientFailure = new Harness(true);
-        EngChallengeVo clientChallenge = clientFailure.service.getChallenge("NEW", ARTICLE_ID, 1, null);
+        EngChallengeVo clientChallenge = pronunciationChallenge(clientFailure, 1L);
         clientFailure.pronunciationCache.failRelease = true;
         clientFailure.assessmentFunction = ignored -> { throw new ServiceException("原始腾讯异常"); };
         try
@@ -824,7 +877,7 @@ public class EngStudyServiceImplTest
         }
 
         Harness invalidResult = new Harness(true);
-        EngChallengeVo invalidChallenge = invalidResult.service.getChallenge("NEW", ARTICLE_ID, 1, null);
+        EngChallengeVo invalidChallenge = pronunciationChallenge(invalidResult, 1L);
         invalidResult.pronunciationCache.failRelease = true;
         invalidResult.assessmentFunction = ignored -> null;
         try
@@ -843,7 +896,7 @@ public class EngStudyServiceImplTest
     private static void shouldEnforceConcurrentPronunciationAttemptLimit() throws Exception
     {
         Harness harness = new Harness(true);
-        EngChallengeVo challenge = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null);
+        EngChallengeVo challenge = pronunciationChallenge(harness, 1L);
         CountDownLatch started = new CountDownLatch(3), release = new CountDownLatch(1);
         AtomicInteger calls = new AtomicInteger();
         harness.assessmentFunction = ignored -> {
@@ -895,7 +948,7 @@ public class EngStudyServiceImplTest
         Harness expired = assessedHarness();
         EngChallengeVo expiredChallenge = expired.lastChallenge;
         expired.pronunciationCache.removeResults();
-        assertThrows(() -> expired.service.submitChallenge(pronunciationSubmit(expiredChallenge, "NEW", ARTICLE_ID, 1)),
+        assertThrows(() -> expired.service.submitChallenge(pronunciationSubmit(expiredChallenge, "PRONUNCIATION", null, null)),
                 "过期可信结果不得提交");
 
         Harness ttl = assessedHarness();
@@ -907,13 +960,12 @@ public class EngStudyServiceImplTest
         setTestLoginUser(8L);
         try
         {
-            assertThrows(() -> crossUser.service.submitChallenge(pronunciationSubmit(userChallenge, "NEW", ARTICLE_ID, 1)),
+            assertThrows(() -> crossUser.service.submitChallenge(pronunciationSubmit(userChallenge, "PRONUNCIATION", null, null)),
                     "可信结果不得跨用户复用");
         }
         finally { setTestLoginUser(); }
 
         Harness crossTest = assessedHarness(); EngChallengeVo testChallenge = crossTest.lastChallenge;
-        crossTest.progress.put(1L, progress(1L, ARTICLE_ID, 1, 1));
         assertThrows(() -> crossTest.service.submitChallenge(pronunciationSubmit(testChallenge, "REVIEW", null, null)),
                 "可信结果不得跨测试模式复用");
     }
@@ -921,15 +973,15 @@ public class EngStudyServiceImplTest
     /** 第三方失败时不生成可信缓存，用户可以安全重试而不会被记零分。 */
     private static void shouldConvergeAssessmentClientFailureWithoutCache()
     {
-        Harness harness = new Harness(true); harness.progress.put(2L, progress(2L, 99L, 1, 1));
-        EngChallengeVo challenge = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null);
+        Harness harness = new Harness(true);
+        EngChallengeVo challenge = pronunciationChallenge(harness, 1L);
         harness.assessmentFunction = ignored -> { throw new ServiceException("跟读评分服务繁忙，请稍后重试"); };
         assertThrows(() -> assessAsUser(harness, challenge, USER_ID), "第三方异常必须收敛为业务异常");
-        assertThrows(() -> harness.service.submitChallenge(pronunciationSubmit(challenge, "NEW", ARTICLE_ID, 1)),
+        assertThrows(() -> harness.service.submitChallenge(pronunciationSubmit(challenge, "PRONUNCIATION", null, null)),
                 "第三方失败后不得残留可信评分");
 
-        Harness timeout = new Harness(true); timeout.progress.put(2L, progress(2L, 99L, 1, 1));
-        EngChallengeVo timeoutChallenge = timeout.service.getChallenge("NEW", ARTICLE_ID, 1, null);
+        Harness timeout = new Harness(true);
+        EngChallengeVo timeoutChallenge = pronunciationChallenge(timeout, 1L);
         timeout.assessmentFunction = ignored -> { throw new ServiceException("跟读评分服务繁忙，请稍后重试"); };
         assertThrows(() -> assessAsUser(timeout, timeoutChallenge, USER_ID), "超时式业务异常必须允许重试");
         assertEquals("", timeout.pronunciationCache.resultPayload(), "超时式异常不得留下评分结果");
@@ -939,7 +991,7 @@ public class EngStudyServiceImplTest
     private static void shouldRestorePersistedPronunciationOnDuplicateSubmit()
     {
         Harness harness = assessedHarness(); EngChallengeVo challenge = harness.lastChallenge;
-        EngChallengeSubmitDto request = pronunciationSubmit(challenge, "NEW", ARTICLE_ID, 1);
+        EngChallengeSubmitDto request = pronunciationSubmit(challenge, "PRONUNCIATION", null, null);
         EngChallengeResultVo first = harness.service.submitChallenge(request);
         harness.pronunciationCache.removeResults();
         EngChallengeResultVo duplicate = harness.service.submitChallenge(request);
@@ -947,6 +999,27 @@ public class EngStudyServiceImplTest
         assertEquals(first.getPronunciationPassedCount(), duplicate.getPronunciationPassedCount(), "重复提交应恢复跟读合格数");
         assertEquals(first.getWordResults().get(0).getPronunciationScore(),
                 duplicate.getWordResults().get(0).getPronunciationScore(), "重复提交应恢复单词跟读分");
+        assertEquals(2L, duplicate.getPronunciationCoin(), "重复提交应从持久化明细恢复发音金币");
+        assertEquals(first.getCoinReward(), duplicate.getCoinReward(), "重复提交应恢复包含发音金币的总奖励");
+        assertEquals(first.getCoinReward(), harness.balance, "重复提交不得再次发放金币");
+    }
+
+    /** 历史记录即使保存了合格发音，也不得回放当时未计入总奖励的发音金币。 */
+    private static void shouldNotInventPronunciationCoinForHistoricalAttempt()
+    {
+        Harness harness = assessedHarness(); EngChallengeVo challenge = harness.lastChallenge;
+        EngChallengeSubmitDto request = pronunciationSubmit(challenge, "PRONUNCIATION", null, null);
+        harness.service.submitChallenge(request);
+        EngStudyRecord stored = harness.records.get(challenge.getAttemptId());
+        long historicalReward = stored.getMilestoneCoin() + stored.getReviewCoin();
+        stored.setCoinReward(historicalReward); harness.balance = historicalReward;
+        harness.pronunciationCache.removeResults();
+
+        EngChallengeResultVo duplicate = harness.service.submitChallenge(request);
+        assertEquals(1, duplicate.getPronunciationPassedCount(), "历史记录仍应恢复已保存的发音合格状态");
+        assertEquals(0L, duplicate.getPronunciationCoin(), "历史总奖励未包含发音币时不得虚假展示奖励");
+        assertEquals(historicalReward, duplicate.getCoinReward(), "历史总奖励必须保持原持久化值");
+        assertEquals(historicalReward, harness.balance, "重放历史记录不得改变钱包余额");
     }
 
     /** Servlet 对业务允许的录音保留在内存，同时保留原有全局上传上限。 */
@@ -963,65 +1036,67 @@ public class EngStudyServiceImplTest
     /** 伪造、跨题题目标识和空音频必须在调用评分客户端前拒绝。 */
     private static void shouldRejectForgedQuestionAndEmptyAudio()
     {
-        Harness harness = new Harness(true); harness.progress.put(2L, progress(2L, 99L, 1, 1));
-        EngChallengeVo challenge = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null);
-        assertThrows(() -> harness.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "NEW",
-                ARTICLE_ID, 1, "PRONUNCIATION:999", wav(false))), "伪造跟读题必须拒绝");
-        assertThrows(() -> harness.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "NEW",
-                ARTICLE_ID, 1, "PRONUNCIATION:2", wav(false))), "其他单词的跟读题不得跨题复用");
-        assertThrows(() -> harness.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "NEW",
-                ARTICLE_ID, 1, "WORD_TO_CN:1", wav(false))), "知识题不得复用跟读接口");
-        assertThrows(() -> harness.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "NEW",
-                ARTICLE_ID, 1, "PRONUNCIATION:1", new byte[0])), "空音频必须拒绝");
+        Harness harness = new Harness(true);
+        EngChallengeVo challenge = pronunciationChallenge(harness, 1L);
+        assertThrows(() -> harness.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "PRONUNCIATION",
+                null, null, "PRONUNCIATION:999", wav(false))), "伪造跟读题必须拒绝");
+        assertThrows(() -> harness.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "PRONUNCIATION",
+                null, null, "PRONUNCIATION:2", wav(false))), "其他单词的跟读题不得跨题复用");
+        assertThrows(() -> harness.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "PRONUNCIATION",
+                null, null, "WORD_TO_CN:1", wav(false))), "知识题不得复用跟读接口");
+        assertThrows(() -> harness.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "PRONUNCIATION",
+                null, null, "PRONUNCIATION:1", new byte[0])), "空音频必须拒绝");
     }
 
     /** 同模式下缓存也必须绑定文章和关卡，不能换测试范围后复用。 */
     private static void shouldRejectSameModeCrossArticleAndLevel()
     {
         Harness article = assessedHarness();
-        assertThrows(() -> article.service.submitChallenge(pronunciationSubmit(article.lastChallenge, "NEW", 11L, 1)),
+        assertThrows(() -> article.service.submitChallenge(pronunciationSubmit(article.lastChallenge,
+                "PRONUNCIATION", 11L, null)),
                 "同模式跟读评分不得跨文章复用");
 
-        Harness level = new Harness(true); EngUserWordProgress learned = progress(1L, ARTICLE_ID, 1, 1);
-        level.progress.put(1L, learned);
-        EngChallengeVo challenge = level.service.getChallenge("REVIEW", null, null, List.of(1L));
-        level.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "REVIEW", null, null,
+        Harness level = new Harness(true);
+        EngChallengeVo challenge = pronunciationChallenge(level, 1L);
+        level.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "PRONUNCIATION", null, null,
                 "PRONUNCIATION:1", wav(false)));
-        assertThrows(() -> level.service.submitChallenge(pronunciationSubmit(challenge, "REVIEW", null, 1)),
+        assertThrows(() -> level.service.submitChallenge(pronunciationSubmit(challenge, "PRONUNCIATION", null, 1)),
                 "同模式跟读评分不得跨关卡参数复用");
     }
 
     /** 多词跟读应分别计分，并正确处理全部合格和部分合格。 */
     private static void shouldScoreMultiplePronunciationsIndependently()
     {
-        Harness all = new Harness(true); EngChallengeVo allChallenge = all.service.getChallenge("NEW", ARTICLE_ID, 1, null);
+        Harness all = new Harness(true); EngChallengeVo allChallenge = pronunciationChallenge(all, 1L, 2L);
         all.assessment = assessment(100, 100D, 0);
-        all.service.assessPronunciation(assessmentRequest(allChallenge.getAttemptId(), "NEW", ARTICLE_ID, 1,
+        all.service.assessPronunciation(assessmentRequest(allChallenge.getAttemptId(), "PRONUNCIATION", null, null,
                 "PRONUNCIATION:1", wav(false)));
         all.assessment = assessment(60, 60D, 0);
-        all.service.assessPronunciation(assessmentRequest(allChallenge.getAttemptId(), "NEW", ARTICLE_ID, 1,
+        all.service.assessPronunciation(assessmentRequest(allChallenge.getAttemptId(), "PRONUNCIATION", null, null,
                 "PRONUNCIATION:2", wav(false)));
-        EngChallengeSubmitDto allRequest = request(allChallenge.getAttemptId(), "NEW", ARTICLE_ID, 1);
-        allRequest.setAnswers(perfectAppleAndCatAnswers());
+        EngChallengeSubmitDto allRequest = pronunciationSubmit(allChallenge, "PRONUNCIATION", null, null);
         EngChallengeResultVo allResult = all.service.submitChallenge(allRequest);
         assertEquals(2, allResult.getPronunciationPassedCount(), "两词均达标时都应计为合格");
         assertEquals(80, allResult.getPronunciationAverageScore(), "多词平均跟读分应正确计算");
-        assertEquals(100, allResult.getScore(), "知识全对且跟读全部合格应为100分");
+        assertEquals(0, allResult.getScore(), "多词跟读不得生成知识分");
+        assertEquals(4L, allResult.getPronunciationCoin(), "两词发音合格应累计奖励4金币");
 
-        Harness partial = new Harness(true); EngChallengeVo partialChallenge = partial.service.getChallenge("NEW", ARTICLE_ID, 1, null);
+        Harness partial = new Harness(true); EngChallengeVo partialChallenge = pronunciationChallenge(partial, 1L, 2L);
         partial.assessment = assessment(100, 100D, 0);
-        partial.service.assessPronunciation(assessmentRequest(partialChallenge.getAttemptId(), "NEW", ARTICLE_ID, 1,
+        partial.service.assessPronunciation(assessmentRequest(partialChallenge.getAttemptId(), "PRONUNCIATION", null, null,
                 "PRONUNCIATION:1", wav(false)));
         partial.assessment = assessment(100, 100D, 3);
-        partial.service.assessPronunciation(assessmentRequest(partialChallenge.getAttemptId(), "NEW", ARTICLE_ID, 1,
+        partial.service.assessPronunciation(assessmentRequest(partialChallenge.getAttemptId(), "PRONUNCIATION", null, null,
                 "PRONUNCIATION:2", wav(false)));
-        EngChallengeSubmitDto partialRequest = request(partialChallenge.getAttemptId(), "NEW", ARTICLE_ID, 1);
-        partialRequest.setAnswers(perfectAppleAndCatAnswers());
+        EngChallengeSubmitDto partialRequest = pronunciationSubmit(partialChallenge, "PRONUNCIATION", null, null);
         EngChallengeResultVo partialResult = partial.service.submitChallenge(partialRequest);
         assertEquals(1, partialResult.getPronunciationPassedCount(), "部分合格时只计匹配且达标的单词");
-        assertEquals(95, partialResult.getScore(), "知识全对且二分之一跟读合格应为95分");
-        assertEquals(List.of(true, false), partialResult.getWordResults().stream()
-                .map(EngChallengeWordResultVo::getPronunciationPassed).toList(), "单词级跟读状态必须分别保存");
+        assertEquals(0, partialResult.getScore(), "部分跟读合格也不得生成知识分");
+        assertEquals(2L, partialResult.getPronunciationCoin(), "仅一个单词发音合格应奖励2金币");
+        Map<Long, Boolean> passedByWord = partialResult.getWordResults().stream().collect(Collectors.toMap(
+                EngChallengeWordResultVo::getWordId, EngChallengeWordResultVo::getPronunciationPassed));
+        assertEquals(Boolean.TRUE, passedByWord.get(1L), "第一个单词必须保存合格状态");
+        assertEquals(Boolean.FALSE, passedByWord.get(2L), "第二个单词必须保存不合格状态");
     }
 
     private static EngChallengeSubmitDto request(String attemptId, String mode, Long articleId, Integer levelNo)
@@ -1072,20 +1147,6 @@ public class EngStudyServiceImplTest
         return answer.toString();
     }
 
-    private static List<EngChallengeAnswerDto> withPronunciation(List<EngChallengeAnswerDto> knowledge)
-    {
-        List<EngChallengeAnswerDto> result = new ArrayList<>(knowledge);
-        result.add(answer("PRONUNCIATION:1", "ASSESSED")); return result;
-    }
-
-    private static List<EngChallengeAnswerDto> perfectAppleAndCatAnswers()
-    {
-        List<EngChallengeAnswerDto> result = new ArrayList<>(perfectAppleAnswers());
-        result.add(answer("PRONUNCIATION:1", "ASSESSED"));
-        result.add(answer("WORD_TO_CN:2", "猫")); result.add(answer("CN_TO_WORD:2", "cat"));
-        result.add(answer("PRONUNCIATION:2", "ASSESSED")); return result;
-    }
-
     private static List<EngChallengeAnswerDto> perfectAppleAndCatKnowledgeAnswers()
     {
         List<EngChallengeAnswerDto> result = new ArrayList<>(perfectAppleAnswers());
@@ -1102,9 +1163,17 @@ public class EngStudyServiceImplTest
 
     private static Harness assessedHarness()
     {
-        Harness harness = new Harness(true); harness.progress.put(2L, progress(2L, 99L, 1, 1));
-        harness.lastChallenge = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null);
+        Harness harness = new Harness(true);
+        harness.lastChallenge = pronunciationChallenge(harness, 1L);
         assessAsUser(harness, harness.lastChallenge, USER_ID); return harness;
+    }
+
+    /** 用已学词构建独立跟读挑战。 */
+    private static EngChallengeVo pronunciationChallenge(Harness harness, Long... wordIds)
+    {
+        for (Long wordId : wordIds)
+            harness.progress.putIfAbsent(wordId, progress(wordId, ARTICLE_ID, 1, 1));
+        return harness.service.getChallenge("PRONUNCIATION", null, null, Arrays.asList(wordIds), true);
     }
 
     private static void assessAsUser(Harness harness, EngChallengeVo challenge, long userId)
@@ -1113,7 +1182,8 @@ public class EngStudyServiceImplTest
         setTestLoginUser(userId);
         try
         {
-            harness.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), "NEW", ARTICLE_ID, 1,
+            harness.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(), challenge.getMode(),
+                    challenge.getArticleId(), challenge.getLevelNo(),
                     "PRONUNCIATION:1", wav(false)));
         }
         finally
@@ -1126,7 +1196,19 @@ public class EngStudyServiceImplTest
             Long articleId, Integer levelNo)
     {
         EngChallengeSubmitDto request = request(challenge.getAttemptId(), mode, articleId, levelNo);
-        request.setAnswers(withPronunciation(perfectAppleAnswers())); return request;
+        request.setAnswers(pronunciationAnswers(challenge, "ASSESSED")); return request;
+    }
+
+    private static List<EngChallengeAnswerDto> pronunciationAnswers(EngChallengeVo challenge, String marker)
+    {
+        return challenge.getQuestions().stream()
+                .map(question -> answer(question.getQuestionId(), marker)).toList();
+    }
+
+    private static void assertInvalidAudio(Harness harness, EngChallengeVo challenge, byte[] audio, String message)
+    {
+        assertThrows(() -> harness.service.assessPronunciation(assessmentRequest(challenge.getAttemptId(),
+                "PRONUNCIATION", null, null, "PRONUNCIATION:1", audio)), message);
     }
 
     private static EngPronunciationAssessDto assessmentRequest(String attemptId, String mode, Long articleId,
@@ -1173,6 +1255,20 @@ public class EngStudyServiceImplTest
         answer.setAnswer(value); return answer;
     }
 
+    private static String testAnswerDigest(String attemptId, String questionId, String answer)
+    {
+        String normalized = answer == null ? "" : answer.trim().toLowerCase(Locale.ROOT);
+        try
+        {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest((attemptId + '\0' + questionId + '\0' + normalized).getBytes(StandardCharsets.UTF_8)));
+        }
+        catch (NoSuchAlgorithmException exception)
+        {
+            throw new IllegalStateException(exception);
+        }
+    }
+
     private static EngUserWordProgress progress(Long wordId, Long firstArticleId, Integer firstLevelNo, int learned)
     {
         EngUserWordProgress progress = new EngUserWordProgress(); progress.setId(wordId); progress.setUserId(USER_ID);
@@ -1187,7 +1283,6 @@ public class EngStudyServiceImplTest
     {
         private final Map<Long, EngUserWordProgress> progress = new LinkedHashMap<>();
         private final Map<Integer, EngArticleLevelProgress> levelProgress = new LinkedHashMap<>();
-        private final Map<Long, EngUserChallengeSetting> challengeSettings = new HashMap<>();
         private final Map<String, EngStudyRecord> records = new HashMap<>();
         private final List<EngStudyRecordWord> details = new ArrayList<>();
         private final AtomicInteger detailWrites = new AtomicInteger();
@@ -1257,23 +1352,8 @@ public class EngStudyServiceImplTest
                     proxy(IEngIcibaSentenceService.class, (method, args) -> List.of()), wordService,
                     recordMapper(), recordWordMapper(), walletMapper(),
                     wrongWordMapper(),
-                    wordProgressMapper(), levelProgressMapper(), articleWordMapper(), challengeSettingMapper(), properties, client,
+                    wordProgressMapper(), levelProgressMapper(), articleWordMapper(), properties, client,
                     pronunciationCache);
-        }
-
-        private EngUserChallengeSettingMapper challengeSettingMapper()
-        {
-            return proxy(EngUserChallengeSettingMapper.class, (method, args) -> {
-                if ("selectByUserId".equals(method)) return challengeSettings.get(args[0]);
-                if ("upsert".equals(method))
-                {
-                    EngUserChallengeSetting incoming = (EngUserChallengeSetting) args[0];
-                    EngUserChallengeSetting stored = challengeSettings.get(incoming.getUserId());
-                    incoming.setSettingVersion(stored == null ? 1L : stored.getSettingVersion() + 1L);
-                    challengeSettings.put(incoming.getUserId(), incoming); return 1;
-                }
-                return defaultValue(returnType(EngUserChallengeSettingMapper.class, method));
-            });
         }
 
         private EngStudyRecordMapper recordMapper()
