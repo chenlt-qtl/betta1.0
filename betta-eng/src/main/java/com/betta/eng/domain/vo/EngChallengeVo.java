@@ -19,6 +19,10 @@ public class EngChallengeVo {
     private List<EngWordVo> words;
     /** 本次挑战题目集合。 */
     private List<EngChallengeQuestionVo> questions;
-    /** 本次测试是否包含跟读评分。 */
+    /** 当前访问环境是否支持启动跟读评分。 */
     private Boolean pronunciationEnabled;
+    /** 当前关卡尚未学习的单词数。 */
+    private Integer newWordCount;
+    /** 当前关卡是否还有生词。 */
+    private Boolean hasNewWords;
 }

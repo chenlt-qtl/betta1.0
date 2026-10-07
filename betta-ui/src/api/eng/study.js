@@ -24,29 +24,12 @@ export function getReviewOverview() {
   })
 }
 
-// 获取新词、复习或拼写挑战题目；不返回明文正确答案，仅返回用于前端判题的答案摘要
+// 获取普通、复习、跟读或拼写挑战题目；不返回明文正确答案，仅返回用于前端判题的答案摘要
 export function getStudyChallenge(query) {
   return request({
     url: '/eng/study/challenge',
     method: 'get',
     params: query
-  })
-}
-
-// 查询当前用户的普通单词测试题型设置
-export function getChallengeSettings() {
-  return request({
-    url: '/eng/study/challenge/settings',
-    method: 'get'
-  })
-}
-
-// 保存当前用户的普通单词测试题型设置
-export function updateChallengeSettings(data) {
-  return request({
-    url: '/eng/study/challenge/settings',
-    method: 'put',
-    data
   })
 }
 

@@ -13,9 +13,20 @@
       </el-table>
       <div class="toolbar">
         <button class="block-button" @click="$emit('back')">返回地图</button>
-        <button class="block-button" @click="startReview">
-          {{ wordList.length ? '开始学习' : '直接测试' }}
-        </button>
+        <button v-if="hasNewWords" class="block-button primary-action" @click="startReview">开始学习</button>
+        <template v-else>
+          <button class="block-button primary-action" @click="$emit('test')">开始测试</button>
+          <el-tooltip :content="pronunciationDisabledReason" placement="top" :disabled="pronunciationAvailable">
+            <span class="button-wrapper">
+              <button class="block-button" :disabled="!pronunciationAvailable" @click="$emit('pronunciation')">跟读测试</button>
+            </span>
+          </el-tooltip>
+          <el-tooltip content="本关没有不少于 4 个字符的纯英文单词" placement="top" :disabled="spellingAvailable">
+            <span class="button-wrapper">
+              <button class="block-button" :disabled="!spellingAvailable" @click="$emit('spelling')">拼写测试</button>
+            </span>
+          </el-tooltip>
+        </template>
       </div>
     </div>
 
@@ -66,6 +77,14 @@ export default {
     wordList: {
       type: Array,
       default: () => []
+    },
+    newWordCount: {
+      type: Number,
+      default: 0
+    },
+    pronunciationEnabled: {
+      type: Boolean,
+      default: false
     }
   },
   data() {
@@ -75,6 +94,23 @@ export default {
     }
   },
   computed: {
+    hasNewWords() {
+      return this.newWordCount > 0
+    },
+    httpsAccess() {
+      return typeof window !== 'undefined' && window.location && window.location.protocol === 'https:'
+    },
+    pronunciationAvailable() {
+      return this.httpsAccess && this.pronunciationEnabled
+    },
+    pronunciationDisabledReason() {
+      return this.httpsAccess
+        ? '跟读评分服务未启用或配置不完整'
+        : '当前使用 HTTP 访问，请改用 HTTPS 后进行跟读测试'
+    },
+    spellingAvailable() {
+      return this.wordList.some(word => /^[A-Za-z]{4,}$/.test(String(word.wordName || '')))
+    },
     currentWord() {
       return this.wordList[this.index] || {}
     },
@@ -133,7 +169,20 @@ export default {
 
   .table { overflow-y: auto; }
 
-  .toolbar { flex: none; }
+  .toolbar {
+    flex: none;
+    flex-wrap: wrap;
+  }
+
+  .button-wrapper {
+    display: inline-flex;
+  }
+
+  .primary-action {
+    color: #fff;
+    border-color: #67c23a;
+    background: #67c23a;
+  }
 
   .word-container {
     color: #333;
@@ -194,6 +243,22 @@ export default {
 
   .icon-button {
     min-width: 52px;
+  }
+}
+
+@media (max-width: 600px) {
+  .test-step1 .toolbar {
+    flex-wrap: wrap;
+  }
+
+  .test-step1 .toolbar .block-button,
+  .test-step1 .button-wrapper {
+    flex: 1 1 calc(50% - 12px);
+    min-width: 0;
+  }
+
+  .test-step1 .button-wrapper .block-button {
+    width: 100%;
   }
 }
 </style>

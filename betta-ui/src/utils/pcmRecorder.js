@@ -95,6 +95,22 @@ export default class PcmRecorder {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext
     if (!AudioContextClass) throw recorderError('UNSUPPORTED', '当前浏览器不支持音频采集')
 
+    // 必须在点击事件的调用链内创建并恢复上下文，避免等待授权后丢失浏览器的用户激活状态。
+    try {
+      this.audioContext = new AudioContextClass()
+    } catch (error) {
+      throw recorderError('DEVICE_ERROR', '麦克风初始化失败，请重试')
+    }
+    let initialResumeResult = Promise.resolve(null)
+    try {
+      if (this.audioContext.state === 'suspended') {
+        initialResumeResult = this.audioContext.resume().then(() => null, error => error)
+      }
+    } catch (error) {
+      await this.release()
+      throw recorderError('CONTEXT_SUSPENDED', '麦克风未能开始采集，请重试或跳过本题')
+    }
+
     try {
       this.stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -105,6 +121,7 @@ export default class PcmRecorder {
         }
       })
     } catch (error) {
+      await this.release()
       const denied = error && ['NotAllowedError', 'PermissionDeniedError'].includes(error.name)
       throw recorderError(denied ? 'PERMISSION_DENIED' : 'DEVICE_ERROR', denied
         ? '未获得麦克风权限，请在浏览器设置中允许后重试'
@@ -112,8 +129,8 @@ export default class PcmRecorder {
     }
 
     try {
-      this.audioContext = new AudioContextClass()
-      if (this.audioContext.state === 'suspended') await this.audioContext.resume()
+      const initialResumeError = await initialResumeResult
+      if (initialResumeError && this.audioContext.state !== 'running') throw initialResumeError
       this.source = this.audioContext.createMediaStreamSource(this.stream)
       this.processor = this.audioContext.createScriptProcessor(4096, 1, 1)
       this.processor.onaudioprocess = event => {
@@ -124,6 +141,10 @@ export default class PcmRecorder {
       }
       this.source.connect(this.processor)
       this.processor.connect(this.audioContext.destination)
+      if (this.audioContext.state !== 'running') await this.audioContext.resume()
+      if (this.audioContext.state !== 'running') {
+        throw recorderError('CONTEXT_SUSPENDED', '麦克风未能开始采集，请重试或跳过本题')
+      }
       this.startedAt = Date.now()
       this.recording = true
       this.autoStopTimer = setTimeout(() => {
@@ -131,6 +152,7 @@ export default class PcmRecorder {
       }, this.maxDurationMs)
     } catch (error) {
       await this.cancel()
+      if (error && error.code) throw error
       throw recorderError('DEVICE_ERROR', '麦克风初始化失败，请重试')
     }
   }
@@ -142,6 +164,9 @@ export default class PcmRecorder {
     const elapsedMs = Date.now() - this.startedAt
     const samples = mergeChunks(this.chunks, this.sampleLength)
     await this.release()
+    if (elapsedMs >= MIN_DURATION_MS && samples.length === 0) {
+      throw recorderError('CAPTURE_ERROR', '未采集到有效录音，请重试或跳过本题')
+    }
     if (elapsedMs < MIN_DURATION_MS || samples.length === 0) {
       throw recorderError('TOO_SHORT', '录音时间太短，请至少朗读 0.3 秒')
     }

@@ -9,7 +9,17 @@
       <el-empty v-if="!loading && questionList.length === 0" :description="emptyDescription">
         <el-button type="primary" @click="backToLearning">返回学习</el-button>
       </el-empty>
-      <step1 v-else-if="step === 1" :word-list="wordList" @back="backToLearning" @next="toStep2" />
+      <step1
+        v-else-if="step === 1"
+        :word-list="wordList"
+        :new-word-count="newWordCount"
+        :pronunciation-enabled="challenge.pronunciationEnabled === true"
+        @back="backToLearning"
+        @next="toStep2"
+        @test="toStep2"
+        @pronunciation="startAlternativeMode('PRONUNCIATION')"
+        @spelling="startAlternativeMode('SPELLING')"
+      />
       <step2
         v-else-if="step === 2"
         ref="questions"
@@ -25,6 +35,7 @@
       <step3
         v-else-if="step === 3"
         :result="result"
+        :return-to-article="Boolean(returnArticleId)"
         @restart="restart"
         @next="goNextLevel"
         @study="backToLearning"
@@ -60,9 +71,11 @@ export default {
   computed: {
     mode() { return String(this.$route.query.mode || '').toUpperCase() },
     isReview() { return this.mode === 'REVIEW' },
+    isPronunciation() { return this.mode === 'PRONUNCIATION' },
     isSpelling() { return this.mode === 'SPELLING' },
-    isWordSelectionMode() { return this.isReview || this.isSpelling },
+    isWordSelectionMode() { return this.isReview || this.isPronunciation || this.isSpelling },
     modeLabel() {
+      if (this.isPronunciation) return '跟读测试'
       if (this.isSpelling) return '拼写测试'
       return this.isReview ? '单词复习' : `第 ${this.challenge.levelNo || this.levelNo} 关`
     },
@@ -76,13 +89,22 @@ export default {
       return Number.isInteger(value) && value > 0 ? value : null
     },
     wordIds() { return this.isWordSelectionMode ? String(this.$route.query.wordIds || '') : '' },
+    returnArticleId() {
+      const value = this.$route.query.returnArticleId
+      return value == null || value === '' ? null : String(value)
+    },
+    newWordCount() {
+      const count = Number(this.challenge.newWordCount)
+      return Number.isInteger(count) && count > 0 ? count : 0
+    },
     emptyDescription() {
+      if (this.isPronunciation) return '当前没有可进行跟读测试的单词'
       if (this.isSpelling) return '当前没有可进行拼写测试的单词'
       return this.isReview ? '当前没有可复习的单词' : '本关没有需要学习的新词，请返回地图继续'
     }
   },
   created() {
-    if (!['NEW', 'REVIEW', 'SPELLING'].includes(this.mode)) {
+    if (!['NEW', 'REVIEW', 'PRONUNCIATION', 'SPELLING'].includes(this.mode)) {
       const articleId = this.$route.params && this.$route.params.articleId
       this.$router.replace(articleId ? '/eng/study/levels/' + articleId : '/eng/study/index')
       return
@@ -119,6 +141,25 @@ export default {
       }).finally(() => { this.loading = false })
     },
     toStep2() { this.step = 2 },
+    /** 已学关卡使用当前词汇启动独立跟读或拼写测试。 */
+    startAlternativeMode(mode) {
+      const sourceArticleId = this.articleId
+      const words = mode === 'SPELLING'
+        ? this.wordList.filter(word => /^[A-Za-z]{4,}$/.test(String(word.wordName || '')))
+        : this.wordList
+      const wordIds = words
+        .map(word => word.wordId != null ? word.wordId : word.id)
+        .filter(id => id != null)
+      if (!sourceArticleId || !wordIds.length) return
+      this.$router.push({
+        path: '/eng/study/challenge/review',
+        query: {
+          mode,
+          wordIds: wordIds.map(String).join(','),
+          returnArticleId: String(sourceArticleId)
+        }
+      }).then(() => this.loadTest())
+    },
     submitAnswers(answers) {
       if (this.submitting) return
       this.submitting = true
@@ -147,6 +188,10 @@ export default {
       }).then(() => this.loadTest())
     },
     backToLearning() {
+      if (this.returnArticleId) {
+        this.$router.push('/eng/study/levels/' + this.returnArticleId)
+        return
+      }
       this.$router.push(this.isWordSelectionMode ? '/eng/study/review' : '/eng/study/levels/' + this.articleId)
     },
     openReview() { this.$router.push('/eng/study/review') },

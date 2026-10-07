@@ -79,14 +79,15 @@
           </template>
         </el-table-column>
         <el-table-column label="积分得分" align="center" prop="score" width="100">
-          <template slot-scope="scope">{{ scope.row.score || 0 }}</template>
+          <template slot-scope="scope">{{ recordMode(scope.row) === 'PRONUNCIATION' ? '-' : (scope.row.score || 0) }}</template>
         </el-table-column>
         <el-table-column label="答对/总数" align="center" width="110">
-          <template slot-scope="scope">{{ scope.row.correctCount || 0 }}/{{ scope.row.totalCount || 0 }}</template>
+          <template slot-scope="scope">{{ recordMode(scope.row) === 'PRONUNCIATION' ? '-' : ((scope.row.correctCount || 0) + '/' + (scope.row.totalCount || 0)) }}</template>
         </el-table-column>
         <el-table-column label="星级" align="center" width="100">
           <template slot-scope="scope">
-            <span class="history-stars">{{ scope.row.stars || 0 }}★</span>
+            <span v-if="recordMode(scope.row) === 'PRONUNCIATION'">-</span>
+            <span v-else class="history-stars">{{ scope.row.stars || 0 }}★</span>
           </template>
         </el-table-column>
         <el-table-column label="金币奖励" align="center" prop="coinReward" width="100">
@@ -217,17 +218,19 @@ export default {
       return String(record.studyMode || record.mode || 'NEW').toUpperCase()
     },
     recordModeLabel(record) {
-      const labels = { NEW: '新词', REVIEW: '复习', SPELLING: '拼写' }
+      const labels = { NEW: '新词', REVIEW: '复习', PRONUNCIATION: '跟读', SPELLING: '拼写' }
       return labels[this.recordMode(record)] || '新词'
     },
     recordScopeLabel(record) {
       const mode = this.recordMode(record)
       if (mode === 'REVIEW') return '全局复习'
+      if (mode === 'PRONUNCIATION') return '跟读测试'
       if (mode === 'SPELLING') return '全局拼写测试'
       return record.articleTitle || ('文章 #' + record.articleId)
     },
     rewardDetailText(record) {
       const milestoneCoin = record.milestoneCoin || 0
+      if (this.recordMode(record) === 'PRONUNCIATION') return '发音奖励 ' + (record.pronunciationCoin || record.coinReward || 0)
       if (this.recordMode(record) === 'SPELLING') return '拼写里程碑 ' + milestoneCoin
       return '里程碑 ' + milestoneCoin + ' / 复习 ' + (record.reviewCoin || 0)
     }

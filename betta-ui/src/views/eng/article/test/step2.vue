@@ -123,6 +123,17 @@
         >
           {{ isLastQuestion ? '提交' : '下一题' }}
         </el-button>
+        <el-button
+          v-if="pronunciationSkippable"
+          type="warning"
+          plain
+          round
+          :loading="submitting"
+          :disabled="pronunciationBusy || submitting"
+          @click="skipPronunciation"
+        >
+          {{ isLastQuestion ? '跳过并提交' : '跳过本题' }}
+        </el-button>
       </div>
     </section>
 
@@ -286,6 +297,9 @@ export default {
     },
     pronunciationBusy() {
       return ['preparing', 'recording', 'stopping', 'assessing'].includes(this.currentPronunciationState.status)
+    },
+    pronunciationSkippable() {
+      return this.currentPronunciationState.status === 'error' && this.currentPronunciationState.allowSkip === true
     },
     recordingSeconds() {
       return (this.recordingElapsedMs / 1000).toFixed(1)
@@ -529,7 +543,7 @@ export default {
       return this.currentFillOptionIndexes.includes(optionIndex) || !this.currentFillLetters.includes('')
     },
     setPronunciationState(questionId, state) {
-      this.$set(this.pronunciationStates, questionId, Object.assign({ status: 'idle', error: '' }, state))
+      this.$set(this.pronunciationStates, questionId, Object.assign({ status: 'idle', error: '', allowSkip: false }, state))
     },
     async startPronunciationRecording() {
       const question = this.currentQuestion
@@ -559,7 +573,11 @@ export default {
         this.setPronunciationState(questionId, { status: 'recording', error: '' })
       } catch (error) {
         if (this.recorder === recorder) this.recorder = null
-        this.setPronunciationState(questionId, { status: 'error', error: this.recordingErrorMessage(error) })
+        this.setPronunciationState(questionId, {
+          status: 'error',
+          error: this.recordingErrorMessage(error),
+          allowSkip: true
+        })
       }
     },
     async finishPronunciationRecording() {
@@ -576,7 +594,12 @@ export default {
         await this.assessPronunciation(question, recording.blob)
       } catch (error) {
         if (this.recorder === recorder) this.recorder = null
-        this.setPronunciationState(questionId, { status: 'error', error: this.recordingErrorMessage(error) })
+        this.setPronunciationState(questionId, {
+          status: 'error',
+          error: this.recordingErrorMessage(error),
+          // 主动过早停止属于可重试输入，初始化或采集异常才允许跳过。
+          allowSkip: !error || error.code !== 'TOO_SHORT'
+        })
       }
     },
     async assessPronunciation(question, audio) {
@@ -603,7 +626,11 @@ export default {
         this.setPronunciationState(questionId, { status: 'success', error: '' })
       } catch (error) {
         this.$set(this.answers, questionId, '')
-        this.setPronunciationState(questionId, { status: 'error', error: this.assessmentErrorMessage(error) })
+        this.setPronunciationState(questionId, {
+          status: 'error',
+          error: this.assessmentErrorMessage(error),
+          allowSkip: true
+        })
       }
     },
     clearRecordingTimer() {
@@ -659,6 +686,19 @@ export default {
     assessmentErrorMessage(error) {
       const responseMessage = error && error.response && error.response.data && error.response.data.msg
       return responseMessage || (error && error.message) || '发音评分失败，请重新录制'
+    },
+    /** 仅录音或评分异常时允许跳过；跳过不伪造评分结果。 */
+    async skipPronunciation() {
+      const question = this.currentQuestion
+      if (!question || question.type !== 'PRONUNCIATION' || !this.pronunciationSkippable) return
+      const recorder = this.recorder
+      this.recorder = null
+      this.clearRecordingTimer()
+      if (recorder) await recorder.cancel()
+      this.$set(this.answers, question.questionId, 'SKIPPED')
+      this.$delete(this.pronunciationResults, question.questionId)
+      this.setPronunciationState(question.questionId, { status: 'skipped', error: '' })
+      this.advanceOrComplete()
     },
     scoreText(value) {
       const score = Number(value)
