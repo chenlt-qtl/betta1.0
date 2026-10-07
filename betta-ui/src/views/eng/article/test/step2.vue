@@ -401,9 +401,12 @@ export default {
       this.checkAnswer(this.currentQuestion)
     },
     answerClass(value) {
-      if (!this.currentCheckResult || this.currentCheckResult.loading) return ''
+      const answer = this.answers[this.currentQuestion.questionId]
+      const selected = this.hasAnswer(answer) && String(value) === String(answer)
+      // 服务端判题期间先反馈当前选择，避免网络延迟让用户误以为点击未生效。
+      if (!this.currentCheckResult || this.currentCheckResult.loading) return selected ? 'selected' : ''
       if (String(value) === String(this.currentCheckResult.correctAnswer)) return 'right'
-      if (String(value) === String(this.answers[this.currentQuestion.questionId])) return 'wrong'
+      if (selected) return 'wrong'
       return ''
     },
     hasAnswer(answer) {
@@ -866,6 +869,12 @@ export default {
 
   .right {
     background: rgba(46, 204, 113, 0.25);
+  }
+
+  .answer .selected {
+    border-color: rgba(64, 158, 255, .65);
+    color: #409eff;
+    background: rgba(64, 158, 255, .12);
   }
 
   .wrong {
