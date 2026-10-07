@@ -18,6 +18,8 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.CountDownLatch;
@@ -52,6 +54,7 @@ public class EngStudyServiceImplTest
             shouldRejectInvalidSettingsAndStaleChallenge();
             shouldDisablePronunciationForInsecureAccess();
             shouldSeparateOrdinaryAndSpellingQuestions();
+            shouldExposeSaltedAnswerDigestsAndKeepCheckFallback();
             shouldExposeAndEnforceSpellingEligibility();
             shouldKeepSpellingDefinitionStableWithinAttempt();
             shouldRewardSpellingMilestonesOnlyOnce();
@@ -259,6 +262,47 @@ public class EngStudyServiceImplTest
         assertTrue(spelling.getQuestions().stream().allMatch(item -> "SENTENCE_FILL".equals(item.getType())
                 && Integer.valueOf(4).equals(item.getAnswerLength())), "拼写模式只能生成四字母挖空题");
         assertTrue(Boolean.FALSE.equals(spelling.getPronunciationEnabled()), "拼写模式不得启用跟读题");
+    }
+
+    /** 非跟读题返回当次测试加盐摘要，跟读题不返回，旧单题接口仍可回退。 */
+    private static void shouldExposeSaltedAnswerDigestsAndKeepCheckFallback()
+    {
+        Harness harness = new Harness(true); harness.progress.put(2L, progress(2L, 99L, 1, 1));
+        EngChallengeVo first = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null);
+        Map<String, String> answers = Map.of("WORD_TO_CN:1", "苹果", "CN_TO_WORD:1", "apple",
+                "SENTENCE_CHOICE:1", "apples");
+        for (EngChallengeQuestionVo question : first.getQuestions())
+        {
+            if ("PRONUNCIATION".equals(question.getType()))
+            {
+                assertEquals(null, question.getAnswerDigest(), "跟读题不得返回答案摘要");
+                continue;
+            }
+            String expected = testAnswerDigest(first.getAttemptId(), question.getQuestionId(),
+                    answers.get(question.getQuestionId()));
+            assertTrue(question.getAnswerDigest() != null && question.getAnswerDigest().matches("[0-9a-f]{64}"),
+                    "知识题必须返回64位小写十六进制摘要");
+            assertEquals(expected, question.getAnswerDigest(), "规范正确答案必须命中摘要");
+            assertTrue(!testAnswerDigest(first.getAttemptId(), question.getQuestionId(), "wrong")
+                    .equals(question.getAnswerDigest()), "错误答案不得命中摘要");
+        }
+
+        EngChallengeVo second = harness.service.getChallenge("NEW", ARTICLE_ID, 1, null);
+        EngChallengeQuestionVo firstChoice = first.getQuestions().stream()
+                .filter(item -> "WORD_TO_CN:1".equals(item.getQuestionId())).findFirst().orElseThrow();
+        EngChallengeQuestionVo secondChoice = second.getQuestions().stream()
+                .filter(item -> "WORD_TO_CN:1".equals(item.getQuestionId())).findFirst().orElseThrow();
+        assertTrue(!firstChoice.getAnswerDigest().equals(secondChoice.getAnswerDigest()),
+                "相同题目在不同 attemptId 下必须生成不同摘要");
+
+        Harness spellingHarness = spellingHarness();
+        EngChallengeVo spelling = spellingHarness.service.getChallenge("SPELLING", null, null, List.of(1L));
+        EngChallengeQuestionVo spellingQuestion = spelling.getQuestions().get(0);
+        String spellingAnswer = spellingAnswer(spelling, spellingQuestion);
+        assertEquals(testAnswerDigest(spelling.getAttemptId(), spellingQuestion.getQuestionId(), spellingAnswer),
+                spellingQuestion.getAnswerDigest(), "拼写题正确答案必须命中摘要");
+        assertTrue(harness.service.checkChallengeAnswer(challengeCheck(first.getAttemptId())).getCorrect(),
+                "旧单题判题接口必须继续可用于兼容回退");
     }
 
     /** 复习词返回拼写资格，短词和非纯英文字母词不得进入拼写测试。 */
@@ -1171,6 +1215,20 @@ public class EngStudyServiceImplTest
     {
         EngChallengeAnswerDto answer = new EngChallengeAnswerDto(); answer.setQuestionId(questionId);
         answer.setAnswer(value); return answer;
+    }
+
+    private static String testAnswerDigest(String attemptId, String questionId, String answer)
+    {
+        String normalized = answer == null ? "" : answer.trim().toLowerCase(Locale.ROOT);
+        try
+        {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest((attemptId + '\0' + questionId + '\0' + normalized).getBytes(StandardCharsets.UTF_8)));
+        }
+        catch (NoSuchAlgorithmException exception)
+        {
+            throw new IllegalStateException(exception);
+        }
     }
 
     private static EngUserWordProgress progress(Long wordId, Long firstArticleId, Integer firstLevelNo, int learned)

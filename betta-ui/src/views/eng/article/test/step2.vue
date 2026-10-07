@@ -191,6 +191,7 @@
 
 <script>
 import { assessChallengePronunciation, checkArticleChallengeAnswer } from '@/api/eng/study'
+import { createAnswerDigest } from '@/utils/answerDigest'
 import { play, playAnswerFeedback, prepareAnswerFeedback } from '@/utils/audio'
 import PcmRecorder, { MAX_DURATION_MS } from '@/utils/pcmRecorder'
 
@@ -403,7 +404,7 @@ export default {
     answerClass(value) {
       const answer = this.answers[this.currentQuestion.questionId]
       const selected = this.hasAnswer(answer) && String(value) === String(answer)
-      // 服务端判题期间先反馈当前选择，避免网络延迟让用户误以为点击未生效。
+      // 异步摘要计算或服务端回退期间先反馈当前选择，避免用户误以为点击未生效。
       if (!this.currentCheckResult || this.currentCheckResult.loading) return selected ? 'selected' : ''
       if (String(value) === String(this.currentCheckResult.correctAnswer)) return 'right'
       if (selected) return 'wrong'
@@ -412,7 +413,7 @@ export default {
     hasAnswer(answer) {
       return answer !== undefined && answer !== null && String(answer).trim() !== ''
     },
-    checkAnswer(question) {
+    async checkAnswer(question) {
       if (!question || this.completionEmitted) return
       this.clearAutoAdvance()
       const answer = this.answers[question.questionId]
@@ -427,6 +428,43 @@ export default {
         correct: null,
         correctAnswer: ''
       })
+      const answerDigest = String(question.answerDigest || '').trim()
+      if (/^[0-9a-f]{64}$/.test(answerDigest)) {
+        try {
+          const result = await this.checkAnswerLocally(question, answer, answerDigest)
+          if (this.completionEmitted || this.checkRequestIds[question.questionId] !== requestId) return
+          this.applyCheckResult(question, requestId, result)
+          return
+        } catch (error) {
+          // Web Crypto 不可用、计算失败或候选项与摘要不一致时，兼容回退服务端判题。
+        }
+      }
+      if (this.completionEmitted || this.checkRequestIds[question.questionId] !== requestId) return
+      this.checkAnswerRemotely(question, answer, requestId)
+    },
+    /** 优先使用题目摘要在本地判题，选择题答错时同步定位正确选项。 */
+    async checkAnswerLocally(question, answer, expectedDigest) {
+      const selectedDigest = await createAnswerDigest(this.attemptId, question.questionId, answer)
+      const correct = selectedDigest === expectedDigest
+      if (correct) {
+        return { correct: true, correctAnswer: answer }
+      }
+      if (!this.isChoiceQuestion(question)) {
+        return { correct: false, correctAnswer: '' }
+      }
+      const options = Array.isArray(question.options) ? question.options : []
+      const optionDigests = await Promise.all(options.map(option => {
+        return createAnswerDigest(this.attemptId, question.questionId, this.optionValue(option))
+      }))
+      const correctIndex = optionDigests.findIndex(digest => digest === expectedDigest)
+      if (correctIndex === -1) throw new Error('题目摘要与候选项不匹配')
+      return {
+        correct: false,
+        correctAnswer: this.optionValue(options[correctIndex])
+      }
+    },
+    /** 摘要无法在前端使用时调用原单题接口，保证滚动发布和旧浏览器仍可答题。 */
+    checkAnswerRemotely(question, answer, requestId) {
       checkArticleChallengeAnswer({
         attemptId: this.attemptId,
         mode: this.mode,
@@ -436,21 +474,23 @@ export default {
         answer
       }).then(response => {
         if (this.completionEmitted || this.checkRequestIds[question.questionId] !== requestId) return
-        const result = response.data || {}
-        this.$set(this.checkResults, question.questionId, {
-          loading: false,
-          correct: result.correct,
-          correctAnswer: result.correctAnswer || ''
-        })
-        if (typeof result.correct === 'boolean') {
-          playAnswerFeedback(result.correct)
-          this.playCorrectAnswerAudio(question)
-          this.scheduleAutoAdvance(question.questionId, requestId)
-        }
+        this.applyCheckResult(question, requestId, response.data || {})
       }).catch(() => {
         if (this.checkRequestIds[question.questionId] !== requestId) return
         this.$set(this.checkResults, question.questionId, null)
       })
+    },
+    /** 统一落地本地或服务端判题结果，保持音效、发音及自动切题行为一致。 */
+    applyCheckResult(question, requestId, result) {
+      this.$set(this.checkResults, question.questionId, {
+        loading: false,
+        correct: result.correct,
+        correctAnswer: result.correctAnswer || ''
+      })
+      if (typeof result.correct !== 'boolean') return
+      playAnswerFeedback(result.correct)
+      this.playCorrectAnswerAudio(question)
+      this.scheduleAutoAdvance(question.questionId, requestId)
     },
     invalidateCheckResult(questionId) {
       this.clearAutoAdvance()

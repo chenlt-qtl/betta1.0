@@ -21,6 +21,9 @@ import java.util.stream.Collectors;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -291,7 +294,7 @@ public class EngStudyServiceImpl implements IEngStudyService
                 : SPELLING.equals(actualMode) ? "拼写测试" : "单词复习");
         challenge.setWords(words); challenge.setPronunciationEnabled(pronunciationAllowed && setting != null
                 && Boolean.TRUE.equals(setting.getPronunciationEnabled()) && pronunciationProperties.isAvailable());
-        List<EngChallengeQuestionVo> questions = definitions.stream().map(this::questionVo)
+        List<EngChallengeQuestionVo> questions = definitions.stream().map(item -> questionVo(item, attemptId))
                 .collect(Collectors.toCollection(ArrayList::new));
         Collections.shuffle(questions); challenge.setQuestions(questions);
         return challenge;
@@ -1281,8 +1284,15 @@ public class EngStudyServiceImpl implements IEngStudyService
     private String sentencePrompt(String instruction, String sentence, String translation)
     { return instruction + "：“" + sentence + "”" + (StringUtils.isEmpty(translation) ? "" : "；中文提示：" + translation); }
     private Pattern wholeWord(String word) { return Pattern.compile("(?<![A-Za-z])" + Pattern.quote(word) + "(?![A-Za-z])", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE); }
-    private EngChallengeQuestionVo questionVo(QuestionDefinition item)
-    { EngChallengeQuestionVo vo = new EngChallengeQuestionVo(); vo.setQuestionId(item.id()); vo.setType(item.type()); vo.setPrompt(item.prompt()); vo.setOptions(item.options()); vo.setAudioUrl(item.audio()); vo.setAnswerLength(item.answerLength()); vo.setWord(isPronunciation(item) ? item.word().getWordName() : null); return vo; }
+    private EngChallengeQuestionVo questionVo(QuestionDefinition item, String attemptId)
+    {
+        EngChallengeQuestionVo vo = new EngChallengeQuestionVo();
+        vo.setQuestionId(item.id()); vo.setType(item.type()); vo.setPrompt(item.prompt());
+        vo.setOptions(item.options()); vo.setAudioUrl(item.audio()); vo.setAnswerLength(item.answerLength());
+        vo.setAnswerDigest(isPronunciation(item) ? null : answerDigest(attemptId, item.id(), item.answer()));
+        vo.setWord(isPronunciation(item) ? item.word().getWordName() : null);
+        return vo;
+    }
     private EngChallengeResultVo.ResultItem resultItem(QuestionDefinition definition, String answer)
     { var item = new EngChallengeResultVo.ResultItem(); item.setQuestionId(definition.id()); item.setCorrect(normalize(definition.answer()).equals(normalize(answer))); item.setCorrectAnswer(definition.answer()); return item; }
     private EngChallengeResultVo.ResultItem pronunciationResultItem(QuestionDefinition definition,
@@ -1294,6 +1304,20 @@ public class EngStudyServiceImpl implements IEngStudyService
     { return definitions.stream().filter(item -> item.id().equals(id)).findFirst().orElse(null); }
     private Long extractWordId(String id)
     { if (id == null) return null; for (String prefix : PREFIXES) if (id.startsWith(prefix)) try { return Long.valueOf(id.substring(prefix.length())); } catch (NumberFormatException ignored) { return null; } return null; }
+    /** 将测试、题目与规范答案绑定，避免挑战接口直接暴露明文答案。 */
+    private String answerDigest(String attemptId, String questionId, String answer)
+    {
+        String payload = attemptId + '\0' + questionId + '\0' + normalize(answer);
+        try
+        {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(payload.getBytes(StandardCharsets.UTF_8)));
+        }
+        catch (NoSuchAlgorithmException exception)
+        {
+            throw new IllegalStateException("JVM 不支持 SHA-256", exception);
+        }
+    }
     private String normalize(String value) { return value == null ? "" : value.trim().toLowerCase(Locale.ROOT); }
     private boolean validWord(EngWordVo word) { return word != null && word.getId() != null && StringUtils.isNotEmpty(word.getWordName()) && StringUtils.isNotEmpty(word.getAcceptation()); }
     private boolean isSpellingEligible(String wordName)

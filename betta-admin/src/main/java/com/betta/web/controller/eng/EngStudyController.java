@@ -84,7 +84,7 @@ public class EngStudyController extends BaseController
         return success(service.updateChallengeSetting(request));
     }
 
-    /** 按 NEW 或 REVIEW 模式获取不包含正确答案的固定词集挑战。 */
+    /** 按 NEW、REVIEW 或 SPELLING 模式获取不含明文答案、仅含答案摘要的挑战。 */
     @GetMapping("/challenge")
     public AjaxResult challenge(@RequestParam String mode,
             @RequestParam(required = false) Long articleId,
@@ -96,7 +96,7 @@ public class EngStudyController extends BaseController
     }
 
     /**
-     * 即时校验 request 中的单题答案并返回正确状态及正确答案。
+     * 兼容无法在前端校验摘要的环境，返回单题正确状态及正确答案。
      *
      * @param request 单题判题请求，包含文章主键、题目标识和当前答案
      * @return 统一响应，其中 data 为单题判定结果
