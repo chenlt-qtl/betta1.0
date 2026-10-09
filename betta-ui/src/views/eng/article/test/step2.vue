@@ -204,10 +204,11 @@
 <script>
 import { assessChallengePronunciation, checkArticleChallengeAnswer } from '@/api/eng/study'
 import { createAnswerDigest } from '@/utils/answerDigest'
-import { play, playAnswerFeedback, prepareAnswerFeedback, stop as stopAudio } from '@/utils/audio'
+import { clearPreloads, play, playAnswerFeedback, preload, prepareAnswerFeedback, stop as stopAudio } from '@/utils/audio'
 import PcmRecorder, { MAX_DURATION_MS } from '@/utils/pcmRecorder'
 
 const AUTO_ADVANCE_DELAY = 1000
+const ANSWER_AUDIO_TIMEOUT = 6000
 
 export default {
   name: 'EngArticleTestQuestions',
@@ -247,6 +248,8 @@ export default {
       checkRequestIds: {},
       checkSequence: 0,
       autoAdvanceTimer: null,
+      pendingAutoAdvance: null,
+      manualSubmitAvailable: false,
       completionEmitted: false,
       pronunciationStates: {},
       pronunciationResults: {},
@@ -312,7 +315,7 @@ export default {
       return this.index === this.questionList.length - 1
     },
     showFinalSubmit() {
-      if (!this.isLastQuestion || this.currentQuestion.type === 'PRONUNCIATION') return false
+      if (!this.isLastQuestion || !this.manualSubmitAvailable || this.currentQuestion.type === 'PRONUNCIATION') return false
       return this.currentCheckResult &&
         !this.currentCheckResult.loading &&
         typeof this.currentCheckResult.correct === 'boolean'
@@ -349,16 +352,20 @@ export default {
   },
   created() {
     this.initializeAnswers()
+    this.preloadUpcomingAudio()
     this.tryAutoPlay(this.currentQuestion)
   },
   watch: {
     currentQuestion(question) {
+      this.preloadUpcomingAudio()
       this.tryAutoPlay(question)
     }
   },
   beforeDestroy() {
     this.completionEmitted = true
     this.clearAutoAdvance()
+    stopAudio()
+    clearPreloads()
     this.clearRecordingTimer()
     if (this.recorder) this.recorder.cancel()
     this.releaseRecordingPlayer()
@@ -504,8 +511,9 @@ export default {
       })
       if (typeof result.correct !== 'boolean') return
       playAnswerFeedback(result.correct)
-      this.playCorrectAnswerAudio(question)
-      this.scheduleAutoAdvance(question.questionId, requestId)
+      this.clearAutoAdvance()
+      const answerPlayback = this.playCorrectAnswerAudio(question)
+      this.scheduleAutoAdvance(question.questionId, requestId, answerPlayback)
     },
     invalidateCheckResult(questionId) {
       this.clearAutoAdvance()
@@ -716,24 +724,61 @@ export default {
       const score = Number(phone.score != null ? phone.score : phone.accuracy)
       return Number.isFinite(score) ? score : 0
     },
-    /** 判题反馈短暂停留后自动进入下一题，最后一题保留显式提交入口。 */
-    scheduleAutoAdvance(questionId, requestId) {
-      this.clearAutoAdvance()
-      if (this.isLastQuestion) return
+    /** 同时等待判题反馈和答案发音；最后一题满足条件后自动提交。 */
+    scheduleAutoAdvance(questionId, requestId, answerPlayback) {
+      const state = {
+        questionId,
+        requestId,
+        minimumElapsed: false,
+        audioSettled: !answerPlayback,
+        audioTimeoutTimer: null,
+        answerPlayback
+      }
+      this.pendingAutoAdvance = state
       this.autoAdvanceTimer = setTimeout(() => {
         this.autoAdvanceTimer = null
-        if (this.checkRequestIds[questionId] !== requestId || this.currentQuestion.questionId !== questionId) return
-        this.advanceOrComplete()
+        if (this.pendingAutoAdvance !== state) return
+        state.minimumElapsed = true
+        this.tryAutoAdvance(state)
       }, AUTO_ADVANCE_DELAY)
+      if (!answerPlayback) return
+      state.audioTimeoutTimer = setTimeout(() => {
+        if (this.pendingAutoAdvance !== state) return
+        stopAudio()
+        answerPlayback.cancel()
+        state.audioSettled = true
+        this.tryAutoAdvance(state)
+      }, ANSWER_AUDIO_TIMEOUT)
+      answerPlayback.completion.then(() => {
+        if (this.pendingAutoAdvance !== state) return
+        clearTimeout(state.audioTimeoutTimer)
+        state.audioTimeoutTimer = null
+        state.audioSettled = true
+        this.tryAutoAdvance(state)
+      })
     },
-    clearAutoAdvance() {
-      if (this.autoAdvanceTimer === null) return
-      clearTimeout(this.autoAdvanceTimer)
+    tryAutoAdvance(state) {
+      if (!state.minimumElapsed || !state.audioSettled) return
+      if (this.checkRequestIds[state.questionId] !== state.requestId || this.currentQuestion.questionId !== state.questionId) return
+      this.clearAutoAdvance(false)
+      this.advanceOrComplete()
+    },
+    clearAutoAdvance(stopPendingAudio = true) {
+      if (this.autoAdvanceTimer !== null) clearTimeout(this.autoAdvanceTimer)
       this.autoAdvanceTimer = null
+      const state = this.pendingAutoAdvance
+      this.pendingAutoAdvance = null
+      if (!state) return
+      if (state.audioTimeoutTimer !== null) clearTimeout(state.audioTimeoutTimer)
+      if (state.answerPlayback) {
+        state.answerPlayback.cancel()
+        if (stopPendingAudio && !state.audioSettled) stopAudio()
+      }
     },
     /** 整轮提交失败时保留当前答案，并重新开放提交入口。 */
     allowResubmit() {
       this.completionEmitted = false
+      this.manualSubmitAvailable = true
     },
     advanceOrComplete() {
       this.releaseRecordingPlayer()
@@ -742,6 +787,7 @@ export default {
         return
       }
       if (this.completionEmitted) return
+      this.manualSubmitAvailable = false
       this.completionEmitted = true
       this.$emit('complete', this.questionList.map(question => ({
         questionId: question.questionId,
@@ -759,14 +805,36 @@ export default {
         }
       })
     },
-    /** 判题完成后播放目标单词发音，音频异常不得阻断自动切题。 */
+    /** 预加载当前题和下一题音频，缩短进入题目及判题后的等待时间。 */
+    preloadUpcomingAudio() {
+      [this.questionList[this.index], this.questionList[this.index + 1]].forEach(question => {
+        if (question && question.audioUrl) preload(question.audioUrl)
+      })
+    },
+    /** 播放目标单词发音，并返回可取消的完成状态供自动切题等待。 */
     playCorrectAnswerAudio(question) {
-      if (!question || !question.audioUrl) return
-      try {
-        play(question.audioUrl, '', () => {})
-      } catch (error) {
-        // 音频缺失、浏览器限制或播放异常时继续原有答题流程。
+      if (!question || !question.audioUrl) return null
+      let audioPlayer = null
+      let settled = false
+      let resolveCompletion
+      const completion = new Promise(resolve => { resolveCompletion = resolve })
+      const settle = () => {
+        if (settled) return
+        settled = true
+        if (audioPlayer) {
+          audioPlayer.removeEventListener('ended', settle)
+          audioPlayer.removeEventListener('error', settle)
+        }
+        resolveCompletion()
       }
+      try {
+        audioPlayer = play(question.audioUrl, '', settle)
+        audioPlayer.addEventListener('ended', settle)
+        audioPlayer.addEventListener('error', settle)
+      } catch (error) {
+        settle()
+      }
+      return { completion, cancel: settle }
     },
     playCurrentAudio() {
       if (!this.currentQuestion.audioUrl || (this.currentQuestion.type === 'PRONUNCIATION' && this.pronunciationBusy)) return
