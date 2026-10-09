@@ -1,6 +1,7 @@
 let player = new Audio();
 let timer;
 let feedbackContext;
+const preloadedPlayers = new Map();
 
 /** 将完整 URL、当前资源路径和历史 profile 路径统一为可播放地址。 */
 const resolveAudioUrl = (url) => {
@@ -33,15 +34,44 @@ export const stop = () => {
   player.pause();
 }
 
+/** 提前加载音频，并保留实例供正式播放时直接复用。 */
+export const preload = (url) => {
+  const resolvedUrl = resolveAudioUrl(url);
+  if (!resolvedUrl || preloadedPlayers.has(resolvedUrl)) {
+    return;
+  }
+  const preloadPlayer = new Audio();
+  preloadPlayer.preload = "auto";
+  preloadPlayer.src = resolvedUrl;
+  preloadPlayer.load();
+  preloadedPlayers.set(resolvedUrl, preloadPlayer);
+}
+
+/** 释放尚未用于播放的预加载音频，避免测试结束后继续占用资源。 */
+export const clearPreloads = () => {
+  preloadedPlayers.forEach(preloadPlayer => {
+    preloadPlayer.pause();
+    preloadPlayer.removeAttribute("src");
+    preloadPlayer.load();
+  });
+  preloadedPlayers.clear();
+}
+
 /**播放MP3 */
 export const play = (url, timeStr, onError = () => {}) => {
-
-  player.src = resolveAudioUrl(url);
-  player.load();
-
   //先重置
   clearTimeout(timer)
   player.pause();
+
+  const resolvedUrl = resolveAudioUrl(url);
+  const preloadPlayer = preloadedPlayers.get(resolvedUrl);
+  if (preloadPlayer) {
+    preloadedPlayers.delete(resolvedUrl);
+    player = preloadPlayer;
+  } else {
+    player.src = resolvedUrl;
+    player.load();
+  }
 
   let duration, startTime, rate = 1;
   const timeArr = (timeStr || "").split(",");

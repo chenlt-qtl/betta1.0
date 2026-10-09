@@ -29,6 +29,15 @@ public class ResourcesConfig implements WebMvcConfigurer
     @Override
     public void addResourceHandlers(ResourceHandlerRegistry registry)
     {
+        /** 英语音频使用独立缓存规则，避免将头像、笔记附件等普通上传资源公开缓存。 */
+        String[] cachedAudioDirectories = { "dictionary", "word", "profile/word", "sys/mp3" };
+        for (String directory : cachedAudioDirectories)
+        {
+            registry.addResourceHandler(Constants.RESOURCE_PREFIX + "/" + directory + "/**")
+                    .addResourceLocations("file:" + RuoYiConfig.getProfile() + "/" + directory + "/")
+                    .setCacheControl(CacheControl.maxAge(7, TimeUnit.DAYS).cachePublic());
+        }
+
         /** 本地文件上传路径 */
         registry.addResourceHandler(Constants.RESOURCE_PREFIX + "/**")
                 .addResourceLocations("file:" + RuoYiConfig.getProfile() + "/");
