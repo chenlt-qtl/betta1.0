@@ -2,7 +2,9 @@ package com.betta.robot.service;
 
 import com.betta.common.core.domain.entity.SysUser;
 import com.betta.common.exception.ServiceException;
+import com.betta.eng.domain.mall.MallExchangeRecord;
 import com.betta.eng.mapper.EngCoinWalletMapper;
+import com.betta.eng.mapper.MallExchangeRecordMapper;
 import com.betta.system.mapper.SysUserMapper;
 
 import java.lang.reflect.Proxy;
@@ -19,62 +21,95 @@ public class CoinDeductServiceTest {
         testDuplicateNickname();
         testDisabledUser();
         testInvalidCoinCost();
+        testRecordSaveFailure();
         System.out.println("CoinDeductServiceTest passed");
     }
 
     private static void testDeductSuccess() {
         TestWalletMapper walletMapper = new TestWalletMapper(300);
-        CoinDeductService service = createService(List.of(user(1L, "0")), walletMapper);
+        TestExchangeRecordMapper recordMapper = new TestExchangeRecordMapper();
+        CoinDeductService service = createService(List.of(user(1L, "0")), walletMapper, recordMapper);
 
-        long balance = service.deductCoin("豆芽", 100);
+        long balance = service.deductCoin("豆芽", "买文具", 100);
 
         assertEquals(200L, balance, "应返回扣减后的余额");
         assertEquals(100L, walletMapper.lastCoinCost, "应按请求数量扣减金币");
         assertEquals("robot", walletMapper.lastUsername, "机器人扣减应记录固定操作人");
+        MallExchangeRecord record = recordMapper.lastRecord;
+        assertEquals(1L, record.getUserId(), "消费记录应关联扣款用户");
+        assertEquals(0L, record.getProductId(), "普通消费应使用固定商品标识");
+        assertEquals("买文具", record.getProductName(), "消费记录应保存消费内容");
+        assertEquals("", record.getProductImages(), "普通消费应保存空图片");
+        assertEquals(100L, record.getCoinPrice(), "消费记录应保存扣减金币数量");
+        assertEquals("robot", record.getCreateBy(), "消费记录应保存固定操作人");
     }
 
     private static void testInsufficientBalance() {
         TestWalletMapper walletMapper = new TestWalletMapper(99);
-        CoinDeductService service = createService(List.of(user(1L, "0")), walletMapper);
+        TestExchangeRecordMapper recordMapper = new TestExchangeRecordMapper();
+        CoinDeductService service = createService(List.of(user(1L, "0")), walletMapper, recordMapper);
 
-        assertServiceError("金币余额不足", () -> service.deductCoin("豆芽", 100));
+        assertServiceError("金币余额不足", () -> service.deductCoin("豆芽", "买文具", 100));
         assertEquals(99L, walletMapper.balance, "余额不足时不应改变余额");
+        assertEquals(0, recordMapper.insertCalls, "余额不足时不应写消费记录");
     }
 
     private static void testUserNotFound() {
         TestWalletMapper walletMapper = new TestWalletMapper(300);
-        CoinDeductService service = createService(List.of(), walletMapper);
+        TestExchangeRecordMapper recordMapper = new TestExchangeRecordMapper();
+        CoinDeductService service = createService(List.of(), walletMapper, recordMapper);
 
-        assertServiceError("用户不存在", () -> service.deductCoin("豆芽", 100));
+        assertServiceError("用户不存在", () -> service.deductCoin("豆芽", "买文具", 100));
         assertEquals(0, walletMapper.decreaseCalls, "用户不存在时不应访问扣减方法");
+        assertEquals(0, recordMapper.insertCalls, "用户不存在时不应写消费记录");
     }
 
     private static void testDuplicateNickname() {
         TestWalletMapper walletMapper = new TestWalletMapper(300);
-        CoinDeductService service = createService(List.of(user(1L, "0"), user(2L, "0")), walletMapper);
+        TestExchangeRecordMapper recordMapper = new TestExchangeRecordMapper();
+        CoinDeductService service = createService(
+                List.of(user(1L, "0"), user(2L, "0")), walletMapper, recordMapper);
 
-        assertServiceError("用户昵称不唯一", () -> service.deductCoin("豆芽", 100));
+        assertServiceError("用户昵称不唯一", () -> service.deductCoin("豆芽", "买文具", 100));
         assertEquals(0, walletMapper.decreaseCalls, "昵称重复时不应扣减");
+        assertEquals(0, recordMapper.insertCalls, "昵称重复时不应写消费记录");
     }
 
     private static void testDisabledUser() {
         TestWalletMapper walletMapper = new TestWalletMapper(300);
-        CoinDeductService service = createService(List.of(user(1L, "1")), walletMapper);
+        TestExchangeRecordMapper recordMapper = new TestExchangeRecordMapper();
+        CoinDeductService service = createService(List.of(user(1L, "1")), walletMapper, recordMapper);
 
-        assertServiceError("用户已停用", () -> service.deductCoin("豆芽", 100));
+        assertServiceError("用户已停用", () -> service.deductCoin("豆芽", "买文具", 100));
         assertEquals(0, walletMapper.decreaseCalls, "停用用户不应扣减");
+        assertEquals(0, recordMapper.insertCalls, "停用用户不应写消费记录");
     }
 
     private static void testInvalidCoinCost() {
         TestWalletMapper walletMapper = new TestWalletMapper(300);
-        CoinDeductService service = createService(List.of(user(1L, "0")), walletMapper);
+        TestExchangeRecordMapper recordMapper = new TestExchangeRecordMapper();
+        CoinDeductService service = createService(List.of(user(1L, "0")), walletMapper, recordMapper);
 
-        assertServiceError("金币数量必须为正整数", () -> service.deductCoin("豆芽", 0));
-        assertServiceError("金币数量必须为正整数", () -> service.deductCoin("豆芽", -1));
+        assertServiceError("金币数量必须为正整数", () -> service.deductCoin("豆芽", "买文具", 0));
+        assertServiceError("金币数量必须为正整数", () -> service.deductCoin("豆芽", "买文具", -1));
         assertEquals(0, walletMapper.decreaseCalls, "非法数量不应扣减");
+        assertEquals(0, recordMapper.insertCalls, "非法数量不应写消费记录");
     }
 
-    private static CoinDeductService createService(List<SysUser> users, TestWalletMapper walletMapper) {
+    private static void testRecordSaveFailure() {
+        TestWalletMapper walletMapper = new TestWalletMapper(300);
+        TestExchangeRecordMapper recordMapper = new TestExchangeRecordMapper();
+        recordMapper.insertResult = 0;
+        CoinDeductService service = createService(List.of(user(1L, "0")), walletMapper, recordMapper);
+
+        assertServiceError("金币消费记录保存失败",
+                () -> service.deductCoin("豆芽", "买文具", 100));
+        assertEquals(1, walletMapper.decreaseCalls, "记录保存前应已执行金币扣减");
+        assertEquals(1, recordMapper.insertCalls, "应尝试保存消费记录");
+    }
+
+    private static CoinDeductService createService(List<SysUser> users, TestWalletMapper walletMapper,
+                                                   TestExchangeRecordMapper recordMapper) {
         SysUserMapper userMapper = (SysUserMapper) Proxy.newProxyInstance(
                 SysUserMapper.class.getClassLoader(),
                 new Class<?>[]{SysUserMapper.class},
@@ -84,7 +119,7 @@ public class CoinDeductServiceTest {
                     }
                     return defaultValue(method.getReturnType());
                 });
-        return new CoinDeductService(userMapper, walletMapper);
+        return new CoinDeductService(userMapper, walletMapper, recordMapper);
     }
 
     private static SysUser user(Long userId, String status) {
@@ -154,6 +189,25 @@ public class CoinDeductServiceTest {
             }
             balance -= coinCost;
             return 1;
+        }
+    }
+
+    /** 记录最近一次写入内容的兑换记录 Mapper。 */
+    private static final class TestExchangeRecordMapper implements MallExchangeRecordMapper {
+        private int insertResult = 1;
+        private int insertCalls;
+        private MallExchangeRecord lastRecord;
+
+        @Override
+        public int insertExchangeRecord(MallExchangeRecord record) {
+            insertCalls++;
+            lastRecord = record;
+            return insertResult;
+        }
+
+        @Override
+        public List<MallExchangeRecord> selectExchangeRecordList(MallExchangeRecord record) {
+            return List.of();
         }
     }
 }
