@@ -56,7 +56,10 @@
           <el-table-column label="商品" min-width="220">
             <template slot-scope="scope">
               <div class="record-product">
-                <el-image :src="firstImage(scope.row.productImages)" fit="cover" />
+                <el-image v-if="firstImage(scope.row.productImages)" :src="firstImage(scope.row.productImages)" fit="cover">
+                  <div slot="error" class="record-image-placeholder">无图片</div>
+                </el-image>
+                <div v-else class="record-image-placeholder">无图片</div>
                 <span>{{ scope.row.productName }}</span>
               </div>
             </template>
@@ -343,6 +346,18 @@ export default {
 .price { color: #e6a23c; font-size: 16px; font-weight: 600; }
 .record-product { display: flex; align-items: center; gap: 12px; }
 .record-product .el-image { flex: none; width: 54px; height: 54px; border-radius: 4px; }
+.record-image-placeholder {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 54px;
+  height: 54px;
+  border-radius: 4px;
+  color: #909399;
+  font-size: 12px;
+  background: #f5f7fa;
+}
 .product-detail { min-height: 220px; }
 .detail-image { width: 100%; height: 320px; }
 .detail-price { margin: 16px 0; color: #e6a23c; font-size: 22px; font-weight: 600; }
