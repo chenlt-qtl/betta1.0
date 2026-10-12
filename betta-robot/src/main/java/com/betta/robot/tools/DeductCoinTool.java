@@ -41,7 +41,7 @@ public class DeductCoinTool implements ITool {
         }
 
         try {
-            long balance = coinDeductService.deductCoin(nickname, coinCost);
+            long balance = coinDeductService.deductCoin(nickname, content, coinCost);
             return ActionResult.ok("【" + nickname + "】" + content + "消费 " + coinCost
                     + " 金币，当前余额 " + balance + " 金币");
         } catch (ServiceException e) {

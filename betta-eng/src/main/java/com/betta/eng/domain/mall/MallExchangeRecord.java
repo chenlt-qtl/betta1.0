@@ -3,7 +3,7 @@ package com.betta.eng.domain.mall;
 import com.betta.common.core.domain.BaseEntity;
 import lombok.Data;
 
-/** 商品兑换记录，保存兑换时商品快照以避免商品删除影响历史展示。 */
+/** 金币消费记录，保存商城兑换或机器人普通消费的商品快照。 */
 @Data
 public class MallExchangeRecord extends BaseEntity
 {
@@ -17,11 +17,11 @@ public class MallExchangeRecord extends BaseEntity
     private String userName;
     /** 用户昵称，仅用于管理端展示。 */
     private String nickName;
-    /** 原商品主键，商品删除后仍保留其值。 */
+    /** 原商品主键，值为 0 时表示机器人录入的普通消费。 */
     private Long productId;
     /** 兑换时商品名称快照。 */
     private String productName;
-    /** 兑换时商品图片快照。 */
+    /** 兑换时商品图片快照；机器人普通消费使用空字符串。 */
     private String productImages;
     /** 兑换时金币价格快照。 */
     private Long coinPrice;

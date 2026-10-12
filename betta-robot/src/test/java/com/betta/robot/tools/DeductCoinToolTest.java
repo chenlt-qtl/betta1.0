@@ -24,13 +24,15 @@ public class DeductCoinToolTest {
         DeductCoinTool tool = new DeductCoinTool(service);
 
         ActionResult result = tool.execute(Map.of(
-                "nickname", "豆芽",
-                "content", "买文具",
+                "nickname", " 豆芽 ",
+                "content", " 买文具 ",
                 "coinCost", "100"));
 
         assertTrue(result.isSuccess(), "合法数字字符串应扣减成功");
         assertEquals("【豆芽】买文具消费 100 金币，当前余额 900 金币",
                 result.getMessage(), "成功回复应包含消费内容、数量和余额");
+        assertEquals("豆芽", service.nickname, "应传递去空白后的用户昵称");
+        assertEquals("买文具", service.content, "应传递去空白后的消费内容");
         assertEquals(100L, service.coinCost, "数字字符串应精确转换为 long");
     }
 
@@ -92,17 +94,21 @@ public class DeductCoinToolTest {
     private static final class StubCoinDeductService extends CoinDeductService {
         private final long balance;
         private int calls;
+        private String nickname;
+        private String content;
         private long coinCost;
         private String failure;
 
         private StubCoinDeductService(long balance) {
-            super(null, null);
+            super(null, null, null);
             this.balance = balance;
         }
 
         @Override
-        public long deductCoin(String nickname, long coinCost) {
+        public long deductCoin(String nickname, String content, long coinCost) {
             calls++;
+            this.nickname = nickname;
+            this.content = content;
             this.coinCost = coinCost;
             if (failure != null) {
                 throw new ServiceException(failure);
