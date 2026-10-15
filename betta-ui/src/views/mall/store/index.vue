@@ -34,7 +34,7 @@
                 <div slot="error" class="image-placeholder"><i class="el-icon-picture-outline" /></div>
               </el-image>
               <div class="product-summary">
-                <div class="product-name">{{ product.name }}</div>
+                <div v-if="hasName(product.name)" class="product-name">{{ product.name }}</div>
                 <div class="product-footer">
                   <span class="price"><i class="el-icon-coin" /> {{ product.coinPrice }}</span>
                   <el-button type="primary" size="small" @click.stop="openProduct(product)">查看</el-button>
@@ -56,8 +56,11 @@
           <el-table-column label="商品" min-width="220">
             <template slot-scope="scope">
               <div class="record-product">
-                <el-image :src="firstImage(scope.row.productImages)" fit="cover" />
-                <span>{{ scope.row.productName }}</span>
+                <el-image v-if="firstImage(scope.row.productImages)" :src="firstImage(scope.row.productImages)" fit="cover">
+                  <div slot="error" class="record-image-placeholder">无图片</div>
+                </el-image>
+                <div v-else class="record-image-placeholder">无图片</div>
+                <span v-if="hasName(scope.row.productName)">{{ scope.row.productName }}</span>
               </div>
             </template>
           </el-table-column>
@@ -77,7 +80,7 @@
     </el-tabs>
 
     <el-dialog
-      :title="currentProduct.name || '商品详情'"
+      :title="hasName(currentProduct.name) ? currentProduct.name : '商品详情'"
       :visible.sync="detailOpen"
       width="760px"
       append-to-body
@@ -230,13 +233,14 @@ export default {
     },
     handleExchange() {
       const product = this.currentProduct
-      this.$confirm(`确定使用 ${product.coinPrice} 金币兑换“${product.name}”吗？`, '确认兑换', {
+      const productText = this.hasName(product.name) ? `“${product.name}”` : '该商品'
+      this.$confirm(`确定使用 ${product.coinPrice} 金币兑换${productText}吗？`, '确认兑换', {
         confirmButtonText: '确定兑换',
         cancelButtonText: '取消',
         type: 'warning'
       }).then(() => {
         this.exchanging = true
-        return exchangeProduct(product.id).then(response => {
+        return exchangeProduct(product.id, product.coinPrice).then(response => {
           const result = response.data || {}
           if (result.coinBalance !== undefined) {
             this.coinBalance = Number(result.coinBalance)
@@ -249,7 +253,9 @@ export default {
         }).finally(() => {
           this.exchanging = false
         })
-      }).catch(() => {})
+      }, () => {
+        // 仅处理确认框取消，兑换接口异常继续交由请求层提示且保留详情弹窗。
+      })
     },
     splitImages(images) {
       if (!images) return []
@@ -262,6 +268,9 @@ export default {
     imageUrl(image) {
       if (!image || isExternal(image)) return image || ''
       return this.baseUrl + image
+    },
+    hasName(name) {
+      return Boolean(name && String(name).trim())
     }
   }
 }
@@ -343,6 +352,18 @@ export default {
 .price { color: #e6a23c; font-size: 16px; font-weight: 600; }
 .record-product { display: flex; align-items: center; gap: 12px; }
 .record-product .el-image { flex: none; width: 54px; height: 54px; border-radius: 4px; }
+.record-image-placeholder {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 54px;
+  height: 54px;
+  border-radius: 4px;
+  color: #909399;
+  font-size: 12px;
+  background: #f5f7fa;
+}
 .product-detail { min-height: 220px; }
 .detail-image { width: 100%; height: 320px; }
 .detail-price { margin: 16px 0; color: #e6a23c; font-size: 22px; font-weight: 600; }
@@ -354,6 +375,11 @@ export default {
   .store-header { align-items: flex-start; flex-direction: column; gap: 18px; }
   .product-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .product-cover { height: 150px; }
+}
+@media (max-width: 480px) {
+  .store-header { padding: 20px; }
+  .product-grid { grid-template-columns: 1fr; }
+  .product-cover { height: 190px; }
 }
 </style>
 

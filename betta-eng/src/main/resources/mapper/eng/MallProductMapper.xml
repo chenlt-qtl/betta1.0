@@ -6,6 +6,7 @@
         <result property="name" column="name"/>
         <result property="images" column="images"/>
         <result property="description" column="description"/>
+        <result property="yuanPrice" column="yuan_price"/>
         <result property="coinPrice" column="coin_price"/>
         <result property="createBy" column="create_by"/>
         <result property="createTime" column="create_time"/>
@@ -14,7 +15,7 @@
     </resultMap>
 
     <sql id="productColumns">
-        id,name,images,description,coin_price,create_by,create_time,update_by,update_time
+        id,name,images,description,yuan_price,coin_price,create_by,create_time,update_by,update_time
     </sql>
 
     <select id="selectProductList" parameterType="com.betta.eng.domain.mall.MallProduct" resultMap="MallProductMap">
@@ -35,15 +36,28 @@
         select <include refid="productColumns"/> from mall_product where id=#{id} for update
     </select>
 
+    <select id="selectMaxYuanPrice" resultType="java.math.BigDecimal">
+        select max(yuan_price) from mall_product
+    </select>
+
     <insert id="insertProduct" parameterType="com.betta.eng.domain.mall.MallProduct"
             useGeneratedKeys="true" keyProperty="id">
-        insert into mall_product(name,images,description,coin_price,create_by,create_time)
-        values(#{name},#{images},#{description},#{coinPrice},#{createBy},now())
+        insert into mall_product(name,images,description,yuan_price,coin_price,create_by,create_time)
+        values(#{name},#{images},#{description},#{yuanPrice},#{coinPrice},#{createBy},now())
+    </insert>
+
+    <insert id="insertProductBatch">
+        insert into mall_product(name,images,description,yuan_price,coin_price,create_by,create_time)
+        values
+        <foreach item="product" collection="products" separator=",">
+            (#{product.name},#{product.images},#{product.description},#{product.yuanPrice},
+             #{product.coinPrice},#{product.createBy},now())
+        </foreach>
     </insert>
 
     <update id="updateProduct" parameterType="com.betta.eng.domain.mall.MallProduct">
         update mall_product
-        set name=#{name},images=#{images},description=#{description},coin_price=#{coinPrice},
+        set name=#{name},images=#{images},description=#{description},yuan_price=#{yuanPrice},coin_price=#{coinPrice},
             update_by=#{updateBy},update_time=now()
         where id=#{id}
     </update>

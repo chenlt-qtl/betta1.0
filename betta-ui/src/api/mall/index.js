@@ -22,10 +22,11 @@ export function getStoreBalance() {
   })
 }
 
-export function exchangeProduct(productId) {
+export function exchangeProduct(productId, expectedCoinPrice) {
   return request({
     url: '/mall/store/exchanges/' + productId,
-    method: 'post'
+    method: 'post',
+    data: { expectedCoinPrice }
   })
 }
 
@@ -57,6 +58,29 @@ export function addProduct(data) {
     url: '/mall/product',
     method: 'post',
     data
+  })
+}
+
+export function batchAddProducts(data) {
+  return request({
+    url: '/mall/product/batch',
+    method: 'post',
+    data
+  })
+}
+
+export function getExchangeRate() {
+  return request({
+    url: '/mall/product/exchange-rate',
+    method: 'get'
+  })
+}
+
+export function updateExchangeRate(rate) {
+  return request({
+    url: '/mall/product/exchange-rate',
+    method: 'put',
+    data: { rate }
   })
 }
 

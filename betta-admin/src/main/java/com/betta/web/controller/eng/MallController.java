@@ -1,5 +1,6 @@
 package com.betta.web.controller.eng;
 
+import java.math.BigDecimal;
 import java.util.List;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -16,6 +17,8 @@ import com.betta.common.core.controller.BaseController;
 import com.betta.common.core.domain.AjaxResult;
 import com.betta.common.core.page.TableDataInfo;
 import com.betta.common.enums.BusinessType;
+import com.betta.eng.domain.dto.MallExchangeRateRequest;
+import com.betta.eng.domain.dto.MallExchangeRequest;
 import com.betta.eng.domain.mall.MallExchangeRecord;
 import com.betta.eng.domain.mall.MallProduct;
 import com.betta.eng.service.IMallService;
@@ -59,9 +62,9 @@ public class MallController extends BaseController
     @RepeatSubmit
     @Log(title = "金币商城兑换", businessType = BusinessType.INSERT)
     @PostMapping("/store/exchanges/{productId}")
-    public AjaxResult exchange(@PathVariable Long productId)
+    public AjaxResult exchange(@PathVariable Long productId, @RequestBody MallExchangeRequest request)
     {
-        return success(mallService.exchange(productId));
+        return success(mallService.exchange(productId, request == null ? null : request.getExpectedCoinPrice()));
     }
 
     /** 登录用户分页查看本人兑换记录。 */
@@ -97,6 +100,33 @@ public class MallController extends BaseController
     public AjaxResult addProduct(@RequestBody MallProduct product)
     {
         return success(mallService.insertProduct(product));
+    }
+
+    /** 管理员批量新增商品，单次最多五十条。 */
+    @PreAuthorize("@ss.hasPermi('mall:product:add')")
+    @Log(title = "商城商品", businessType = BusinessType.INSERT)
+    @PostMapping("/product/batch")
+    public AjaxResult addProductBatch(@RequestBody List<MallProduct> products)
+    {
+        return toAjax(mallService.insertProductBatch(products));
+    }
+
+    /** 管理员查询人民币兑金币汇率。 */
+    @PreAuthorize("@ss.hasPermi('mall:product:list')")
+    @GetMapping("/product/exchange-rate")
+    public AjaxResult exchangeRate()
+    {
+        return success(mallService.getExchangeRate());
+    }
+
+    /** 管理员更新人民币兑金币汇率。 */
+    @PreAuthorize("@ss.hasPermi('mall:product:rate')")
+    @Log(title = "商城汇率", businessType = BusinessType.UPDATE)
+    @PutMapping("/product/exchange-rate")
+    public AjaxResult updateExchangeRate(@RequestBody MallExchangeRateRequest request)
+    {
+        BigDecimal rate = request == null ? null : request.getRate();
+        return toAjax(mallService.updateExchangeRate(rate));
     }
 
     /** 管理员更新商品。 */
