@@ -1,5 +1,26 @@
 <template>
   <div class="channel-config-container">
+    <div class="front-base-url-panel" v-loading="frontBaseUrlLoading">
+      <div class="front-base-url-content">
+        <div class="front-base-url-title">前端访问地址</div>
+        <div class="front-base-url-editor">
+          <el-input
+            v-model.trim="frontBaseUrl"
+            clearable
+            placeholder="例如：https://betta.icu"
+          />
+          <el-button
+            type="primary"
+            :loading="frontBaseUrlSaving"
+            @click="handleSaveFrontBaseUrl"
+            v-hasPermi="['message:config:edit']"
+          >保存</el-button>
+        </div>
+        <div class="front-base-url-tip">
+          地址必须包含 http:// 或 https://；留空保存将使用当前访问地址：{{ currentOrigin }}。请确保该地址可从外网访问。
+        </div>
+      </div>
+    </div>
     <el-form :model="queryParams" ref="queryForm" size="small" :inline="true" v-show="showSearch" label-width="80px">
       <el-form-item label="渠道" prop="channelType">
         <el-select v-model="queryParams.channelType" placeholder="请选择" clearable style="width: 120px">
@@ -100,7 +121,15 @@
 </template>
 
 <script>
-import { listMessageConfig, getMessageConfig, addMessageConfig, updateMessageConfig, delMessageConfig } from '@/api/robot/messageConfig'
+import {
+  listMessageConfig,
+  getFrontBaseUrl,
+  updateFrontBaseUrl,
+  getMessageConfig,
+  addMessageConfig,
+  updateMessageConfig,
+  delMessageConfig
+} from '@/api/robot/messageConfig'
 
 export default {
   name: 'ChannelConfig',
@@ -113,6 +142,10 @@ export default {
   data() {
     return {
       loading: false,
+      frontBaseUrlLoading: false,
+      frontBaseUrlSaving: false,
+      frontBaseUrl: '',
+      currentOrigin: '',
       list: [],
       total: 0,
       open: false,
@@ -130,9 +163,34 @@ export default {
     }
   },
   created() {
+    this.currentOrigin = window.location.origin
+    this.getFrontBaseUrl()
     this.getList()
   },
   methods: {
+    /** 查询已保存的前端访问地址 */
+    getFrontBaseUrl() {
+      this.frontBaseUrlLoading = true
+      getFrontBaseUrl().then(response => {
+        this.frontBaseUrl = response.data || ''
+      }).finally(() => {
+        this.frontBaseUrlLoading = false
+      })
+    },
+    /** 留空时由后端保存当前浏览器访问地址 */
+    handleSaveFrontBaseUrl() {
+      if (this.frontBaseUrlSaving) return
+      this.frontBaseUrlSaving = true
+      updateFrontBaseUrl({
+        frontBaseUrl: this.frontBaseUrl,
+        currentOrigin: this.currentOrigin
+      }).then(response => {
+        this.frontBaseUrl = response.data || ''
+        this.$modal.msgSuccess('前端访问地址保存成功')
+      }).finally(() => {
+        this.frontBaseUrlSaving = false
+      })
+    },
     /** 查询列表 */
     getList() {
       this.loading = true
@@ -217,3 +275,48 @@ export default {
   }
 }
 </script>
+
+<style scoped>
+.front-base-url-panel {
+  margin-bottom: 18px;
+  padding: 16px;
+  border: 1px solid #e6ebf5;
+  border-radius: 4px;
+  background: #f8f9fb;
+}
+
+.front-base-url-title {
+  margin-bottom: 10px;
+  color: #303133;
+  font-weight: 600;
+}
+
+.front-base-url-editor {
+  display: flex;
+  max-width: 720px;
+  gap: 10px;
+}
+
+.front-base-url-tip {
+  margin-top: 8px;
+  color: #909399;
+  font-size: 12px;
+  line-height: 20px;
+  word-break: break-all;
+}
+
+@media (max-width: 600px) {
+  .front-base-url-panel {
+    padding: 12px;
+  }
+
+  .front-base-url-editor {
+    flex-direction: column;
+  }
+
+  .front-base-url-editor .el-button {
+    width: 100%;
+    margin-left: 0;
+  }
+}
+</style>

@@ -14,6 +14,30 @@ export function listMessageConfig(query) {
 }
 
 /**
+ * 查询前端访问地址
+ * @returns {Promise}
+ */
+export function getFrontBaseUrl() {
+  return request({
+    url: '/message/config/front-base-url',
+    method: 'get'
+  })
+}
+
+/**
+ * 保存前端访问地址
+ * @param {Object} data - 地址和当前浏览器访问源
+ * @returns {Promise}
+ */
+export function updateFrontBaseUrl(data) {
+  return request({
+    url: '/message/config/front-base-url',
+    method: 'put',
+    data: data
+  })
+}
+
+/**
  * 根据ID查询通道配置详情
  * @param {number} id - 主键
  * @returns {Promise}

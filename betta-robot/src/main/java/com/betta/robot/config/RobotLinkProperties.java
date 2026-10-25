@@ -10,6 +10,6 @@ import org.springframework.stereotype.Component;
 @ConfigurationProperties(prefix = "robot.link")
 public class RobotLinkProperties {
 
-    /** 对外可访问的前端基础地址，配置后优先于数据库工具参数。 */
+    /** 对外可访问的前端基础地址，页面尚未保存配置时优先于数据库工具参数。 */
     private String frontBaseUrl;
 }
