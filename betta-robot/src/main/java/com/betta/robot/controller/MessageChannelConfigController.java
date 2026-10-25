@@ -7,7 +7,9 @@ import com.betta.common.core.page.TableDataInfo;
 import com.betta.common.enums.BusinessType;
 import com.betta.common.utils.SecurityUtils;
 import com.betta.robot.domain.MessageChannelConfig;
+import com.betta.robot.dto.RobotLinkConfigRequest;
 import com.betta.robot.service.IMessageChannelConfigService;
+import com.betta.robot.service.RobotLinkConfigService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
@@ -25,6 +27,33 @@ public class MessageChannelConfigController extends BaseController {
 
     @Autowired
     private IMessageChannelConfigService messageChannelConfigService;
+
+    @Autowired
+    private RobotLinkConfigService robotLinkConfigService;
+
+    /**
+     * 查询页面已保存的前端访问地址。
+     *
+     * @return 保存值，尚未保存时为空字符串
+     */
+    @PreAuthorize("@ss.hasPermi('message:config:list')")
+    @GetMapping("/front-base-url")
+    public AjaxResult getFrontBaseUrl() {
+        return success(robotLinkConfigService.getSavedFrontBaseUrl());
+    }
+
+    /**
+     * 保存机器人回复链接使用的前端访问地址。
+     *
+     * @param request 页面地址和当前浏览器 origin
+     * @return 规范化后的保存值
+     */
+    @PreAuthorize("@ss.hasPermi('message:config:edit')")
+    @Log(title = "机器人前端访问地址", businessType = BusinessType.UPDATE)
+    @PutMapping("/front-base-url")
+    public AjaxResult saveFrontBaseUrl(@RequestBody RobotLinkConfigRequest request) {
+        return success(robotLinkConfigService.saveFrontBaseUrl(request, SecurityUtils.getUsername()));
+    }
 
     /**
      * 查询通道配置列表

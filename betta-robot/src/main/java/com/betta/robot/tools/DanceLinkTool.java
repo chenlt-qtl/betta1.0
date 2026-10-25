@@ -1,9 +1,9 @@
 package com.betta.robot.tools;
 
 import com.betta.common.utils.StringUtils;
-import com.betta.robot.config.RobotLinkProperties;
 import com.betta.robot.dto.ActionResult;
 import com.betta.robot.service.RobotAutoLoginService;
+import com.betta.robot.service.RobotLinkConfigService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -34,12 +34,12 @@ public class DanceLinkTool implements ITool {
     private RobotAutoLoginService robotAutoLoginService;
 
     @Autowired
-    private RobotLinkProperties robotLinkProperties;
+    private RobotLinkConfigService robotLinkConfigService;
 
     /**
      * 根据工具参数生成跳舞页面的短期自动登录链接。
      *
-     * @param params 工具参数，支持 frontBaseUrl、username、targetPath、expireMinutes；环境配置优先于 frontBaseUrl
+     * @param params 工具参数，支持 frontBaseUrl、username、targetPath、expireMinutes；页面和环境配置优先于 frontBaseUrl
      * @return 自动登录链接生成结果
      */
     @Override
@@ -48,8 +48,7 @@ public class DanceLinkTool implements ITool {
             // tool_params 示例：
             // {"frontBaseUrl":"https://your-domain.com","username":"damu","targetPath":"/dance","expireMinutes":5}
             // 以后其它模块可以复用 RobotAutoLoginService，只需要换 targetPath 或另建工具配置。
-            String frontBaseUrl = StringUtils.defaultIfBlank(
-                    robotLinkProperties.getFrontBaseUrl(), getStringParam(params, "frontBaseUrl"));
+            String frontBaseUrl = robotLinkConfigService.resolveFrontBaseUrl(getStringParam(params, "frontBaseUrl"));
             if (StringUtils.isBlank(frontBaseUrl)) {
                 return ActionResult.fail("未配置前端地址 frontBaseUrl");
             }
@@ -62,7 +61,7 @@ public class DanceLinkTool implements ITool {
 
             String ticket = robotAutoLoginService.createTicket(username, targetPath, expireMinutes);
             // 前端统一使用 /auto-login 作为中转入口，具体跳到哪里由后端 ticket 的 targetPath 决定。
-            String link = trimTrailingSlash(frontBaseUrl) + "/auto-login?ticket=" + ticket;
+            String link = frontBaseUrl + "/auto-login?ticket=" + ticket;
             log.info("生成跳舞自动登录链接，username={}, expireMinutes={}", username, expireMinutes);
             return ActionResult.ok("跳舞链接：" + link);
         } catch (Exception e) {
@@ -104,17 +103,4 @@ public class DanceLinkTool implements ITool {
         }
     }
 
-    /**
-     * 删除地址末尾多余的斜杠，避免拼接中转路径时出现双斜杠。
-     *
-     * @param url 已校验非空的前端基础地址
-     * @return 去除末尾斜杠后的地址
-     */
-    private String trimTrailingSlash(String url) {
-        String result = url.trim();
-        while (result.endsWith("/")) {
-            result = result.substring(0, result.length() - 1);
-        }
-        return result;
-    }
 }

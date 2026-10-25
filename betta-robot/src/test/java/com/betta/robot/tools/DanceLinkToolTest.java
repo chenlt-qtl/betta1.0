@@ -1,8 +1,8 @@
 package com.betta.robot.tools;
 
-import com.betta.robot.config.RobotLinkProperties;
 import com.betta.robot.dto.ActionResult;
 import com.betta.robot.service.RobotAutoLoginService;
+import com.betta.robot.service.RobotLinkConfigService;
 
 import java.lang.reflect.Field;
 import java.util.Map;
@@ -21,7 +21,7 @@ public class DanceLinkToolTest {
 
         assertTrue(result.isSuccess(), "跳舞链接应生成成功");
         assertEquals("跳舞链接：https://public.example.com/auto-login?ticket=test-ticket",
-                result.getMessage(), "环境配置的公网地址应优先于工具参数");
+                result.getMessage(), "应使用统一配置服务解析后的公网地址");
         assertEquals("damu", autoLoginService.username, "应使用工具参数中的用户名");
         assertEquals("/dance", autoLoginService.targetPath, "未配置目标路径时应跳转跳舞页面");
         assertEquals(Integer.valueOf(5), autoLoginService.expireMinutes, "未配置有效期时应使用 5 分钟");
@@ -32,9 +32,7 @@ public class DanceLinkToolTest {
                                              String configuredFrontBaseUrl) throws Exception {
         DanceLinkTool tool = new DanceLinkTool();
         setField(tool, "robotAutoLoginService", autoLoginService);
-        RobotLinkProperties properties = new RobotLinkProperties();
-        properties.setFrontBaseUrl(configuredFrontBaseUrl);
-        setField(tool, "robotLinkProperties", properties);
+        setField(tool, "robotLinkConfigService", new StubLinkConfigService(configuredFrontBaseUrl));
         return tool;
     }
 
@@ -67,6 +65,19 @@ public class DanceLinkToolTest {
             this.targetPath = targetPath;
             this.expireMinutes = expireMinutes;
             return "test-ticket";
+        }
+    }
+
+    private static class StubLinkConfigService extends RobotLinkConfigService {
+        private final String resolvedUrl;
+
+        private StubLinkConfigService(String resolvedUrl) {
+            this.resolvedUrl = resolvedUrl;
+        }
+
+        @Override
+        public String resolveFrontBaseUrl(String toolFrontBaseUrl) {
+            return resolvedUrl.trim().replaceAll("/+$", "");
         }
     }
 }

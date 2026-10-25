@@ -1,9 +1,9 @@
 package com.betta.robot.tools;
 
 import com.betta.common.utils.StringUtils;
-import com.betta.robot.config.RobotLinkProperties;
 import com.betta.robot.dto.ActionResult;
 import com.betta.robot.service.RobotAutoLoginService;
+import com.betta.robot.service.RobotLinkConfigService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -28,20 +28,19 @@ public class HomeLoginLinkTool implements ITool {
     private RobotAutoLoginService robotAutoLoginService;
 
     @Autowired
-    private RobotLinkProperties robotLinkProperties;
+    private RobotLinkConfigService robotLinkConfigService;
 
     /**
      * 根据工具参数生成指定昵称用户的短期首页登录链接。
      *
-     * @param params 工具参数，支持 frontBaseUrl、nickname、targetPath、expireMinutes；环境配置优先于 frontBaseUrl
+     * @param params 工具参数，支持 frontBaseUrl、nickname、targetPath、expireMinutes；页面和环境配置优先于 frontBaseUrl
      * @return 自动登录链接生成结果
      */
     @Override
     public ActionResult execute(Map<String, Object> params) {
         try {
-            String frontBaseUrl = StringUtils.defaultIfBlank(
-                    robotLinkProperties.getFrontBaseUrl(), getStringParam(params, "frontBaseUrl"));
-            if (StringUtils.isBlank(frontBaseUrl)) {
+            String frontBaseUrl = robotLinkConfigService.resolveFrontBaseUrl(getStringParam(params, "frontBaseUrl"));
+            if (frontBaseUrl.isBlank()) {
                 return ActionResult.fail("未配置前端地址 frontBaseUrl");
             }
             String nickname = getStringParam(params, "nickname");
@@ -53,7 +52,7 @@ public class HomeLoginLinkTool implements ITool {
             }
 
             String ticket = robotAutoLoginService.createTicketByNickname(nickname, targetPath, expireMinutes);
-            String link = trimTrailingSlash(frontBaseUrl) + "/auto-login?ticket=" + ticket;
+            String link = frontBaseUrl + "/auto-login?ticket=" + ticket;
             log.info("生成首页自动登录链接，nickname={}, expireMinutes={}", nickname, expireMinutes);
             return ActionResult.ok("首页链接：" + link);
         } catch (Exception e) {
@@ -81,11 +80,4 @@ public class HomeLoginLinkTool implements ITool {
         }
     }
 
-    private String trimTrailingSlash(String url) {
-        String result = url.trim();
-        while (result.endsWith("/")) {
-            result = result.substring(0, result.length() - 1);
-        }
-        return result;
-    }
 }
