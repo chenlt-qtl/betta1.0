@@ -2,6 +2,7 @@ let player = new Audio();
 let timer;
 let feedbackContext;
 const preloadedPlayers = new Map();
+let playbackListenerCleanup;
 
 /** 将完整 URL、当前资源路径和历史 profile 路径统一为可播放地址。 */
 const resolveAudioUrl = (url) => {
@@ -57,20 +58,49 @@ export const clearPreloads = () => {
   preloadedPlayers.clear();
 }
 
-/**播放MP3 */
-export const play = (url, timeStr, onError = () => {}) => {
+/** 播放音频；可选完成回调用于在自然结束或播放失败后推进业务流程。 */
+export const play = (url, timeStr, onError = () => {}, onSettled = null) => {
   //先重置
   clearTimeout(timer)
   player.pause();
+  if (playbackListenerCleanup) {
+    playbackListenerCleanup();
+    playbackListenerCleanup = undefined;
+  }
 
   const resolvedUrl = resolveAudioUrl(url);
   const preloadPlayer = preloadedPlayers.get(resolvedUrl);
   if (preloadPlayer) {
-    preloadedPlayers.delete(resolvedUrl);
     player = preloadPlayer;
   } else {
     player.src = resolvedUrl;
     player.load();
+  }
+
+  // 监听器必须在开始播放前注册，保证缓存音频很短时也能可靠收到完成事件。
+  let settled = false;
+  const settle = () => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    if (playbackListenerCleanup) {
+      playbackListenerCleanup();
+      playbackListenerCleanup = undefined;
+    }
+    if (typeof onSettled === "function") {
+      onSettled();
+    }
+  }
+  if (typeof onSettled === "function") {
+    const handleEnded = () => settle();
+    const handleError = () => settle();
+    player.addEventListener("ended", handleEnded);
+    player.addEventListener("error", handleError);
+    playbackListenerCleanup = () => {
+      player.removeEventListener("ended", handleEnded);
+      player.removeEventListener("error", handleError);
+    }
   }
 
   let duration, startTime, rate = 1;
@@ -101,6 +131,7 @@ export const play = (url, timeStr, onError = () => {}) => {
 
   player.play().catch(e => {
     onError && onError(e)
+    settle()
   });
 
   if (duration) {
@@ -110,6 +141,7 @@ export const play = (url, timeStr, onError = () => {}) => {
 
     timer = setTimeout(() => {
       player.pause();
+      settle();
     }, realDuration * 1000)
 
   }

@@ -352,12 +352,11 @@ export default {
   },
   created() {
     this.initializeAnswers()
-    this.preloadUpcomingAudio()
+    this.preloadChallengeAudio()
     this.tryAutoPlay(this.currentQuestion)
   },
   watch: {
     currentQuestion(question) {
-      this.preloadUpcomingAudio()
       this.tryAutoPlay(question)
     }
   },
@@ -729,7 +728,8 @@ export default {
       const state = {
         questionId,
         requestId,
-        minimumElapsed: false,
+        // 有发音时由播放完成直接驱动切题，无发音时保留一秒答题反馈。
+        minimumElapsed: Boolean(answerPlayback),
         audioSettled: !answerPlayback,
         audioTimeoutTimer: null,
         answerPlayback
@@ -805,32 +805,25 @@ export default {
         }
       })
     },
-    /** 预加载当前题和下一题音频，缩短进入题目及判题后的等待时间。 */
-    preloadUpcomingAudio() {
-      [this.questionList[this.index], this.questionList[this.index + 1]].forEach(question => {
+    /** 一次缓存本轮全部去重音频，供同一单词的多种题型重复播放。 */
+    preloadChallengeAudio() {
+      this.questionList.forEach(question => {
         if (question && question.audioUrl) preload(question.audioUrl)
       })
     },
     /** 播放目标单词发音，并返回可取消的完成状态供自动切题等待。 */
     playCorrectAnswerAudio(question) {
       if (!question || !question.audioUrl) return null
-      let audioPlayer = null
       let settled = false
       let resolveCompletion
       const completion = new Promise(resolve => { resolveCompletion = resolve })
       const settle = () => {
         if (settled) return
         settled = true
-        if (audioPlayer) {
-          audioPlayer.removeEventListener('ended', settle)
-          audioPlayer.removeEventListener('error', settle)
-        }
         resolveCompletion()
       }
       try {
-        audioPlayer = play(question.audioUrl, '', settle)
-        audioPlayer.addEventListener('ended', settle)
-        audioPlayer.addEventListener('error', settle)
+        play(question.audioUrl, '', settle, settle)
       } catch (error) {
         settle()
       }
