@@ -39,7 +39,7 @@ public class MessageChannelConfigController extends BaseController {
     @PreAuthorize("@ss.hasPermi('message:config:list')")
     @GetMapping("/front-base-url")
     public AjaxResult getFrontBaseUrl() {
-        return success(robotLinkConfigService.getSavedFrontBaseUrl());
+        return success((Object) robotLinkConfigService.getSavedFrontBaseUrl());
     }
 
     /**
@@ -52,7 +52,7 @@ public class MessageChannelConfigController extends BaseController {
     @Log(title = "机器人前端访问地址", businessType = BusinessType.UPDATE)
     @PutMapping("/front-base-url")
     public AjaxResult saveFrontBaseUrl(@RequestBody RobotLinkConfigRequest request) {
-        return success(robotLinkConfigService.saveFrontBaseUrl(request, SecurityUtils.getUsername()));
+        return success((Object) robotLinkConfigService.saveFrontBaseUrl(request, SecurityUtils.getUsername()));
     }
 
     /**
