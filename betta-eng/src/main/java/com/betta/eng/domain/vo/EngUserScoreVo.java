@@ -25,6 +25,14 @@ public class EngUserScoreVo extends EngUserScore {
     private String phMp3;
     /** 音标。 */
     private String phonetics;
+    /** 英式音标。 */
+    private String phoneticsUk;
+    /** 美式音标。 */
+    private String phoneticsUs;
+    /** 英式发音音频地址。 */
+    private String phMp3Uk;
+    /** 美式发音音频地址。 */
+    private String phMp3Us;
     /** 单词释义。 */
     private String acceptation;
     /** 词形变化。 */

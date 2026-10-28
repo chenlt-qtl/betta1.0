@@ -1,6 +1,6 @@
 <template>
   <div>
-    <WordTable v-bind="$props">
+    <WordTable v-bind="$props" :playbackRate="playbackRate">
       <template v-slot:toolBtn="slotProps">
         <el-col :span="1.5">
           <el-button
@@ -13,6 +13,14 @@
           >
         </el-col>
         <slot name="rightBar"></slot>
+        <div class="playback-rate-control">
+          <span>播放速度</span>
+          <el-select v-model="playbackRate" size="mini" aria-label="选择单词发音速度">
+            <el-option label="1.0x" :value="1" />
+            <el-option label="0.75x" :value="0.75" />
+            <el-option label="0.5x" :value="0.5" />
+          </el-select>
+        </div>
       </template>
       <template v-slot:tableBtn="slotProps">
         <view-word-btn
@@ -47,7 +55,9 @@ export default {
   ],
   components: { WordTable, ViewWordBtn },
   data() {
-    return {};
+    return {
+      playbackRate: 1,
+    };
   },
   methods: {
     handleDeleteRel(ids) {
@@ -65,3 +75,26 @@ export default {
   },
 };
 </script>
+
+<style scoped>
+.playback-rate-control {
+  float: right;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #606266;
+  font-size: 13px;
+}
+
+.playback-rate-control .el-select {
+  width: 112px;
+}
+
+@media (max-width: 600px) {
+  .playback-rate-control {
+    width: 100%;
+    margin-top: 8px;
+    justify-content: flex-end;
+  }
+}
+</style>

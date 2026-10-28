@@ -12,19 +12,30 @@
         :colon="false"
       >
         <el-descriptions-item label=""
-          ><div class="ph" v-if="form.phMp3">
-            {{ form.phonetics
-            }}<el-button
-              style="marginleft: 10px"
-              type="text"
-              @click="() => play(form.phMp3)"
-              ><svg-icon icon-class="sound" /> </el-button
-            ><el-button
-              style="marginleft: 10px"
-              type="text"
-              @click="() => play(form.phMp3, '0,0,0.5')"
-              ><svg-icon icon-class="sound" /><span class="slow">慢</span>
-            </el-button>
+          ><div v-if="pronunciations.length" class="pronunciations">
+            <div
+              v-for="item in pronunciations"
+              :key="item.key"
+              class="ph"
+            >
+              <span v-if="item.label" class="accent-label">{{ item.label }}</span>
+              <span v-if="item.phonetics">{{ item.phonetics }}</span>
+              <el-button
+                v-if="item.audio"
+                type="text"
+                :title="`播放${item.label || ''}发音`"
+                :aria-label="`播放${item.label || ''}发音`"
+                @click="() => play(item.audio)"
+                ><svg-icon icon-class="sound" /> </el-button
+              ><el-button
+                v-if="item.audio"
+                type="text"
+                :title="`慢速播放${item.label || ''}发音`"
+                :aria-label="`慢速播放${item.label || ''}发音`"
+                @click="() => play(item.audio, '0,0,0.5')"
+                ><svg-icon icon-class="sound" /><span class="slow">慢</span>
+              </el-button>
+            </div>
           </div>
           <el-button
             type="text"
@@ -140,6 +151,12 @@
 .content {
   min-height: 160px;
   text-align: left;
+  .pronunciations {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
   .ph {
     font-size: 20px;
     display: inline-flex;
@@ -149,6 +166,11 @@
     border-radius: 20px;
     padding: 0 25px;
     margin: 0 20px 5px 0;
+    .accent-label {
+      color: #606266;
+      font-size: 14px;
+      font-weight: 600;
+    }
     .slow {
       position: absolute;
       background-color: #f5f6f9;
@@ -180,6 +202,14 @@
   .word-acceptation {
     padding-left: 80px;
     margin-bottom: 20px;
+  }
+}
+
+@media (max-width: 768px) {
+  .content .ph {
+    gap: 8px;
+    padding: 0 14px;
+    margin-right: 8px;
   }
 }
 </style>
@@ -222,6 +252,34 @@ export default {
   computed: {
     acceptations() {
       return (this.form.acceptation || "").split("|").filter(Boolean);
+    },
+    /** 优先展示英美专用发音，旧词条缺少专用字段时回退到通用发音。 */
+    pronunciations() {
+      const dialects = [
+        {
+          key: "uk",
+          label: "英",
+          phonetics: this.form.phoneticsUk,
+          audio: this.form.phMp3Uk,
+        },
+        {
+          key: "us",
+          label: "美",
+          phonetics: this.form.phoneticsUs,
+          audio: this.form.phMp3Us,
+        },
+      ].filter((item) => item.phonetics || item.audio);
+      if (dialects.length) {
+        return dialects;
+      }
+      return this.form.phonetics || this.form.phMp3
+        ? [{
+            key: "default",
+            label: "",
+            phonetics: this.form.phonetics,
+            audio: this.form.phMp3,
+          }]
+        : [];
     },
   },
   methods: {
