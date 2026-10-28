@@ -19,6 +19,10 @@
         <result property="prototype" column="prototype"/>
         <result property="phMp3" column="ph_mp3"/>
         <result property="phonetics" column="phonetics"/>
+        <result property="phoneticsUk" column="phonetics_uk"/>
+        <result property="phoneticsUs" column="phonetics_us"/>
+        <result property="phMp3Uk" column="ph_mp3_uk"/>
+        <result property="phMp3Us" column="ph_mp3_us"/>
         <result property="acceptation" column="acceptation"/>
         <result property="exchange" column="exchange"/>
         <result property="parts" column="parts"/>
@@ -39,7 +43,8 @@
     </select>
     <select id="selectEngUserScoreVo" resultMap="ScoreVoMap">
         select r.id rel_id,r.article_id,w.id word_id,w.word_name,w.prototype,w.ph_mp3,w.phonetics,
-               w.acceptation,w.exchange,w.parts,s.id,s.user,s.familiarity,s.status,s.create_by,
+               w.phonetics_uk,w.phonetics_us,w.ph_mp3_uk,w.ph_mp3_us,w.acceptation,w.exchange,w.parts,
+               s.id,s.user,s.familiarity,s.status,s.create_by,
                s.create_time,s.update_by,s.update_time
         from eng_article_word_rel r
         join eng_word w on w.word_name=r.word_name

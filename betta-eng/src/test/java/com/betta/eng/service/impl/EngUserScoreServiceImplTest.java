@@ -6,6 +6,7 @@ import com.betta.eng.domain.EngUserScore;
 import com.betta.eng.mapper.EngUserScoreMapper;
 import com.betta.eng.service.IEngSentenceService;
 import java.lang.reflect.Proxy;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
@@ -20,6 +21,7 @@ public class EngUserScoreServiceImplTest {
         try {
             shouldClampIncrementAndDecrement();
             shouldReturnEffectiveValueWithoutPersistingDecay();
+            shouldKeepDialectAudioMapperContract();
         } finally {
             SecurityContextHolder.clearContext();
         }
@@ -46,6 +48,32 @@ public class EngUserScoreServiceImplTest {
         List<EngUserScore> result = service.selectEngUserScoreList(condition);
         assertEquals(9, result.get(0).getFamiliarity(), "查询应返回曲线衰减后的当前熟悉度");
         assertEquals(List.of(), updates, "查询衰减不得写回数据库");
+    }
+
+    /** Mapper 应同时映射并查询英式、美式音标与音频字段。 */
+    private static void shouldKeepDialectAudioMapperContract() {
+        String resource = "mapper/eng/EngUserScoreMapper.xml";
+        try (var input = EngUserScoreServiceImplTest.class.getClassLoader().getResourceAsStream(resource)) {
+            if (input == null) {
+                throw new AssertionError("未找到用户熟悉度 Mapper XML");
+            }
+            String xml = new String(input.readAllBytes(), StandardCharsets.UTF_8)
+                    .replaceAll("\\s+", " ").toLowerCase();
+            assertContains(xml, "property=\"phoneticsuk\" column=\"phonetics_uk\"",
+                    "结果映射必须包含英式音标");
+            assertContains(xml, "property=\"phoneticsus\" column=\"phonetics_us\"",
+                    "结果映射必须包含美式音标");
+            assertContains(xml, "property=\"phmp3uk\" column=\"ph_mp3_uk\"",
+                    "结果映射必须包含英式音频");
+            assertContains(xml, "property=\"phmp3us\" column=\"ph_mp3_us\"",
+                    "结果映射必须包含美式音频");
+            assertContains(xml, "w.phonetics_uk", "文章单词查询必须返回英式音标");
+            assertContains(xml, "w.phonetics_us", "文章单词查询必须返回美式音标");
+            assertContains(xml, "w.ph_mp3_uk", "文章单词查询必须返回英式音频");
+            assertContains(xml, "w.ph_mp3_us", "文章单词查询必须返回美式音频");
+        } catch (java.io.IOException exception) {
+            throw new AssertionError("读取用户熟悉度 Mapper XML 失败", exception);
+        }
     }
 
     private static EngUserScoreMapper mapper(EngUserScore stored, List<Integer> updates,
@@ -92,6 +120,12 @@ public class EngUserScoreServiceImplTest {
     private static void assertEquals(Object expected, Object actual, String message) {
         if (!expected.equals(actual)) {
             throw new AssertionError(message + "，expected=" + expected + "，actual=" + actual);
+        }
+    }
+
+    private static void assertContains(String actual, String expected, String message) {
+        if (!actual.contains(expected)) {
+            throw new AssertionError(message + "，expected fragment=" + expected);
         }
     }
 }

@@ -17,7 +17,16 @@
       <el-table-column type="selection" width="55" align="center" />
       <el-table-column label="单词" align="center" prop="wordName" />
       <el-table-column label="原型" align="center" prop="prototype" />
-      <el-table-column label="音标" align="center" prop="phonetics" />
+      <el-table-column label="音标" align="center">
+        <template slot-scope="scope">
+          <div class="pronunciation-cell">
+            <div v-for="item in pronunciations(scope.row)" :key="item.key">
+              <span v-if="item.label" class="accent-label">{{ item.label }}</span>
+              <span>{{ item.phonetics || "-" }}</span>
+            </div>
+          </div>
+        </template>
+      </el-table-column>
       <el-table-column label="解释" align="center" prop="acceptation" :formatter="acceptationFormatter" />
       <el-table-column
         v-if="!hideScore"
@@ -27,11 +36,25 @@
         :formatter="familiarityFormatter"
       />
       <el-table-column label="简明释义" align="center" prop="exchange" />
-      <el-table-column label="音频" align="center" prop="phMp3">
-        <template v-if="scope.row.phMp3" slot-scope="scope">
-          <el-button type="text" @click="() => play(scope.row.phMp3)">
-            <svg-icon icon-class="sound" />
-          </el-button>
+      <el-table-column label="音频" align="center">
+        <template slot-scope="scope">
+          <div class="pronunciation-cell">
+            <div
+              v-for="item in pronunciations(scope.row)"
+              v-if="item.audio"
+              :key="item.key"
+            >
+              <span v-if="item.label" class="accent-label">{{ item.label }}</span>
+              <el-button
+                type="text"
+                :title="`播放${item.label || ''}发音`"
+                :aria-label="`播放${item.label || ''}发音`"
+                @click="() => playPronunciation(item.audio)"
+              >
+                <svg-icon icon-class="sound" />
+              </el-button>
+            </div>
+          </div>
         </template>
       </el-table-column>
       <el-table-column label="操作" align="center" class-name="small-padding fixed-width">
@@ -68,11 +91,24 @@
         <el-form-item v-if="!batchAdd" label="原型" prop="prototype">
           <el-input v-model="form.prototype" placeholder="请输原型" />
         </el-form-item>
-        <el-form-item v-if="!batchAdd && word.phonetics">
-          /{{ word.phonetics }}/
-          <el-button type="text" @click="() => play(word.phMp3)">
-            <svg-icon icon-class="sound" />
-          </el-button>
+        <el-form-item v-if="!batchAdd && pronunciations(word).length">
+          <div
+            v-for="item in pronunciations(word)"
+            :key="item.key"
+            class="pronunciation-preview"
+          >
+            <span v-if="item.label" class="accent-label">{{ item.label }}</span>
+            <span v-if="item.phonetics">{{ item.phonetics }}</span>
+            <el-button
+              v-if="item.audio"
+              type="text"
+              :title="`播放${item.label || ''}发音`"
+              :aria-label="`播放${item.label || ''}发音`"
+              @click="() => play(item.audio)"
+            >
+              <svg-icon icon-class="sound" />
+            </el-button>
+          </div>
           <div v-for="str in acceptations" :key="str">
             {{ str }}
           </div>
@@ -149,6 +185,7 @@ export default {
     "articleId",
     "getWordList",
     "play",
+    "playbackRate",
     "manualAdd",
     // 单词管理等无需新增入口的页面可隐藏添加按钮。
     "hideAdd",
@@ -198,6 +235,39 @@ export default {
       } else {
         return "";
       }
+    },
+    /** 优先返回英美专用发音，兼容仅保存通用发音的历史词条。 */
+    pronunciations(word) {
+      const source = word || {};
+      const dialects = [
+        {
+          key: "uk",
+          label: "英",
+          phonetics: source.phoneticsUk,
+          audio: source.phMp3Uk,
+        },
+        {
+          key: "us",
+          label: "美",
+          phonetics: source.phoneticsUs,
+          audio: source.phMp3Us,
+        },
+      ].filter((item) => item.phonetics || item.audio);
+      if (dialects.length) {
+        return dialects;
+      }
+      return source.phonetics || source.phMp3
+        ? [{
+            key: "default",
+            label: "",
+            phonetics: source.phonetics,
+            audio: source.phMp3,
+          }]
+        : [];
+    },
+    playPronunciation(audio) {
+      const rate = Number(this.playbackRate) || 1;
+      this.play(audio, `0,0,${rate}`);
     },
     // 多选框选中数据
     handleSelectionChange(selection) {
@@ -316,7 +386,27 @@ export default {
 };
 </script>
 
-<style scoped lang="scss"></style>
+<style lang="scss" scoped>
+.pronunciation-cell,
+.pronunciation-preview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 10px;
+}
+
+.pronunciation-preview {
+  justify-content: flex-start;
+}
+
+.accent-label {
+  margin-right: 4px;
+  color: #606266;
+  font-size: 12px;
+  font-weight: 600;
+}
+</style>
 
 <style>
 .word-add-dialog {
