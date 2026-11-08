@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.betta.other.mapper.WardrobeMapper">
+    <resultMap id="itemMap" type="com.betta.other.domain.wardrobe.WardrobeItem">
+        <id property="id" column="id"/>
+        <result property="userId" column="user_id"/>
+        <result property="name" column="name"/>
+        <result property="category" column="category"/>
+        <result property="color" column="color"/>
+        <result property="seasonsJson" column="seasons_json"/>
+        <result property="occasionsJson" column="occasions_json"/>
+        <result property="note" column="note"/>
+    </resultMap>
+    <resultMap id="outfitMap" type="com.betta.other.domain.wardrobe.WardrobeOutfit">
+        <id property="id" column="id"/>
+        <result property="userId" column="user_id"/>
+        <result property="name" column="name"/>
+        <result property="occasionsJson" column="occasions_json"/>
+        <result property="favorite" column="favorite"/>
+        <result property="hasImage" column="has_image"/>
+        <result property="sortOrder" column="sort_order"/>
+        <result property="createTime" column="create_time"/>
+    </resultMap>
+    <resultMap id="imageMap" type="com.betta.other.domain.wardrobe.WardrobeImage">
+        <result property="contentType" column="content_type"/>
+        <result property="content" column="image_content"/>
+    </resultMap>
+    <resultMap id="outfitOrderMap" type="com.betta.other.domain.wardrobe.WardrobeOutfit">
+        <id property="id" column="id"/>
+        <result property="sortOrder" column="sort_order"/>
+    </resultMap>
+    <sql id="itemColumns">i.id,i.user_id,i.name,i.category,i.color,i.seasons_json,i.occasions_json,i.note</sql>
+    <sql id="outfitColumns">
+        o.id,o.user_id,o.name,o.occasions_json,o.favorite,o.sort_order,o.create_time,
+        EXISTS(SELECT 1 FROM wardrobe_outfit_image oi WHERE oi.outfit_id=o.id) AS has_image
+    </sql>
+    <select id="selectItems" resultMap="itemMap">
+        SELECT <include refid="itemColumns"/> FROM wardrobe_item i
+        WHERE i.user_id=#{userId}
+        <if test="keyword != null and keyword != ''">AND i.name LIKE CONCAT('%',#{keyword},'%')</if>
+        <if test="category != null and category != ''">AND i.category=#{category}</if>
+        <if test="color != null and color != ''">AND i.color=#{color}</if>
+        <if test="season != null and season != ''">AND JSON_CONTAINS(i.seasons_json,JSON_QUOTE(#{season}))</if>
+        <if test="occasion != null and occasion != ''">AND JSON_CONTAINS(i.occasions_json,JSON_QUOTE(#{occasion}))</if>
+        ORDER BY i.id DESC
+    </select>
+    <select id="selectItem" resultMap="itemMap">
+        SELECT <include refid="itemColumns"/> FROM wardrobe_item i WHERE i.user_id=#{userId} AND i.id=#{id}
+    </select>
+    <select id="lockItem" resultType="long">
+        SELECT id FROM wardrobe_item WHERE user_id=#{userId} AND id=#{id} FOR UPDATE
+    </select>
+    <insert id="insertItem" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO wardrobe_item(user_id,name,category,color,seasons_json,occasions_json,note)
+        VALUES(#{userId},#{name},#{category},#{color},#{seasonsJson},#{occasionsJson},#{note})
+    </insert>
+    <update id="updateItem">
+        UPDATE wardrobe_item SET name=#{name},category=#{category},color=#{color},seasons_json=#{seasonsJson},
+        occasions_json=#{occasionsJson},note=#{note}
+        WHERE user_id=#{userId} AND id=#{id}
+    </update>
+    <delete id="deleteItem">DELETE FROM wardrobe_item WHERE user_id=#{userId} AND id=#{id}</delete>
+    <select id="countItemReferences" resultType="int">SELECT COUNT(*) FROM wardrobe_outfit_item WHERE item_id=#{id}</select>
+    <select id="selectItemImage" resultMap="imageMap">
+        SELECT im.content_type,im.image_content FROM wardrobe_item_image im
+        JOIN wardrobe_item i ON i.id=im.item_id WHERE i.user_id=#{userId} AND i.id=#{id}
+    </select>
+    <insert id="upsertItemImage">
+        INSERT INTO wardrobe_item_image(item_id,content_type,image_content) VALUES(#{id},#{image.contentType},#{image.content})
+        ON DUPLICATE KEY UPDATE content_type=VALUES(content_type),image_content=VALUES(image_content)
+    </insert>
+    <select id="selectOutfits" resultMap="outfitMap">
+        SELECT <include refid="outfitColumns"/> FROM wardrobe_outfit o WHERE o.user_id=#{userId} ORDER BY o.sort_order ASC, o.id DESC
+    </select>
+    <select id="selectOutfit" resultMap="outfitMap">
+        SELECT <include refid="outfitColumns"/> FROM wardrobe_outfit o WHERE o.user_id=#{userId} AND o.id=#{id}
+    </select>
+    <select id="lockOutfit" resultType="long">
+        SELECT id FROM wardrobe_outfit WHERE user_id=#{userId} AND id=#{id} FOR UPDATE
+    </select>
+    <select id="selectOutfitItems" resultMap="itemMap">
+        SELECT <include refid="itemColumns"/> FROM wardrobe_outfit_item rel
+        JOIN wardrobe_outfit o ON o.id=rel.outfit_id
+        JOIN wardrobe_item i ON i.id=rel.item_id AND i.user_id=o.user_id
+        WHERE o.user_id=#{userId} AND o.id=#{id} ORDER BY rel.sort_order, i.id
+    </select>
+    <insert id="insertOutfit" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO wardrobe_outfit(user_id,name,occasions_json,favorite)
+        VALUES(#{userId},#{name},#{occasionsJson},#{favorite})
+    </insert>
+    <update id="updateOutfit">
+        UPDATE wardrobe_outfit SET name=#{name},occasions_json=#{occasionsJson},favorite=#{favorite}
+        WHERE user_id=#{userId} AND id=#{id}
+    </update>
+    <update id="updateFavorite">
+        UPDATE wardrobe_outfit SET favorite=#{favorite} WHERE user_id=#{userId} AND id=#{id}
+    </update>
+    <delete id="deleteOutfit">DELETE FROM wardrobe_outfit WHERE user_id=#{userId} AND id=#{id}</delete>
+    <delete id="deleteOutfitItems">DELETE FROM wardrobe_outfit_item WHERE outfit_id=#{id}</delete>
+    <insert id="insertOutfitItem">
+        INSERT INTO wardrobe_outfit_item(outfit_id,item_id,sort_order) VALUES(#{outfitId},#{itemId},#{sortOrder})
+    </insert>
+    <select id="selectOutfitImage" resultMap="imageMap">
+        SELECT im.content_type,im.image_content FROM wardrobe_outfit_image im
+        JOIN wardrobe_outfit o ON o.id=im.outfit_id WHERE o.user_id=#{userId} AND o.id=#{id}
+    </select>
+    <insert id="upsertOutfitImage">
+        INSERT INTO wardrobe_outfit_image(outfit_id,content_type,image_content) VALUES(#{id},#{image.contentType},#{image.content})
+        ON DUPLICATE KEY UPDATE content_type=VALUES(content_type),image_content=VALUES(image_content)
+    </insert>
+    <delete id="deleteOutfitImage">DELETE FROM wardrobe_outfit_image WHERE outfit_id=#{id}</delete>
+    <!-- 固定按 ID 加锁；计算展示顺序时再按 sort_order 排序。 -->
+    <select id="lockUserOutfits" resultMap="outfitOrderMap">
+        SELECT id,sort_order FROM wardrobe_outfit WHERE user_id=#{userId} ORDER BY id ASC FOR UPDATE
+    </select>
+    <update id="updateOutfitSortOrder">
+        UPDATE wardrobe_outfit SET sort_order=#{sortOrder},update_time=update_time
+        WHERE user_id=#{userId} AND id=#{id}
+    </update>
+</mapper>
