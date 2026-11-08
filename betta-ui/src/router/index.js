@@ -121,6 +121,19 @@ export const constantRoutes = [
         meta: { title: '金币商城', icon: 'shopping' }
       }
     ]
+  },
+  {
+    path: '/wardrobe',
+    component: Layout,
+    hidden: true,
+    children: [
+      {
+        path: 'index',
+        component: () => import('@/views/wardrobe/index'),
+        name: 'Wardrobe',
+        meta: { title: '我的衣橱', icon: 'collection' }
+      }
+    ]
   }
 ]
 

@@ -110,6 +110,10 @@
           <img src="@/assets/shortcuts/商城.svg" />
           商城
         </router-link>
+        <router-link to="/wardrobe/index" class="item">
+          <img src="@/assets/shortcuts/档案.svg" />
+          衣橱
+        </router-link>
       </div>
     </div>
 
