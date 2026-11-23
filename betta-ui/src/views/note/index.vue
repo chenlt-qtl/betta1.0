@@ -1816,5 +1816,10 @@ export default {
   .editor-wrap {
     padding: 18px;
   }
+
+  .note-canvas {
+    flex: none;
+    max-height: 70vh;
+  }
 }
 </style>

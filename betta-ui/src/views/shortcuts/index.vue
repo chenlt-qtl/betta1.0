@@ -114,6 +114,10 @@
           <img src="@/assets/shortcuts/档案.svg" />
           衣橱
         </router-link>
+        <router-link to="/menstrual/index" class="item">
+          <img src="@/assets/shortcuts/打卡.svg" />
+          美柚
+        </router-link>
       </div>
     </div>
 

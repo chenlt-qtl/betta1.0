@@ -45,7 +45,7 @@
       :class="{ 'toc-collapsed': tocCollapsed }"
       @click="handleViewerClick"
     >
-      <div class="toc">
+      <div ref="toc" class="toc">
         <div class="toc-header">
           <span v-show="!tocCollapsed" class="toc-title">目录</span>
         </div>
@@ -54,6 +54,7 @@
           v-for="item in headings"
           :key="item.id"
           class="toc-item"
+          :class="{ 'is-active': item.id === activeHeadingId }"
           :style="{ paddingLeft: ((item.level - 1) * 12) + 'px' }"
           @click="scrollToHeading(item.id)"
         >
@@ -148,6 +149,7 @@ export default {
   data() {
     return {
       headings: [],
+      activeHeadingId: '',
       // setMarkdown 会触发编辑器 change，使用该标记区分“程序同步”和“用户编辑”。
       syncingEditor: false,
       // 每次预览刷新递增序号，阻止旧笔记的异步流程图覆盖新内容。
@@ -215,10 +217,14 @@ export default {
     this.refresh()
   },
   beforeDestroy() {
+    this.removeHeadingScrollListener()
     this.closeMediaPreview()
   },
   methods: {
     refresh() {
+      this.removeHeadingScrollListener()
+      this.headings = []
+      this.activeHeadingId = ''
       // 切换笔记或刷新预览时立即清理旧媒体，避免弹窗残留上一份内容。
       this.closeMediaPreview()
       const renderSeq = ++this.mermaidRenderSeq
@@ -245,9 +251,10 @@ export default {
         }
         // 编辑和预览实例互斥；仅在预览模式构建完整 DOM，避免输入时重复渲染隐藏内容。
         markdownViewer.invoke('setMarkdown', this.displayMarkdown(), false)
-        this.parseHeadings()
         this.$nextTick(() => {
+          if (renderSeq !== this.mermaidRenderSeq || !this.viewer) return
           this.decorateViewerHeadings()
+          this.addHeadingScrollListener()
           this.renderMermaidDiagrams(renderSeq)
         })
       })
@@ -438,37 +445,75 @@ export default {
       })
       return parts.join('/')
     },
-    parseHeadings() {
-      // 从 Markdown 原文中提取标题，作为左侧目录数据；预览 DOM 的 id 在 decorateViewerHeadings 中补齐。
-      const headings = []
-      ;(this.value || '').split('\n').forEach((line, index) => {
-        const match = line.match(/^(#{1,6})\s+(.+)$/)
-        if (match) {
-          headings.push({
-            id: `note-heading-${index}`,
-            level: match[1].length,
-            text: match[2].replace(/[#*_`[\]]/g, '').trim()
-          })
-        }
-      })
-      this.headings = headings
-    },
     decorateViewerHeadings() {
-      const root = this.$el.querySelector('.toastui-editor-contents')
+      const root = this.$refs.viewer && this.$refs.viewer.$el.querySelector('.toastui-editor-contents')
       if (!root) {
         return
       }
-      // Toast UI 渲染后的标题没有稳定 id，这里和 parseHeadings 使用同一 index 规则便于目录跳转。
-      const headings = root.querySelectorAll('h1,h2,h3,h4,h5,h6')
-      headings.forEach((heading, index) => {
-        heading.id = `note-heading-${index}`
+      // 以实际渲染的标题为准，避免代码块和重复标题导致目录错位。
+      this.headingElements = Array.from(root.querySelectorAll('h1,h2,h3,h4,h5,h6'))
+      this.headings = this.headingElements.map((heading, index) => {
+        const id = `note-heading-${this._uid}-${index}`
+        heading.id = id
+        return { id, level: Number(heading.tagName.slice(1)), text: heading.textContent.trim() }
+      })
+    },
+    addHeadingScrollListener() {
+      this.headingScrollContainer = this.$el.closest('.note-canvas')
+      if (!this.headingScrollContainer) return
+      this.headingScrollHandler = () => {
+        if (this.headingScrollFrame) return
+        this.headingScrollFrame = window.requestAnimationFrame(() => {
+          this.headingScrollFrame = null
+          this.updateActiveHeading()
+        })
+      }
+      this.headingScrollContainer.addEventListener('scroll', this.headingScrollHandler, { passive: true })
+      this.updateActiveHeading()
+    },
+    removeHeadingScrollListener() {
+      if (this.headingScrollContainer && this.headingScrollHandler) {
+        this.headingScrollContainer.removeEventListener('scroll', this.headingScrollHandler)
+      }
+      if (this.headingScrollFrame) window.cancelAnimationFrame(this.headingScrollFrame)
+      this.headingScrollFrame = null
+      this.headingScrollContainer = null
+      this.headingScrollHandler = null
+      this.headingElements = []
+    },
+    updateActiveHeading() {
+      const container = this.headingScrollContainer
+      const headings = this.headingElements || []
+      if (!container || !headings.length) return
+      const threshold = container.getBoundingClientRect().top + 24
+      let active = headings[0]
+      headings.forEach(heading => {
+        if (heading.getBoundingClientRect().top <= threshold) active = heading
+      })
+      // 文末空间不足以将末级标题滚到顶部时，仍选中最后一个标题。
+      if (container.scrollHeight > container.clientHeight &&
+          container.scrollTop + container.clientHeight >= container.scrollHeight - 1) {
+        active = headings[headings.length - 1]
+      }
+      if (this.activeHeadingId === active.id) return
+      this.activeHeadingId = active.id
+      this.$nextTick(() => {
+        const toc = this.$refs.toc
+        const item = toc && toc.querySelector('.toc-item.is-active')
+        if (!item || !toc.clientHeight) return
+        const top = item.getBoundingClientRect().top - toc.getBoundingClientRect().top + toc.scrollTop
+        if (top < toc.scrollTop) toc.scrollTop = top
+        else if (top + item.offsetHeight > toc.scrollTop + toc.clientHeight) {
+          toc.scrollTop = top + item.offsetHeight - toc.clientHeight
+        }
       })
     },
     scrollToHeading(id) {
-      const target = this.$el.querySelector(`#${id}`)
-      if (target) {
-        target.scrollIntoView({ behavior: 'smooth', block: 'start' })
-      }
+      const target = (this.headingElements || []).find(heading => heading.id === id)
+      const container = this.headingScrollContainer
+      if (!target || !container) return
+      const top = container.scrollTop + target.getBoundingClientRect().top - container.getBoundingClientRect().top - 20
+      container.scrollTo({ top, behavior: 'smooth' })
     }
   }
 }
@@ -535,6 +580,11 @@ export default {
 }
 
 .toc {
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  box-sizing: border-box;
+  max-height: calc(100vh - 180px);
   width: 190px;
   flex: 0 0 190px;
   border: 1px solid #e6e8eb;
@@ -578,9 +628,15 @@ export default {
   white-space: nowrap;
 }
 
-.toc-item:hover {
+.toc-item:hover,
+.toc-item.is-active {
   color: #303133;
   background: #edf0f5;
+}
+
+.toc-item.is-active {
+  color: #409eff;
+  font-weight: 600;
 }
 
 .viewer {
@@ -666,9 +722,9 @@ export default {
 
 @media (max-width: 768px) {
   .toc {
-    width: 12px;
-    flex-basis: 12px;
-    padding: 0;
+    width: 120px;
+    flex-basis: 120px;
+    max-height: 60vh;
   }
 
   .viewer {
