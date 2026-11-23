@@ -134,6 +134,19 @@ export const constantRoutes = [
         meta: { title: '我的衣橱', icon: 'collection' }
       }
     ]
+  },
+  {
+    path: '/menstrual',
+    component: Layout,
+    hidden: true,
+    children: [
+      {
+        path: 'index',
+        component: () => import('@/views/menstrual/index'),
+        name: 'Menstrual',
+        meta: { title: '美柚' }
+      }
+    ]
   }
 ]
 
